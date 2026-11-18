@@ -44,10 +44,12 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Videocam
@@ -117,7 +119,9 @@ fun ChatMessageBubbleItem(
     onSwipeReply: (MessageEntity) -> Unit,
     onLongPressMessage: (MessageEntity) -> Unit,
     onReactionChipClick: (messageId: String, emoji: String) -> Unit,
-    onQuoteClick: (replyToMessageId: String) -> Unit
+    onQuoteClick: (replyToMessageId: String) -> Unit,
+    onCancelTransfer: (messageId: String) -> Unit = {},
+    onRetryTransfer: (messageId: String) -> Unit = {}
 ) {
     val isOutgoing = message.isOutgoing
     val bubbleColor = if (isOutgoing) {
@@ -313,11 +317,20 @@ fun ChatMessageBubbleItem(
                                     color = contentColor
                                 )
                             }
-                            if (message.transferProgress in 1..99) {
+                            if (message.status == DeliveryStatus.SENDING.name && message.transferProgress in 1..99) {
                                 Spacer(modifier = Modifier.height(6.dp))
-                                LinearProgressIndicator(
-                                    progress = { message.transferProgress / 100f },
-                                    modifier = Modifier.fillMaxWidth()
+                                TransferProgressCancelRow(
+                                    messageId = message.messageId,
+                                    progress = message.transferProgress,
+                                    contentColor = contentColor,
+                                    onCancelTransfer = onCancelTransfer
+                                )
+                            } else if (!mediaFileReady && (message.status == DeliveryStatus.CANCELLED.name || message.status == DeliveryStatus.FAILED.name)) {
+                                TransferRetryBlock(
+                                    message = message,
+                                    isOutgoing = isOutgoing,
+                                    contentColor = contentColor,
+                                    onRetryTransfer = onRetryTransfer
                                 )
                             }
                         }
@@ -420,11 +433,20 @@ fun ChatMessageBubbleItem(
                                     color = contentColor
                                 )
                             }
-                            if (message.transferProgress in 1..99) {
+                            if (message.status == DeliveryStatus.SENDING.name && message.transferProgress in 1..99) {
                                 Spacer(modifier = Modifier.height(6.dp))
-                                LinearProgressIndicator(
-                                    progress = { message.transferProgress / 100f },
-                                    modifier = Modifier.fillMaxWidth()
+                                TransferProgressCancelRow(
+                                    messageId = message.messageId,
+                                    progress = message.transferProgress,
+                                    contentColor = contentColor,
+                                    onCancelTransfer = onCancelTransfer
+                                )
+                            } else if (!mediaFileReady && (message.status == DeliveryStatus.CANCELLED.name || message.status == DeliveryStatus.FAILED.name)) {
+                                TransferRetryBlock(
+                                    message = message,
+                                    isOutgoing = isOutgoing,
+                                    contentColor = contentColor,
+                                    onRetryTransfer = onRetryTransfer
                                 )
                             }
                         }
@@ -484,6 +506,27 @@ fun ChatMessageBubbleItem(
                                         color = contentColor.copy(alpha = 0.8f)
                                     )
                                 }
+                                if (message.status == DeliveryStatus.SENDING.name && message.transferProgress in 1..99) {
+                                    IconButton(
+                                        onClick = { onCancelTransfer(message.messageId) },
+                                        modifier = Modifier.testTag("cancel_transfer_bubble_${message.messageId}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = stringResource(R.string.cancel_transfer_cd),
+                                            tint = contentColor,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            if (message.status == DeliveryStatus.CANCELLED.name || message.status == DeliveryStatus.FAILED.name) {
+                                TransferRetryBlock(
+                                    message = message,
+                                    isOutgoing = isOutgoing,
+                                    contentColor = contentColor,
+                                    onRetryTransfer = onRetryTransfer
+                                )
                             }
                         }
 
@@ -524,13 +567,22 @@ fun ChatMessageBubbleItem(
                                 }
                             }
 
-                            if (message.transferProgress < 100) {
+                            if (message.status == DeliveryStatus.SENDING.name && message.transferProgress < 100) {
                                 Spacer(modifier = Modifier.height(6.dp))
-                                LinearProgressIndicator(
-                                    progress = { message.transferProgress / 100f },
-                                    modifier = Modifier.fillMaxWidth()
+                                TransferProgressCancelRow(
+                                    messageId = message.messageId,
+                                    progress = message.transferProgress.coerceIn(1, 99),
+                                    contentColor = contentColor,
+                                    onCancelTransfer = onCancelTransfer
                                 )
-                            } else if (!message.mediaLocalPath.isNullOrBlank()) {
+                            } else if (message.status == DeliveryStatus.CANCELLED.name || message.status == DeliveryStatus.FAILED.name) {
+                                TransferRetryBlock(
+                                    message = message,
+                                    isOutgoing = isOutgoing,
+                                    contentColor = contentColor,
+                                    onRetryTransfer = onRetryTransfer
+                                )
+                            } else if (message.transferProgress >= 100 && !message.mediaLocalPath.isNullOrBlank()) {
                                 Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedButton(
                                     onClick = {
@@ -599,11 +651,13 @@ fun ChatMessageBubbleItem(
                                     DeliveryStatus.SENT.name -> Icons.Filled.Check
                                     DeliveryStatus.DELIVERED.name,
                                     DeliveryStatus.READ.name -> Icons.Filled.DoneAll
+                                    DeliveryStatus.CANCELLED.name -> Icons.Filled.Close
                                     else -> Icons.Filled.ErrorOutline
                                 }
                                 val iconTint = when (message.status) {
                                     DeliveryStatus.READ.name -> MaterialTheme.colorScheme.primary
                                     DeliveryStatus.FAILED.name -> DangerCoral
+                                    DeliveryStatus.CANCELLED.name -> contentColor.copy(alpha = 0.65f)
                                     else -> contentColor.copy(alpha = 0.7f)
                                 }
                                 Icon(
@@ -888,11 +942,89 @@ fun MessageActionsReactionDialog(
 }
 
 @Composable
+private fun TransferProgressCancelRow(
+    messageId: String,
+    progress: Int,
+    contentColor: Color,
+    onCancelTransfer: (String) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        LinearProgressIndicator(
+            progress = { (progress / 100f).coerceIn(0.02f, 1f) },
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = "${progress}%",
+            fontFamily = JetBrainsMonoFontFamily,
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor.copy(alpha = 0.8f)
+        )
+        IconButton(
+            onClick = { onCancelTransfer(messageId) },
+            modifier = Modifier.testTag("cancel_transfer_bubble_$messageId")
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Close,
+                contentDescription = stringResource(R.string.cancel_transfer_cd),
+                tint = contentColor,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TransferRetryBlock(
+    message: MessageEntity,
+    isOutgoing: Boolean,
+    contentColor: Color,
+    onRetryTransfer: (String) -> Unit
+) {
+    Spacer(modifier = Modifier.height(6.dp))
+    if (message.status == DeliveryStatus.CANCELLED.name) {
+        Text(
+            text = stringResource(R.string.transfer_cancelled_status),
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor.copy(alpha = 0.75f)
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+    }
+    OutlinedButton(
+        onClick = { onRetryTransfer(message.messageId) },
+        shape = MaterialTheme.shapes.small,
+        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("retry_transfer_bubble_${message.messageId}")
+    ) {
+        Icon(
+            imageVector = if (isOutgoing) Icons.Filled.Refresh else Icons.Filled.Download,
+            contentDescription = null,
+            modifier = Modifier.size(15.dp)
+        )
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = stringResource(
+                if (isOutgoing) R.string.retry_send_btn else R.string.retry_download_btn
+            ),
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            softWrap = false
+        )
+    }
+}
+
+@Composable
 fun FloatingTransfersOverlay(
     transfers: List<ActiveTransferInfo>,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
     onCollapse: () -> Unit,
+    onCancelTransfer: (messageId: String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -969,7 +1101,7 @@ fun FloatingTransfersOverlay(
                     tonalElevation = 4.dp,
                     modifier = Modifier
                         .padding(top = 6.dp)
-                        .widthIn(min = 220.dp, max = 280.dp)
+                        .widthIn(min = 236.dp, max = 296.dp)
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
@@ -1033,11 +1165,28 @@ fun FloatingTransfersOverlay(
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                LinearProgressIndicator(
-                                    progress = { (tr.progress / 100f).coerceIn(0f, 1f) },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    LinearProgressIndicator(
+                                        progress = { (tr.progress / 100f).coerceIn(0f, 1f) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    IconButton(
+                                        onClick = { onCancelTransfer(tr.messageId) },
+                                        modifier = Modifier.testTag("cancel_transfer_overlay_${tr.messageId}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = stringResource(R.string.cancel_transfer_cd),
+                                            tint = DangerCoral,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

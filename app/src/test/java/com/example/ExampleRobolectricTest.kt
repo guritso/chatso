@@ -153,6 +153,13 @@ class ExampleRobolectricTest {
         val encrypted = aliceCipher.encrypt(0x10, secretMsg)
         val decrypted = bobCipher.decrypt(0x10, encrypted)
         assertArrayEquals(secretMsg, decrypted)
+
+        // Verify zero-copy encryptChunk compatibility with decrypt
+        val header40 = "0123456789abcdef0123456789abcdef01234567".toByteArray(Charsets.US_ASCII)
+        val payload = ByteArray(128 * 1024) { (it % 251).toByte() }
+        val chunkEncrypted = aliceCipher.encryptChunk(0x11, header40, payload, payload.size)
+        val chunkDecrypted = bobCipher.decrypt(0x11, chunkEncrypted)
+        assertArrayEquals(header40 + payload, chunkDecrypted)
     }
 
     @Test
@@ -574,5 +581,222 @@ class ExampleRobolectricTest {
             localUsername = "Tester"
         )
         NetworkUtils.isIgnoringBatteryOptimizations(context)
+    }
+
+    @Test
+    fun `file transfer cancel removes partial incoming file and retry redownloads over tcp`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+
+        val aliceMat = CryptoEngine.createIdentityMaterial()
+        val bobMat = CryptoEngine.createIdentityMaterial()
+
+        val bobListener = object : P2PEventListener {
+            var targetFile: File? = null
+            var receivedMessageId: String? = null
+            val retryCompleted = CompletableFuture<File>()
+            val cancelledSignal = CompletableFuture<String>()
+
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String,
+                publicKeyBase64: String,
+                remoteIp: String,
+                remoteListenPort: Int,
+                username: String,
+                avatarBase64: String?
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String,
+                messageId: String,
+                text: String,
+                selfDestructSec: Int,
+                createdAt: Long,
+                replyToMessageId: String?,
+                replyToSenderTag: String?,
+                replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String,
+                messageId: String,
+                messageType: MessageType,
+                fileName: String,
+                mimeType: String,
+                totalBytes: Long,
+                audioDurationMs: Long,
+                selfDestructSec: Int,
+                createdAt: Long,
+                replyToMessageId: String?,
+                replyToSenderTag: String?,
+                replyToPreview: String?
+            ): File {
+                receivedMessageId = messageId
+                val f = File.createTempFile("chatso_rx_$messageId", ".bin")
+                targetFile = f
+                return f
+            }
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {
+                retryCompleted.complete(file)
+            }
+            override suspend fun onIncomingFileCancelled(peerId: String, messageId: String) {
+                cancelledSignal.complete(messageId)
+            }
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+
+        val retryRequestedByPeer = CompletableFuture<String>()
+        val sourceFile = File.createTempFile("chatso_tx_src", ".bin")
+        val sourceBytes = ByteArray(256 * 1024) { (it * 7 % 256).toByte() }
+        sourceFile.writeBytes(sourceBytes)
+
+        val discA = DiscoveryManager(context, scope)
+        val discB = DiscoveryManager(context, scope)
+        lateinit var nodeA: P2PNodeManager
+        val aliceListener = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String,
+                publicKeyBase64: String,
+                remoteIp: String,
+                remoteListenPort: Int,
+                username: String,
+                avatarBase64: String?
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String,
+                messageId: String,
+                text: String,
+                selfDestructSec: Int,
+                createdAt: Long,
+                replyToMessageId: String?,
+                replyToSenderTag: String?,
+                replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String,
+                messageId: String,
+                messageType: MessageType,
+                fileName: String,
+                mimeType: String,
+                totalBytes: Long,
+                audioDurationMs: Long,
+                selfDestructSec: Int,
+                createdAt: Long,
+                replyToMessageId: String?,
+                replyToSenderTag: String?,
+                replyToPreview: String?
+            ): File = File.createTempFile("unused", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onFileRetryRequested(peerId: String, messageId: String) {
+                retryRequestedByPeer.complete(messageId)
+                nodeA.clearTransferCancellation(messageId)
+                nodeA.sendMediaOrFile(
+                    peerId = peerId,
+                    messageId = messageId,
+                    messageType = MessageType.FILE,
+                    file = sourceFile,
+                    fileName = "payload.bin",
+                    mimeType = "application/octet-stream",
+                    audioDurationMs = 0L,
+                    selfDestructSec = 0,
+                    createdAt = System.currentTimeMillis()
+                ) {}
+            }
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+
+        nodeA = P2PNodeManager(scope, discA, aliceListener)
+        val nodeB = P2PNodeManager(scope, discB, bobListener)
+
+        val aliceIdentity = LocalIdentity(
+            isInitialized = true,
+            username = "Alice",
+            publicKeyBase64 = aliceMat.publicKeyBase64,
+            wrappedPrivateKeyBase64 = aliceMat.wrappedPrivateKeyBase64,
+            peerId = aliceMat.peerId,
+            fingerprint = aliceMat.fingerprint,
+            listenPort = 43921,
+            isDiscoverable = true
+        )
+        val bobIdentity = LocalIdentity(
+            isInitialized = true,
+            username = "Bob",
+            publicKeyBase64 = bobMat.publicKeyBase64,
+            wrappedPrivateKeyBase64 = bobMat.wrappedPrivateKeyBase64,
+            peerId = bobMat.peerId,
+            fingerprint = bobMat.fingerprint,
+            listenPort = 43922,
+            isDiscoverable = true
+        )
+
+        try {
+            nodeA.updateIdentityAndEnsureServer(aliceIdentity)
+            nodeB.updateIdentityAndEnsureServer(bobIdentity)
+            delay(200)
+
+            val conn = nodeA.connectToPeer("127.0.0.1", nodeB.boundPort.value, bobMat.publicKeyBase64)
+            assertTrue(conn.isSuccess)
+            val bobPeerIdOnA = conn.getOrThrow()
+            delay(150)
+
+            // Simulate receiver cancelling a transfer and then retrying download via FILE_RETRY_REQ
+            val msgId = "transfer_retry_1"
+            assertTrue(nodeB.sendFileRetryRequest(aliceIdentity.peerId, msgId))
+            assertEquals(msgId, retryRequestedByPeer.get(3, TimeUnit.SECONDS))
+
+            val downloadedFile = bobListener.retryCompleted.get(5, TimeUnit.SECONDS)
+            assertEquals(msgId, bobListener.receivedMessageId)
+            assertArrayEquals(sourceBytes, downloadedFile.readBytes())
+            downloadedFile.delete()
+
+            // Verify cancelTransfer sends FILE_CANCEL cleanly
+            nodeB.cancelTransfer(aliceIdentity.peerId, "transfer_cancel_2", isOutgoing = false)
+            nodeA.sendFileUnavailable(bobPeerIdOnA, "missing_msg")
+
+            // Also test ChatRepository cancel state transition cleanly
+            val repo = ChatRepository(
+                context = context,
+                scope = scope,
+                chatDao = dao,
+                identityStore = LocalIdentityStore(context),
+                mediaStorage = MediaStorageHelper(context)
+            )
+            dao.upsertMessage(
+                MessageEntity(
+                    messageId = "msg_cancel_repo",
+                    peerId = bobPeerIdOnA,
+                    isOutgoing = false,
+                    type = MessageType.FILE.name,
+                    textContent = "File: test.pdf",
+                    fileName = "test.pdf",
+                    transferProgress = 42,
+                    status = DeliveryStatus.SENDING.name,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            repo.cancelTransfer("msg_cancel_repo")
+            val updated = dao.getMessageById("msg_cancel_repo")
+            assertEquals(DeliveryStatus.CANCELLED.name, updated?.status)
+            assertEquals(0, updated?.transferProgress)
+            dao.deleteMessageById("msg_cancel_repo")
+            repo.shutdown()
+        } finally {
+            sourceFile.delete()
+            nodeA.disconnectAll()
+            nodeB.disconnectAll()
+            discA.shutdown()
+            discB.shutdown()
+            scope.cancel()
+        }
     }
 }

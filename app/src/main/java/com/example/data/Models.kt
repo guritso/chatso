@@ -36,7 +36,8 @@ enum class DeliveryStatus {
     SENT,
     DELIVERED,
     READ,
-    FAILED
+    FAILED,
+    CANCELLED
 }
 
 enum class PeerPresence {

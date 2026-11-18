@@ -316,62 +316,98 @@ object CryptoEngine {
 class SessionCipher(
     private val txKey: SecretKey,
     private val rxKey: SecretKey,
-    private val txIvPrefix: ByteArray,
-    private val rxIvPrefix: ByteArray
+    txIvPrefix: ByteArray,
+    rxIvPrefix: ByteArray
 ) {
     private val txSeq = AtomicLong(1L)
     private var highestRxSeq = 0L
     private val txLock = Any()
     private val rxLock = Any()
 
+    private val txCipher: Cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    private val rxCipher: Cipher = Cipher.getInstance("AES/GCM/NoPadding")
+    private val txIv = ByteArray(12).apply { System.arraycopy(txIvPrefix, 0, this, 0, 4) }
+    private val rxIv = ByteArray(12).apply { System.arraycopy(rxIvPrefix, 0, this, 0, 4) }
+    private val txAad = ByteArray(9)
+    private val rxAad = ByteArray(9)
+
     fun encrypt(frameKind: Byte, plaintext: ByteArray): ByteArray {
         synchronized(txLock) {
             val seq = txSeq.getAndIncrement()
-            val iv = buildNonce(txIvPrefix, seq)
-            val aad = buildAad(frameKind, seq)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, txKey, GCMParameterSpec(128, iv))
-            cipher.updateAAD(aad)
-            val ciphertext = cipher.doFinal(plaintext)
-            return ByteBuffer.allocate(8 + ciphertext.size)
-                .putLong(seq)
-                .put(ciphertext)
-                .array()
+            putLongBigEndian(txIv, 4, seq)
+            txAad[0] = frameKind
+            putLongBigEndian(txAad, 1, seq)
+            txCipher.init(Cipher.ENCRYPT_MODE, txKey, GCMParameterSpec(128, txIv))
+            txCipher.updateAAD(txAad)
+            val outLen = txCipher.getOutputSize(plaintext.size)
+            val packet = ByteArray(8 + outLen)
+            putLongBigEndian(packet, 0, seq)
+            val written = txCipher.doFinal(plaintext, 0, plaintext.size, packet, 8)
+            val total = 8 + written
+            return if (total == packet.size) packet else packet.copyOf(total)
+        }
+    }
+
+    fun encryptChunk(
+        frameKind: Byte,
+        header40: ByteArray,
+        chunkData: ByteArray,
+        chunkLen: Int
+    ): ByteArray {
+        synchronized(txLock) {
+            val seq = txSeq.getAndIncrement()
+            putLongBigEndian(txIv, 4, seq)
+            txAad[0] = frameKind
+            putLongBigEndian(txAad, 1, seq)
+            txCipher.init(Cipher.ENCRYPT_MODE, txKey, GCMParameterSpec(128, txIv))
+            txCipher.updateAAD(txAad)
+            val outLen = txCipher.getOutputSize(40 + chunkLen)
+            val packet = ByteArray(8 + outLen)
+            putLongBigEndian(packet, 0, seq)
+            val written1 = txCipher.update(header40, 0, 40, packet, 8)
+            val written2 = txCipher.doFinal(chunkData, 0, chunkLen, packet, 8 + written1)
+            val total = 8 + written1 + written2
+            return if (total == packet.size) packet else packet.copyOf(total)
         }
     }
 
     fun decrypt(frameKind: Byte, packet: ByteArray): ByteArray {
         synchronized(rxLock) {
             require(packet.size >= 8 + 16) { "Truncated encrypted packet" }
-            val buf = ByteBuffer.wrap(packet)
-            val seq = buf.long
+            val seq = readLongBigEndian(packet, 0)
             if (seq <= highestRxSeq) {
                 throw SecurityException("Replayed or out-of-order packet detected (anti-replay)")
             }
-            val ciphertext = ByteArray(packet.size - 8)
-            buf.get(ciphertext)
-            val iv = buildNonce(rxIvPrefix, seq)
-            val aad = buildAad(frameKind, seq)
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, rxKey, GCMParameterSpec(128, iv))
-            cipher.updateAAD(aad)
-            val plaintext = cipher.doFinal(ciphertext)
+            putLongBigEndian(rxIv, 4, seq)
+            rxAad[0] = frameKind
+            putLongBigEndian(rxAad, 1, seq)
+            rxCipher.init(Cipher.DECRYPT_MODE, rxKey, GCMParameterSpec(128, rxIv))
+            rxCipher.updateAAD(rxAad)
+            val plaintext = rxCipher.doFinal(packet, 8, packet.size - 8)
             highestRxSeq = seq
             return plaintext
         }
     }
 
-    private fun buildNonce(prefix4: ByteArray, seq: Long): ByteArray {
-        return ByteBuffer.allocate(12)
-            .put(prefix4, 0, 4)
-            .putLong(seq)
-            .array()
+    private fun putLongBigEndian(dst: ByteArray, offset: Int, value: Long) {
+        dst[offset] = (value ushr 56).toByte()
+        dst[offset + 1] = (value ushr 48).toByte()
+        dst[offset + 2] = (value ushr 40).toByte()
+        dst[offset + 3] = (value ushr 32).toByte()
+        dst[offset + 4] = (value ushr 24).toByte()
+        dst[offset + 5] = (value ushr 16).toByte()
+        dst[offset + 6] = (value ushr 8).toByte()
+        dst[offset + 7] = value.toByte()
     }
 
-    private fun buildAad(frameKind: Byte, seq: Long): ByteArray {
-        return ByteBuffer.allocate(9)
-            .put(frameKind)
-            .putLong(seq)
-            .array()
+    private fun readLongBigEndian(src: ByteArray, offset: Int): Long {
+        return ((src[offset].toLong() and 0xFF) shl 56) or
+            ((src[offset + 1].toLong() and 0xFF) shl 48) or
+            ((src[offset + 2].toLong() and 0xFF) shl 40) or
+            ((src[offset + 3].toLong() and 0xFF) shl 32) or
+            ((src[offset + 4].toLong() and 0xFF) shl 24) or
+            ((src[offset + 5].toLong() and 0xFF) shl 16) or
+            ((src[offset + 6].toLong() and 0xFF) shl 8) or
+            (src[offset + 7].toLong() and 0xFF)
     }
 }

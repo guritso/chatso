@@ -14,14 +14,15 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +33,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+
+enum class FileSendResult {
+    SENT,
+    CANCELLED,
+    FAILED
+}
 
 interface P2PEventListener {
     suspend fun isKnownPeer(peerId: String): Boolean
@@ -71,6 +78,10 @@ interface P2PEventListener {
     ): File
     suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int)
     suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File)
+    suspend fun onIncomingFileCancelled(peerId: String, messageId: String) {}
+    suspend fun onOutgoingFileCancelRequested(peerId: String, messageId: String) {}
+    suspend fun onFileRetryRequested(peerId: String, messageId: String) {}
+    suspend fun onFileRetryUnavailable(peerId: String, messageId: String) {}
     suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus)
     suspend fun isPeerVerifiedByMe(peerId: String): Boolean = false
     suspend fun onPeerVerificationChanged(peerId: String, verifiedMe: Boolean) {}
@@ -90,8 +101,11 @@ class P2PNodeManager(
         private const val KIND_HANDSHAKE_REJECT: Byte = 0x05
         private const val KIND_ENCRYPTED_CONTROL: Byte = 0x10
         private const val KIND_ENCRYPTED_CHUNK: Byte = 0x11
-        private const val CHUNK_SIZE = 48 * 1024 // 48 KB encrypted streaming chunks
-        private const val MAX_FRAME_BYTES = 256 * 1024
+        private const val CHUNK_SIZE = 192 * 1024 // 192 KB chunks (~192KB encrypted, <=256KB wire limit)
+        private const val MAX_FRAME_BYTES = 1024 * 1024
+        private const val SOCKET_STREAM_BUFFER_BYTES = 256 * 1024
+        private const val FILE_IO_BUFFER_BYTES = 256 * 1024
+        private const val TCP_WINDOW_BYTES = 512 * 1024
     }
 
     private class ActivePeerSession(
@@ -101,13 +115,27 @@ class P2PNodeManager(
         val cipher: SessionCipher,
         val writeMutex: Mutex = Mutex()
     ) {
-        suspend fun sendEncryptedFrame(kind: Byte, plaintext: ByteArray) = withContext(Dispatchers.IO) {
+        suspend fun sendEncryptedFrame(kind: Byte, plaintext: ByteArray, flush: Boolean = true) =
+            withContext(Dispatchers.IO) {
+                writeMutex.withLock {
+                    val encrypted = cipher.encrypt(kind, plaintext)
+                    output.writeByte(kind.toInt())
+                    output.writeInt(encrypted.size)
+                    output.write(encrypted)
+                    if (flush) output.flush()
+                }
+            }
+
+        suspend fun sendEncryptedChunkFrame(
+            header40: ByteArray,
+            chunkData: ByteArray,
+            chunkLen: Int
+        ) {
             writeMutex.withLock {
-                val encrypted = cipher.encrypt(kind, plaintext)
-                output.writeByte(kind.toInt())
+                val encrypted = cipher.encryptChunk(KIND_ENCRYPTED_CHUNK, header40, chunkData, chunkLen)
+                output.writeByte(KIND_ENCRYPTED_CHUNK.toInt())
                 output.writeInt(encrypted.size)
                 output.write(encrypted)
-                output.flush()
             }
         }
 
@@ -121,7 +149,7 @@ class P2PNodeManager(
 
     private data class IncomingTransfer(
         val file: File,
-        val outputStream: FileOutputStream,
+        val outputStream: OutputStream,
         val totalBytes: Long,
         var receivedBytes: Long = 0L,
         var lastReportedProgress: Int = 0
@@ -139,6 +167,8 @@ class P2PNodeManager(
     private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
     private val sessions = ConcurrentHashMap<String, ActivePeerSession>()
+    private val cancelledOutgoingIds = ConcurrentHashMap.newKeySet<String>()
+    private val cancelledIncomingIds = ConcurrentHashMap.newKeySet<String>()
 
     private val _connectedPeers = MutableStateFlow<Set<String>>(emptySet())
     val connectedPeers: StateFlow<Set<String>> = _connectedPeers.asStateFlow()
@@ -161,6 +191,18 @@ class P2PNodeManager(
         localAppInForeground = inForeground
         scope.launch(Dispatchers.IO) {
             broadcastAppState(inForeground)
+        }
+    }
+
+    fun ensureServerRunning(identity: LocalIdentity) {
+        currentIdentity = identity
+        discoveryManager.applyIdentityPolicy(identity)
+        if (!identity.isInitialized) {
+            stopServer()
+            return
+        }
+        if (!_serverRunning.value) {
+            restartServer(identity.listenPort)
         }
     }
 
@@ -189,11 +231,16 @@ class P2PNodeManager(
             val ss = try {
                 ServerSocket().apply {
                     reuseAddress = true
+                    runCatching { receiveBufferSize = TCP_WINDOW_BYTES }
                     bind(InetSocketAddress("0.0.0.0", preferredPort))
                 }
             } catch (_: Exception) {
                 try {
-                    ServerSocket(0).apply { reuseAddress = true }
+                    ServerSocket().apply {
+                        reuseAddress = true
+                        runCatching { receiveBufferSize = TCP_WINDOW_BYTES }
+                        bind(InetSocketAddress("0.0.0.0", 0))
+                    }
                 } catch (_: Exception) {
                     null
                 }
@@ -245,11 +292,15 @@ class P2PNodeManager(
             val socket = Socket()
             socket.tcpNoDelay = true
             socket.keepAlive = true
+            runCatching {
+                socket.sendBufferSize = TCP_WINDOW_BYTES
+                socket.receiveBufferSize = TCP_WINDOW_BYTES
+            }
             socket.connect(InetSocketAddress(host.trim(), port), 2000)
             socket.soTimeout = 5_000
 
-            val inp = DataInputStream(BufferedInputStream(socket.getInputStream()))
-            val out = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
+            val inp = DataInputStream(BufferedInputStream(socket.getInputStream(), SOCKET_STREAM_BUFFER_BYTES))
+            val out = DataOutputStream(BufferedOutputStream(socket.getOutputStream(), SOCKET_STREAM_BUFFER_BYTES))
 
             val privKey = CryptoEngine.unwrapPrivateKey(identity.wrappedPrivateKeyBase64)
             val ephKp = CryptoEngine.generateIdentityKeyPair()
@@ -382,9 +433,13 @@ class P2PNodeManager(
         try {
             socket.tcpNoDelay = true
             socket.keepAlive = true
+            runCatching {
+                socket.sendBufferSize = TCP_WINDOW_BYTES
+                socket.receiveBufferSize = TCP_WINDOW_BYTES
+            }
             socket.soTimeout = 8_000
-            val inp = DataInputStream(BufferedInputStream(socket.getInputStream()))
-            val out = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
+            val inp = DataInputStream(BufferedInputStream(socket.getInputStream(), SOCKET_STREAM_BUFFER_BYTES))
+            val out = DataOutputStream(BufferedOutputStream(socket.getOutputStream(), SOCKET_STREAM_BUFFER_BYTES))
 
             val firstKind = inp.readByte()
             val firstLen = inp.readInt()
@@ -710,6 +765,10 @@ class P2PNodeManager(
             }
             "FILE_START" -> {
                 val msgId = json.getString("id")
+                cancelledIncomingIds.remove(msgId)
+                incomingTransfers.remove(msgId)?.let { stale ->
+                    runCatching { stale.outputStream.close() }
+                }
                 val typeStr = json.optString("msgType", MessageType.FILE.name)
                 val msgType = MessageType.entries.firstOrNull { it.name == typeStr } ?: MessageType.FILE
                 val fileName = json.optString("fileName", "file")
@@ -738,7 +797,7 @@ class P2PNodeManager(
                 )
                 incomingTransfers[msgId] = IncomingTransfer(
                     file = outFile,
-                    outputStream = FileOutputStream(outFile),
+                    outputStream = BufferedOutputStream(FileOutputStream(outFile), FILE_IO_BUFFER_BYTES),
                     totalBytes = totalBytes.coerceAtLeast(1L)
                 )
             }
@@ -746,10 +805,42 @@ class P2PNodeManager(
                 val msgId = json.getString("id")
                 val transfer = incomingTransfers.remove(msgId)
                 if (transfer != null) {
-                    transfer.outputStream.flush()
-                    transfer.outputStream.close()
-                    listener.onIncomingFileComplete(session.peerId, msgId, transfer.file)
-                    sendReceiptInternal(session, msgId, DeliveryStatus.DELIVERED)
+                    if (cancelledIncomingIds.remove(msgId)) {
+                        runCatching { transfer.outputStream.close() }
+                        runCatching { transfer.file.delete() }
+                    } else {
+                        transfer.outputStream.flush()
+                        transfer.outputStream.close()
+                        listener.onIncomingFileComplete(session.peerId, msgId, transfer.file)
+                        sendReceiptInternal(session, msgId, DeliveryStatus.DELIVERED)
+                    }
+                }
+            }
+            "FILE_CANCEL" -> {
+                val msgId = json.optString("id")
+                if (msgId.isNotBlank()) {
+                    cancelledIncomingIds.add(msgId)
+                    val incoming = incomingTransfers.remove(msgId)
+                    if (incoming != null) {
+                        runCatching { incoming.outputStream.close() }
+                        runCatching { incoming.file.delete() }
+                        listener.onIncomingFileCancelled(session.peerId, msgId)
+                    }
+                    cancelledOutgoingIds.add(msgId)
+                    listener.onOutgoingFileCancelRequested(session.peerId, msgId)
+                }
+            }
+            "FILE_RETRY_REQ" -> {
+                val msgId = json.optString("id")
+                if (msgId.isNotBlank()) {
+                    cancelledOutgoingIds.remove(msgId)
+                    listener.onFileRetryRequested(session.peerId, msgId)
+                }
+            }
+            "FILE_UNAVAILABLE" -> {
+                val msgId = json.optString("id")
+                if (msgId.isNotBlank()) {
+                    listener.onFileRetryUnavailable(session.peerId, msgId)
                 }
             }
         }
@@ -772,6 +863,7 @@ class P2PNodeManager(
         if (isSelfLoopbackResponder) return
         if (plaintext.size <= 40) return
         val msgId = String(plaintext, 0, 36, Charsets.US_ASCII).trim()
+        if (cancelledIncomingIds.contains(msgId)) return
         val transfer = incomingTransfers[msgId] ?: return
         val dataLen = plaintext.size - 40
         transfer.outputStream.write(plaintext, 40, dataLen)
@@ -881,6 +973,53 @@ class P2PNodeManager(
         }
     }
 
+    fun clearTransferCancellation(messageId: String) {
+        cancelledOutgoingIds.remove(messageId)
+        cancelledIncomingIds.remove(messageId)
+    }
+
+    suspend fun cancelTransfer(peerId: String, messageId: String, isOutgoing: Boolean) {
+        if (isOutgoing) {
+            cancelledOutgoingIds.add(messageId)
+        } else {
+            cancelledIncomingIds.add(messageId)
+        }
+        val session = sessions[peerId] ?: return
+        runCatching {
+            val payload = JSONObject().apply {
+                put("cmd", "FILE_CANCEL")
+                put("id", messageId)
+            }.toString().toByteArray(Charsets.UTF_8)
+            session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
+        }
+    }
+
+    suspend fun sendFileRetryRequest(peerId: String, messageId: String): Boolean = withContext(Dispatchers.IO) {
+        cancelledIncomingIds.remove(messageId)
+        val session = sessions[peerId] ?: return@withContext false
+        try {
+            val payload = JSONObject().apply {
+                put("cmd", "FILE_RETRY_REQ")
+                put("id", messageId)
+            }.toString().toByteArray(Charsets.UTF_8)
+            session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    suspend fun sendFileUnavailable(peerId: String, messageId: String) {
+        val session = sessions[peerId] ?: return
+        runCatching {
+            val payload = JSONObject().apply {
+                put("cmd", "FILE_UNAVAILABLE")
+                put("id", messageId)
+            }.toString().toByteArray(Charsets.UTF_8)
+            session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
+        }
+    }
+
     suspend fun sendMediaOrFile(
         peerId: String,
         messageId: String,
@@ -895,12 +1034,15 @@ class P2PNodeManager(
         replyToAuthorType: String? = null,
         replyToPreview: String? = null,
         onProgress: suspend (Int) -> Unit
-    ): Boolean = withContext(Dispatchers.IO) {
-        val session = sessions[peerId] ?: return@withContext false
+    ): FileSendResult = withContext(Dispatchers.IO) {
+        cancelledOutgoingIds.remove(messageId)
+        val session = sessions[peerId] ?: return@withContext FileSendResult.FAILED
         try {
             val totalBytes = file.length()
             val totalChunks = ((totalBytes + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt().coerceAtLeast(1)
             val paddedMsgId = messageId.padEnd(36, ' ').take(36).toByteArray(Charsets.US_ASCII)
+            val header40 = ByteArray(40)
+            System.arraycopy(paddedMsgId, 0, header40, 0, 36)
 
             val startJson = JSONObject().apply {
                 put("cmd", "FILE_START")
@@ -922,19 +1064,25 @@ class P2PNodeManager(
             session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, startJson)
 
             var lastPct = 0
+            var cancelled = false
             FileInputStream(file).use { fis ->
                 val buf = ByteArray(CHUNK_SIZE)
                 var chunkIndex = 0
                 var sentBytes = 0L
                 while (true) {
+                    if (cancelledOutgoingIds.contains(messageId) || !currentCoroutineContext().isActive) {
+                        cancelled = true
+                        break
+                    }
                     val read = fis.read(buf)
                     if (read <= 0) break
-                    val framePlain = ByteBuffer.allocate(40 + read)
-                        .put(paddedMsgId)
-                        .putInt(chunkIndex++)
-                        .put(buf, 0, read)
-                        .array()
-                    session.sendEncryptedFrame(KIND_ENCRYPTED_CHUNK, framePlain)
+                    val idx = chunkIndex++
+                    header40[36] = (idx ushr 24).toByte()
+                    header40[37] = (idx ushr 16).toByte()
+                    header40[38] = (idx ushr 8).toByte()
+                    header40[39] = idx.toByte()
+
+                    session.sendEncryptedChunkFrame(header40, buf, read)
                     sentBytes += read
                     val pct = if (totalBytes > 0) {
                         ((sentBytes * 100L) / totalBytes).toInt().coerceIn(1, 99)
@@ -948,15 +1096,28 @@ class P2PNodeManager(
                 }
             }
 
+            if (cancelled || cancelledOutgoingIds.remove(messageId)) {
+                val cancelJson = JSONObject().apply {
+                    put("cmd", "FILE_CANCEL")
+                    put("id", messageId)
+                }.toString().toByteArray(Charsets.UTF_8)
+                runCatching { session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, cancelJson) }
+                return@withContext FileSendResult.CANCELLED
+            }
+
             val endJson = JSONObject().apply {
                 put("cmd", "FILE_END")
                 put("id", messageId)
             }.toString().toByteArray(Charsets.UTF_8)
             session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, endJson)
             onProgress(100)
-            true
+            FileSendResult.SENT
         } catch (_: Exception) {
-            false
+            if (cancelledOutgoingIds.remove(messageId)) {
+                FileSendResult.CANCELLED
+            } else {
+                FileSendResult.FAILED
+            }
         }
     }
 

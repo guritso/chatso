@@ -127,6 +127,9 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         refreshEndpoints()
+        repository.onTransferUnavailableNotice = { _, _ ->
+            _snackbarMessage.value = str(R.string.msg_transfer_unavailable)
+        }
         viewModelScope.launch {
             while (isActive) {
                 _nowClockMs.value = System.currentTimeMillis()
@@ -441,7 +444,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     fun sendPhotoUri(uri: Uri, replyTo: MessageEntity? = null) {
         val peerId = _activePeerId.value ?: return
-        viewModelScope.launch {
+        repository.scope.launch {
             val ok = repository.sendUriAttachment(peerId, uri, forceImage = true, replyTo = replyTo)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
@@ -451,7 +454,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     fun sendVideoUri(uri: Uri, replyTo: MessageEntity? = null) {
         val peerId = _activePeerId.value ?: return
-        viewModelScope.launch {
+        repository.scope.launch {
             val ok = repository.sendUriAttachment(peerId, uri, forceImage = false, replyTo = replyTo)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
@@ -461,7 +464,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     fun sendDocumentUri(uri: Uri, replyTo: MessageEntity? = null) {
         val peerId = _activePeerId.value ?: return
-        viewModelScope.launch {
+        repository.scope.launch {
             val ok = repository.sendUriAttachment(peerId, uri, forceImage = false, replyTo = replyTo)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
@@ -481,8 +484,23 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     fun finishAndSendVoiceRecording(replyTo: MessageEntity? = null) {
         val peerId = _activePeerId.value ?: return
         val finalized = voiceRecorder.stopAndFinalize() ?: return
-        viewModelScope.launch {
+        repository.scope.launch {
             val ok = repository.sendVoiceRecording(peerId, finalized.first, finalized.second, replyTo)
+            if (!ok) {
+                _snackbarMessage.value = str(R.string.msg_peer_offline)
+            }
+        }
+    }
+
+    fun cancelTransfer(messageId: String) {
+        repository.scope.launch {
+            repository.cancelTransfer(messageId)
+        }
+    }
+
+    fun retryTransfer(messageId: String) {
+        repository.scope.launch {
+            val ok = repository.retryTransfer(messageId)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
             }
@@ -542,6 +560,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     override fun onCleared() {
         super.onCleared()
+        repository.onTransferUnavailableNotice = null
         voiceRecorder.stopAndDiscard()
         voicePlayer.stop()
     }

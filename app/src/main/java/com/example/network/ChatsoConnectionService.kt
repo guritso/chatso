@@ -328,7 +328,7 @@ class ChatsoConnectionService : Service() {
                 delay(25_000L)
                 val id = container.identityStore.getSnapshot()
                 if (id.isInitialized) {
-                    container.repository.nodeManager.updateIdentityAndEnsureServer(id)
+                    container.repository.nodeManager.ensureServerRunning(id)
                 }
             }
         }
