@@ -48,3 +48,7 @@ The workflow at `.github/workflows/release.yml` runs on version tags (`v*`) or m
 1. Runs `:app:testDebugUnitTest`.
 2. Builds `:app:assembleRelease` when `KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` repository secrets are configured; otherwise builds `:app:assembleDebug`.
 3. Creates a GitHub Release (or updates the matching tag release) and attaches the built APK.
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
