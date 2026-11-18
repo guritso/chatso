@@ -143,7 +143,7 @@
     <string name="notif_service_listening">P2P-Verbindung aktiv · E2EE</string>
     <string name="notif_service_connected">P2P-Verbindung aktiv · %1$d verbunden</string>
 
-    <string name="status_background">Im Hintergrund</string>
+    <string name="status_background">Inaktiv</string>
     <string name="paste_qr_label">Oder Einladungslink einfügen</string>
     <string name="paste_qr_hint">chatso://connect?...</string>
     <string name="paste_btn">Einfügen</string>

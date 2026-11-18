@@ -155,7 +155,7 @@
     <string name="notif_service_listening">Conexão P2P ativa · E2EE</string>
     <string name="notif_service_connected">Conexão P2P ativa · %1$d conectado(s)</string>
 
-    <string name="status_background">Em segundo plano</string>
+    <string name="status_background">Inativo</string>
     <string name="paste_qr_label">Ou cole o texto do convite</string>
     <string name="paste_qr_hint">chatso://connect?...</string>
     <string name="paste_btn">Colar</string>
