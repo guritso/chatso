@@ -1,0 +1,120 @@
+<resources>
+    <string name="app_name">Chatso</string>
+
+    <string name="onboarding_title">Privado por clave pública</string>
+    <string name="onboarding_subtitle">Chat directo por VPN, red local o localhost, sin servidores.</string>
+    <string name="username_label">Nombre de usuario</string>
+    <string name="username_placeholder">Tu nombre</string>
+    <string name="choose_avatar">Foto de perfil</string>
+    <string name="discoverable_title">Permitir ser encontrado</string>
+    <string name="discoverable_on_desc">Visible en la búsqueda de red local/VPN</string>
+    <string name="discoverable_off_desc">Modo Invisible: oculto en la red</string>
+    <string name="create_local_identity">Crear y Entrar</string>
+
+    <string name="tab_chats">Chats</string>
+    <string name="tab_connect">Conectar</string>
+    <string name="tab_profile">Perfil</string>
+
+    <string name="status_visible">Visible</string>
+    <string name="status_invisible">Invisible</string>
+    <string name="status_online">En línea</string>
+    <string name="status_typing">Escribiendo…</string>
+    <string name="status_offline_tap">Desconectado · Toca para reconectar</string>
+
+    <string name="search_chats_hint">Buscar chat…</string>
+    <string name="empty_chats_title">Sin conversaciones</string>
+    <string name="empty_chats_body">Conéctate en la misma VPN, Wi-Fi o localhost con cifrado de extremo a extremo.</string>
+    <string name="connect_cta">Conectar</string>
+    <string name="test_localhost_cta">Probar Localhost</string>
+    <string name="new_connection">Nueva conexión</string>
+    <string name="select_chat_hint">Selecciona una conversación</string>
+
+    <string name="connect_title">Conectar</string>
+    <string name="connect_lan_tab">En Red</string>
+    <string name="connect_qr_tab">Código QR</string>
+    <string name="connect_manual_tab">IP / VPN</string>
+    <string name="scan_network_btn">Buscar en Red</string>
+    <string name="scanning_network">Buscando…</string>
+    <string name="no_peers_found">No se encontraron dispositivos visibles.\nQuienes están en Modo Invisible usan QR o IP.</string>
+    <string name="connect_btn">Conectar</string>
+    <string name="connecting_btn">Conectando…</string>
+    <string name="my_qr_tab">Mi QR</string>
+    <string name="scan_qr_tab">Escanear</string>
+    <string name="copy_btn">Copiar</string>
+    <string name="renew_btn">Renovar</string>
+    <string name="camera_permission_msg">Permite la cámara para escanear el código QR.</string>
+    <string name="allow_camera_btn">Permitir cámara</string>
+    <string name="pick_qr_image_btn">Leer QR de imagen</string>
+    <string name="ip_address_label">Dirección IP</string>
+    <string name="ip_address_hint">10.8.0.2 o 127.0.0.1</string>
+    <string name="port_label">Puerto</string>
+    <string name="use_localhost_chip">Localhost (127.0.0.1)</string>
+    <string name="your_ip_label">Tu IP:</string>
+
+    <string name="message_placeholder">Mensaje…</string>
+    <string name="key_changed_warning">La clave pública cambió. Toca para verificar.</string>
+    <string name="send_photo">Enviar foto</string>
+    <string name="send_file">Enviar archivo</string>
+    <string name="delete_chat">Eliminar chat</string>
+    <string name="recording_voice">Grabando</string>
+    <string name="send_btn">Enviar</string>
+    <string name="voice_message_label">Audio</string>
+    <string name="open_file_btn">Abrir</string>
+    <string name="open_external_btn">Abrir fuera</string>
+    <string name="self_destruct_title">Autodestrucción</string>
+    <string name="self_destruct_desc">Borra mensajes y archivos tras leerlos.</string>
+    <string name="timer_off">Desactivado</string>
+    <string name="timer_30s">30 seg</string>
+    <string name="timer_5m">5 min</string>
+    <string name="timer_1h">1 hora</string>
+    <string name="safety_title">Código de Seguridad</string>
+    <string name="safety_desc">Compara con tu contacto para confirmar el cifrado de extremo a extremo:</string>
+    <string name="safety_pubkey_label">Huella de la clave:</string>
+    <string name="mark_verified">Marcar verificada</string>
+    <string name="unmark_verified">Quitar verificación</string>
+    <string name="close_btn">Cerrar</string>
+
+    <string name="profile_title">Perfil y Red</string>
+    <string name="change_photo">Cambiar foto</string>
+    <string name="save_btn">Guardar</string>
+    <string name="privacy_section">Privacidad</string>
+    <string name="block_unknown_title">Bloquear desconocidos</string>
+    <string name="block_unknown_desc">Aceptar solo contactos guardados o QR</string>
+    <string name="theme_section">Tema</string>
+    <string name="theme_auto">Auto</string>
+    <string name="theme_light">Claro</string>
+    <string name="theme_dark">Oscuro</string>
+    <string name="language_section">Idioma</string>
+    <string name="language_system">Sistema</string>
+    <string name="public_key_section">Clave Pública</string>
+    <string name="copy_key_btn">Copiar clave</string>
+    <string name="network_section">Red y Puerto</string>
+    <string name="tcp_port_label">Puerto TCP</string>
+    <string name="apply_btn">Aplicar</string>
+
+    <string name="msg_enter_username">Ingresa un nombre de usuario.</string>
+    <string name="msg_profile_saved">Perfil guardado.</string>
+    <string name="msg_visible_on">Visible en la red.</string>
+    <string name="msg_invisible_on">Modo Invisible activado.</string>
+    <string name="msg_block_unknown_on">Solo contactos guardados o QR.</string>
+    <string name="msg_block_unknown_off">Conexiones por IP permitidas.</string>
+    <string name="msg_qr_renewed">Token QR renovado.</string>
+    <string name="msg_invalid_port">Puerto inválido (1024–65535).</string>
+    <string name="msg_port_applied">Puerto cambiado a %1$d.</string>
+    <string name="msg_enter_ip">Ingresa una dirección IP.</string>
+    <string name="msg_invalid_qr">Código QR inválido.</string>
+    <string name="msg_no_qr_image">No se encontró QR en la imagen.</string>
+    <string name="msg_peer_offline">Contacto desconectado.</string>
+    <string name="msg_reconnected">Conectado.</string>
+    <string name="msg_reconnect_failed">Contacto inalcanzable.</string>
+    <string name="msg_chat_deleted">Conversación eliminada.</string>
+    <string name="msg_copied">Copiado.</string>
+
+    <string name="cd_send_message">Enviar mensaje</string>
+    <string name="cd_attach_file">Adjuntar</string>
+    <string name="cd_record_voice">Grabar voz</string>
+    <string name="cd_back">Volver</string>
+    <string name="cd_verify_key">Código de seguridad</string>
+    <string name="cd_self_destruct">Autodestrucción</string>
+    <string name="cd_toggle_visibility">Cambiar visibilidad</string>
+</resources>
