@@ -11,17 +11,23 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imeNestedScroll
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -65,6 +71,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -83,6 +90,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.crypto.CryptoEngine
@@ -101,6 +109,7 @@ import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OnlineEmerald
 import com.example.ui.theme.WarningAmber
 import java.io.File
+import kotlinx.coroutines.flow.StateFlow
 
 @Composable
 private fun SelfDestructOption.localizedLabel(): String = when (this) {
@@ -110,6 +119,7 @@ private fun SelfDestructOption.localizedLabel(): String = when (this) {
     SelfDestructOption.HOUR_1 -> stringResource(R.string.timer_1h)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatDetailScreen(
     identity: LocalIdentity,
@@ -117,11 +127,12 @@ fun ChatDetailScreen(
     messages: List<MessageEntity>,
     isConnected: Boolean,
     isPeerTyping: Boolean,
-    nowClockMs: Long,
+    nowClockFlow: StateFlow<Long>,
     voiceRecordingState: VoiceRecordingState,
     voicePlaybackState: VoicePlaybackState,
     showBackButton: Boolean,
     onBack: () -> Unit,
+    onLoadMoreMessages: () -> Unit,
     onSendText: (String) -> Unit,
     onTypingChanged: (Boolean) -> Unit,
     onSendPhotoUri: (Uri) -> Unit,
@@ -146,9 +157,24 @@ fun ChatDetailScreen(
 
     val listState = rememberLazyListState()
 
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    // Messages are ordered newest-first (DESC) and LazyColumn uses reverseLayout = true,
+    // so index 0 IS the bottom latest message on frame 1 with zero initial scroll lag.
+    val newestMessageId = messages.firstOrNull()?.messageId
+    LaunchedEffect(newestMessageId) {
+        if (newestMessageId != null && listState.firstVisibleItemIndex <= 2) {
+            listState.animateScrollToItem(0)
+        }
+    }
+
+    val shouldLoadMore by remember(messages.size) {
+        derivedStateOf {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            messages.isNotEmpty() && lastVisible >= messages.size - 15
+        }
+    }
+    LaunchedEffect(shouldLoadMore, messages.size) {
+        if (shouldLoadMore) {
+            onLoadMoreMessages()
         }
     }
 
@@ -174,7 +200,6 @@ fun ChatDetailScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .imePadding()
     ) {
         // Minimalist Header Bar
         Surface(
@@ -383,17 +408,23 @@ fun ChatDetailScreen(
 
         LazyColumn(
             state = listState,
+            reverseLayout = true,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .imeNestedScroll()
                 .testTag("chat_messages_list"),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(messages, key = { it.messageId }) { message ->
+            items(
+                items = messages,
+                key = { it.messageId },
+                contentType = { it.type }
+            ) { message ->
                 MessageBubbleItem(
                     message = message,
-                    nowClockMs = nowClockMs,
+                    nowClockFlow = nowClockFlow,
                     voicePlaybackState = voicePlaybackState,
                     onToggleVoice = onToggleVoicePlayback,
                     onOpenImageFullscreen = { path -> fullscreenImagePath = path },
@@ -404,8 +435,14 @@ fun ChatDetailScreen(
 
         Surface(
             color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 3.dp
+            tonalElevation = 3.dp,
+            modifier = Modifier.fillMaxWidth()
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+            ) {
             if (voiceRecordingState.isRecording) {
                 Row(
                     modifier = Modifier
@@ -568,6 +605,7 @@ fun ChatDetailScreen(
                     }
                 }
             }
+            }
         }
     }
 
@@ -722,9 +760,33 @@ fun ChatDetailScreen(
 }
 
 @Composable
+private fun SelfDestructCountdownText(
+    expiresAt: Long,
+    nowClockFlow: StateFlow<Long>
+) {
+    val nowClockMs by nowClockFlow.collectAsStateWithLifecycle()
+    val remainingSeconds = ((expiresAt - nowClockMs) / 1000L).coerceAtLeast(0L)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = Icons.Filled.Timer,
+            contentDescription = null,
+            tint = DangerCoral,
+            modifier = Modifier.size(12.dp)
+        )
+        Spacer(modifier = Modifier.width(3.dp))
+        Text(
+            text = "${remainingSeconds}s",
+            fontFamily = JetBrainsMonoFontFamily,
+            style = MaterialTheme.typography.labelSmall,
+            color = DangerCoral
+        )
+    }
+}
+
+@Composable
 private fun MessageBubbleItem(
     message: MessageEntity,
-    nowClockMs: Long,
+    nowClockFlow: StateFlow<Long>,
     voicePlaybackState: VoicePlaybackState,
     onToggleVoice: (String, String) -> Unit,
     onOpenImageFullscreen: (String) -> Unit,
@@ -741,15 +803,16 @@ private fun MessageBubbleItem(
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    val bubbleShape = RoundedCornerShape(
-        topStart = 18.dp,
-        topEnd = 18.dp,
-        bottomStart = if (isOutgoing) 18.dp else 4.dp,
-        bottomEnd = if (isOutgoing) 4.dp else 18.dp
-    )
-
-    val remainingSeconds = message.expiresAt?.let { exp ->
-        ((exp - nowClockMs) / 1000L).coerceAtLeast(0L)
+    val bubbleShape = remember(isOutgoing) {
+        RoundedCornerShape(
+            topStart = 18.dp,
+            topEnd = 18.dp,
+            bottomStart = if (isOutgoing) 18.dp else 4.dp,
+            bottomEnd = if (isOutgoing) 4.dp else 18.dp
+        )
+    }
+    val formattedTimestamp = remember(message.createdAt) {
+        NetworkUtils.formatTimestamp(message.createdAt)
     }
 
     Row(
@@ -764,9 +827,11 @@ private fun MessageBubbleItem(
             Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
                 when (message.type) {
                     MessageType.IMAGE.name -> {
-                        val fileExists = !message.mediaLocalPath.isNullOrBlank() &&
-                            File(message.mediaLocalPath).exists() &&
-                            message.transferProgress >= 100
+                        val fileExists = remember(message.mediaLocalPath, message.transferProgress) {
+                            !message.mediaLocalPath.isNullOrBlank() &&
+                                message.transferProgress >= 100 &&
+                                File(message.mediaLocalPath).exists()
+                        }
                         if (fileExists && message.mediaLocalPath != null) {
                             AsyncImage(
                                 model = File(message.mediaLocalPath),
@@ -933,18 +998,10 @@ private fun MessageBubbleItem(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
-                    if (remainingSeconds != null) {
-                        Icon(
-                            imageVector = Icons.Filled.Timer,
-                            contentDescription = null,
-                            tint = DangerCoral,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = "${remainingSeconds}s",
-                            fontFamily = JetBrainsMonoFontFamily,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = DangerCoral
+                    if (message.expiresAt != null) {
+                        SelfDestructCountdownText(
+                            expiresAt = message.expiresAt,
+                            nowClockFlow = nowClockFlow
                         )
                     } else if (message.selfDestructSeconds > 0) {
                         Icon(
@@ -956,7 +1013,7 @@ private fun MessageBubbleItem(
                     }
 
                     Text(
-                        text = NetworkUtils.formatTimestamp(message.createdAt),
+                        text = formattedTimestamp,
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor.copy(alpha = 0.68f)
                     )

@@ -61,7 +61,9 @@ data class LocalIdentity(
     val blockUnknownPeers: Boolean = false,
     val qrInviteToken: String = "",
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val language: AppLanguage = AppLanguage.SYSTEM
+    val language: AppLanguage = AppLanguage.SYSTEM,
+    val backgroundConnectionEnabled: Boolean = true,
+    val batteryPromptDismissed: Boolean = false
 ) {
     companion object {
         const val DEFAULT_TCP_PORT = 42850

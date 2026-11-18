@@ -40,6 +40,8 @@ class ChatRepository(
     @Volatile
     var currentlyOpenPeerId: String? = null
 
+    var onIncomingNotification: ((peerId: String, senderName: String, preview: String) -> Unit)? = null
+
     init {
         nodeManager.setAvatarProvider {
             val snap = identityStore.getSnapshot()
@@ -61,8 +63,8 @@ class ChatRepository(
 
     fun observePeer(peerId: String): Flow<PeerEntity?> = chatDao.observePeer(peerId)
 
-    fun observeMessages(peerId: String): Flow<List<MessageEntity>> =
-        chatDao.observeMessagesForPeer(peerId)
+    fun observeMessages(peerId: String, limit: Int): Flow<List<MessageEntity>> =
+        chatDao.observeMessagesForPeer(peerId, limit)
 
     suspend fun connectDirect(
         ip: String,
@@ -361,6 +363,9 @@ class ChatRepository(
         }
         if (isOpen) {
             nodeManager.sendReadReceipt(peerId, messageId)
+        } else {
+            val senderName = peer?.username ?: "Chatso"
+            onIncomingNotification?.invoke(peerId, senderName, text)
         }
     }
 
@@ -441,6 +446,9 @@ class ChatRepository(
         }
         if (isOpen) {
             nodeManager.sendReadReceipt(peerId, messageId)
+        } else {
+            val senderName = peer?.username ?: "Chatso"
+            onIncomingNotification?.invoke(peerId, senderName, finalPreview)
         }
     }
 

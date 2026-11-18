@@ -1,12 +1,18 @@
 package com.example
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,12 +25,15 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Lan
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -37,11 +46,15 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -49,10 +62,14 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.LocaleHelper
 import com.example.data.ThemeMode
+import com.example.network.ChatsoConnectionService
+import com.example.network.ChatsoNotificationHelper
+import com.example.network.NetworkUtils
 import com.example.ui.ChatsoViewModel
 import com.example.ui.HomeTab
 import com.example.ui.screens.ChatDetailScreen
@@ -61,8 +78,11 @@ import com.example.ui.screens.ConnectScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.ProfileSettingsScreen
 import com.example.ui.theme.ChatsoTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
+    private val pendingNotificationPeerId = MutableStateFlow<String?>(null)
+
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(LocaleHelper.wrapContext(newBase))
     }
@@ -70,14 +90,43 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingNotificationPeerId.value =
+            intent?.getStringExtra(ChatsoNotificationHelper.EXTRA_PEER_ID)
         setContent {
-            ChatsoRootApp()
+            val peerIdToOpen by pendingNotificationPeerId.collectAsStateWithLifecycle()
+            ChatsoRootApp(
+                notificationPeerId = peerIdToOpen,
+                onConsumedNotificationPeer = { pendingNotificationPeerId.value = null }
+            )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val peerId = intent.getStringExtra(ChatsoNotificationHelper.EXTRA_PEER_ID)
+        if (!peerId.isNullOrBlank()) {
+            pendingNotificationPeerId.value = peerId
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        (application as? ChatsoApplication)?.container?.isAppInForeground = true
+    }
+
+    override fun onStop() {
+        (application as? ChatsoApplication)?.container?.isAppInForeground = false
+        super.onStop()
     }
 }
 
 @Composable
-fun ChatsoRootApp(viewModel: ChatsoViewModel = viewModel()) {
+fun ChatsoRootApp(
+    viewModel: ChatsoViewModel = viewModel(),
+    notificationPeerId: String? = null,
+    onConsumedNotificationPeer: () -> Unit = {}
+) {
+    val context = LocalContext.current
     val identity by viewModel.identityState.collectAsStateWithLifecycle()
     val systemDark = isSystemInDarkTheme()
 
@@ -85,6 +134,40 @@ fun ChatsoRootApp(viewModel: ChatsoViewModel = viewModel()) {
         ThemeMode.DARK -> true
         ThemeMode.LIGHT -> false
         else -> systemDark
+    }
+
+    var askedNotifPermission by rememberSaveable { mutableStateOf(false) }
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    LaunchedEffect(identity?.isInitialized, identity?.backgroundConnectionEnabled) {
+        val id = identity ?: return@LaunchedEffect
+        ChatsoConnectionService.syncServiceState(
+            context = context,
+            shouldRun = id.isInitialized && id.backgroundConnectionEnabled
+        )
+        if (id.isInitialized && id.backgroundConnectionEnabled &&
+            !askedNotifPermission &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        ) {
+            askedNotifPermission = true
+            val granted = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!granted) {
+                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+    }
+
+    LaunchedEffect(notificationPeerId, identity?.isInitialized) {
+        if (!notificationPeerId.isNullOrBlank() && identity?.isInitialized == true) {
+            viewModel.selectTab(HomeTab.CHATS)
+            viewModel.openConversation(notificationPeerId)
+            onConsumedNotificationPeer()
+        }
     }
 
     ChatsoTheme(darkTheme = isDarkTheme) {
@@ -123,6 +206,49 @@ fun ChatsoRootApp(viewModel: ChatsoViewModel = viewModel()) {
                 viewModel = viewModel,
                 snackbarHostState = snackbarHostState
             )
+
+            // Ask user once to disable battery optimization for reliable background P2P messaging
+            val needsBatteryExemption = remember(currentIdentity.batteryPromptDismissed) {
+                !currentIdentity.batteryPromptDismissed &&
+                    !NetworkUtils.isIgnoringBatteryOptimizations(context)
+            }
+            if (needsBatteryExemption) {
+                AlertDialog(
+                    onDismissRequest = { viewModel.dismissBatteryPrompt() },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.BatteryChargingFull,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    title = { Text(stringResource(R.string.battery_dialog_title)) },
+                    text = { Text(stringResource(R.string.battery_dialog_body)) },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                viewModel.dismissBatteryPrompt()
+                                NetworkUtils.openBatteryOptimizationRequest(context)
+                            },
+                            modifier = Modifier.testTag("battery_dialog_confirm_button")
+                        ) {
+                            Text(
+                                text = stringResource(R.string.battery_dialog_confirm),
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { viewModel.dismissBatteryPrompt() },
+                            modifier = Modifier.testTag("battery_dialog_later_button")
+                        ) {
+                            Text(stringResource(R.string.later_btn))
+                        }
+                    }
+                )
+            }
         }
     }
 }
@@ -149,7 +275,6 @@ private fun ChatsoAuthenticatedShell(
     val activePeerId by viewModel.activePeerId.collectAsStateWithLifecycle()
     val activePeer by viewModel.activePeer.collectAsStateWithLifecycle()
     val activeMessages by viewModel.activeMessages.collectAsStateWithLifecycle()
-    val nowClockMs by viewModel.nowClockMs.collectAsStateWithLifecycle()
     val voiceRecordingState by viewModel.voiceRecordingState.collectAsStateWithLifecycle()
     val voicePlaybackState by viewModel.voicePlaybackState.collectAsStateWithLifecycle()
 
@@ -273,11 +398,12 @@ private fun ChatsoAuthenticatedShell(
                                     messages = activeMessages,
                                     isConnected = connectedPeerIds.contains(peer.peerId),
                                     isPeerTyping = typingPeerIds.contains(peer.peerId),
-                                    nowClockMs = nowClockMs,
+                                    nowClockFlow = viewModel.nowClockMs,
                                     voiceRecordingState = voiceRecordingState,
                                     voicePlaybackState = voicePlaybackState,
                                     showBackButton = false,
                                     onBack = viewModel::closeConversation,
+                                    onLoadMoreMessages = viewModel::loadMoreMessages,
                                     onSendText = viewModel::sendTextMessage,
                                     onTypingChanged = viewModel::notifyTyping,
                                     onSendPhotoUri = viewModel::sendPhotoUri,
@@ -333,6 +459,7 @@ private fun ChatsoAuthenticatedShell(
                                 onSaveProfile = viewModel::updateProfile,
                                 onToggleDiscoverable = viewModel::toggleDiscoverable,
                                 onToggleBlockUnknown = viewModel::toggleBlockUnknownPeers,
+                                onToggleBackgroundConnection = viewModel::toggleBackgroundConnection,
                                 onUpdateListenPort = viewModel::updateListenPort,
                                 onChangeTheme = viewModel::setThemeMode,
                                 onChangeLanguage = onChangeLanguage,
@@ -362,11 +489,12 @@ private fun ChatsoAuthenticatedShell(
                             messages = activeMessages,
                             isConnected = connectedPeerIds.contains(currentOpenPeer.peerId),
                             isPeerTyping = typingPeerIds.contains(currentOpenPeer.peerId),
-                            nowClockMs = nowClockMs,
+                            nowClockFlow = viewModel.nowClockMs,
                             voiceRecordingState = voiceRecordingState,
                             voicePlaybackState = voicePlaybackState,
                             showBackButton = true,
                             onBack = viewModel::closeConversation,
+                            onLoadMoreMessages = viewModel::loadMoreMessages,
                             onSendText = viewModel::sendTextMessage,
                             onTypingChanged = viewModel::notifyTyping,
                             onSendPhotoUri = viewModel::sendPhotoUri,
@@ -493,6 +621,7 @@ private fun ChatsoAuthenticatedShell(
                                 onSaveProfile = viewModel::updateProfile,
                                 onToggleDiscoverable = viewModel::toggleDiscoverable,
                                 onToggleBlockUnknown = viewModel::toggleBlockUnknownPeers,
+                                onToggleBackgroundConnection = viewModel::toggleBackgroundConnection,
                                 onUpdateListenPort = viewModel::updateListenPort,
                                 onChangeTheme = viewModel::setThemeMode,
                                 onChangeLanguage = onChangeLanguage,

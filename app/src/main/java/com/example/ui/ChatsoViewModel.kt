@@ -5,16 +5,13 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.ChatsoApplication
 import com.example.R
 import com.example.crypto.CryptoEngine
 import com.example.data.AppLanguage
-import com.example.data.ChatDatabase
-import com.example.data.ChatRepository
 import com.example.data.DiscoveredPeer
 import com.example.data.LocalIdentity
-import com.example.data.LocalIdentityStore
 import com.example.data.LocaleHelper
-import com.example.data.MediaStorageHelper
 import com.example.data.MessageEntity
 import com.example.data.NetworkEndpointInfo
 import com.example.data.PeerEntity
@@ -23,6 +20,7 @@ import com.example.media.VoicePlaybackState
 import com.example.media.VoicePlayerController
 import com.example.media.VoiceRecorderController
 import com.example.media.VoiceRecordingState
+import com.example.network.ChatsoConnectionService
 import com.example.network.NetworkUtils
 import com.example.network.QrCodeHelper
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +30,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -49,16 +48,10 @@ enum class HomeTab {
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatsoViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val database = ChatDatabase.getInstance(application)
-    private val identityStore = LocalIdentityStore(application)
-    private val mediaStorage = MediaStorageHelper(application)
-    val repository = ChatRepository(
-        context = application,
-        scope = viewModelScope,
-        chatDao = database.chatDao(),
-        identityStore = identityStore,
-        mediaStorage = mediaStorage
-    )
+    private val container = (application as ChatsoApplication).container
+    private val identityStore = container.identityStore
+    private val mediaStorage = container.mediaStorage
+    val repository = container.repository
 
     private val voiceRecorder = VoiceRecorderController(application, viewModelScope)
     private val voicePlayer = VoicePlayerController(viewModelScope)
@@ -86,13 +79,17 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     private val _activePeerId = MutableStateFlow<String?>(null)
     val activePeerId: StateFlow<String?> = _activePeerId.asStateFlow()
 
+    private val _messageLimit = MutableStateFlow(150)
+
     val activePeer: StateFlow<PeerEntity?> = _activePeerId
         .flatMapLatest { id -> if (id == null) flowOf(null) else repository.observePeer(id) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    val activeMessages: StateFlow<List<MessageEntity>> = _activePeerId
-        .flatMapLatest { id -> if (id == null) flowOf(emptyList()) else repository.observeMessages(id) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val activeMessages: StateFlow<List<MessageEntity>> = combine(_activePeerId, _messageLimit) { id, limit ->
+        id to limit
+    }.flatMapLatest { (id, limit) ->
+        if (id == null) flowOf(emptyList()) else repository.observeMessages(id, limit)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _endpoints = MutableStateFlow<List<NetworkEndpointInfo>>(emptyList())
     val endpoints: StateFlow<List<NetworkEndpointInfo>> = _endpoints.asStateFlow()
@@ -149,7 +146,11 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private var lastTypingPeerId: String? = null
+    private var lastTypingState: Boolean = false
+
     fun openConversation(peerId: String) {
+        _messageLimit.value = 150
         _activePeerId.value = peerId
         repository.currentlyOpenPeerId = peerId
         viewModelScope.launch {
@@ -158,10 +159,19 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun loadMoreMessages() {
+        val currentSize = activeMessages.value.size
+        if (currentSize >= _messageLimit.value) {
+            _messageLimit.value += 150
+        }
+    }
+
     fun closeConversation() {
         val prev = _activePeerId.value
         _activePeerId.value = null
         repository.currentlyOpenPeerId = null
+        lastTypingPeerId = null
+        lastTypingState = false
         voiceRecorder.stopAndDiscard()
         voicePlayer.stop()
         if (prev != null) {
@@ -260,6 +270,28 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun toggleBackgroundConnection(enabled: Boolean) {
+        viewModelScope.launch {
+            identityStore.setBackgroundConnectionEnabled(enabled)
+            ChatsoConnectionService.syncServiceState(getApplication(), enabled)
+            _snackbarMessage.value = if (enabled) {
+                str(R.string.msg_bg_conn_on)
+            } else {
+                str(R.string.msg_bg_conn_off)
+            }
+        }
+    }
+
+    fun dismissBatteryPrompt() {
+        viewModelScope.launch {
+            identityStore.setBatteryPromptDismissed(true)
+        }
+    }
+
+    fun setAppForeground(inForeground: Boolean) {
+        container.isAppInForeground = inForeground
+    }
+
     fun scanLanAndVpn() {
         refreshEndpoints()
         viewModelScope.launch {
@@ -335,6 +367,8 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     fun sendTextMessage(text: String) {
         val peerId = _activePeerId.value ?: return
+        lastTypingPeerId = peerId
+        lastTypingState = false
         viewModelScope.launch {
             repository.nodeManager.sendTyping(peerId, false)
             val ok = repository.sendText(peerId, text)
@@ -346,6 +380,9 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     fun notifyTyping(isTyping: Boolean) {
         val peerId = _activePeerId.value ?: return
+        if (lastTypingPeerId == peerId && lastTypingState == isTyping) return
+        lastTypingPeerId = peerId
+        lastTypingState = isTyping
         viewModelScope.launch {
             repository.nodeManager.sendTyping(peerId, isTyping)
         }
@@ -438,6 +475,6 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         super.onCleared()
         voiceRecorder.stopAndDiscard()
         voicePlayer.stop()
-        repository.shutdown()
+        // Keep repository & sockets running in ChatsoApplication container for background connectivity
     }
 }

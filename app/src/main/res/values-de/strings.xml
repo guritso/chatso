@@ -117,4 +117,29 @@
     <string name="cd_verify_key">Sicherheitscode</string>
     <string name="cd_self_destruct">Selbstzerstörung</string>
     <string name="cd_toggle_visibility">Sichtbarkeit umschalten</string>
+
+    <string name="crop_title">Foto anpassen</string>
+    <string name="crop_hint">Zum Ausrichten ziehen oder zoomen</string>
+    <string name="crop_reset">Zentrieren</string>
+    <string name="crop_load_error">Bild konnte nicht geöffnet werden.</string>
+    <string name="cancel_btn">Abbrechen</string>
+
+    <string name="battery_section">Hintergrund &amp; Akku</string>
+    <string name="bg_conn_title">Hintergrundverbindung</string>
+    <string name="bg_conn_desc">Hält P2P-Sockets im Hintergrund aktiv</string>
+    <string name="battery_opt_title">Akkuoptimierung</string>
+    <string name="battery_opt_ignored">Deaktiviert · Stabile Verbindung</string>
+    <string name="battery_opt_active">Aktiv · Kann Nachrichten verzögern</string>
+    <string name="battery_opt_disable_btn">Deaktivieren</string>
+    <string name="battery_dialog_title">Chatso aktiv halten</string>
+    <string name="battery_dialog_body">Um Nachrichten im Hintergrund ohne Verzögerung über VPN oder LAN zu empfangen, deaktiviere die Akkuoptimierung für Chatso.</string>
+    <string name="battery_dialog_confirm">Optimierung deaktivieren</string>
+    <string name="later_btn">Später</string>
+    <string name="msg_bg_conn_on">Hintergrundverbindung aktiviert.</string>
+    <string name="msg_bg_conn_off">Hintergrundverbindung deaktiviert.</string>
+
+    <string name="notif_channel_connection">Hintergrundverbindung</string>
+    <string name="notif_channel_messages">Eingehende Nachrichten</string>
+    <string name="notif_service_listening">P2P-Verbindung aktiv · E2EE</string>
+    <string name="notif_service_connected">P2P-Verbindung aktiv · %1$d verbunden</string>
 </resources>

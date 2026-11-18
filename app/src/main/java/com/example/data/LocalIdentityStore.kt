@@ -33,6 +33,8 @@ class LocalIdentityStore(private val context: Context) {
         val QR_INVITE_TOKEN = stringPreferencesKey("qr_invite_token")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val LANGUAGE = stringPreferencesKey("app_language")
+        val BACKGROUND_CONN_ENABLED = booleanPreferencesKey("background_connection_enabled")
+        val BATTERY_PROMPT_DISMISSED = booleanPreferencesKey("battery_prompt_dismissed")
     }
 
     val identityFlow: Flow<LocalIdentity> = context.identityDataStore.data.map { prefs ->
@@ -52,7 +54,9 @@ class LocalIdentityStore(private val context: Context) {
             blockUnknownPeers = prefs[Keys.BLOCK_UNKNOWN_PEERS] ?: false,
             qrInviteToken = prefs[Keys.QR_INVITE_TOKEN] ?: generateInviteToken(),
             themeMode = theme,
-            language = lang
+            language = lang,
+            backgroundConnectionEnabled = prefs[Keys.BACKGROUND_CONN_ENABLED] ?: true,
+            batteryPromptDismissed = prefs[Keys.BATTERY_PROMPT_DISMISSED] ?: false
         )
     }
 
@@ -82,6 +86,9 @@ class LocalIdentityStore(private val context: Context) {
             prefs[Keys.IS_DISCOVERABLE] = isDiscoverable
             prefs[Keys.BLOCK_UNKNOWN_PEERS] = false
             prefs[Keys.QR_INVITE_TOKEN] = inviteToken
+            if (prefs[Keys.BACKGROUND_CONN_ENABLED] == null) {
+                prefs[Keys.BACKGROUND_CONN_ENABLED] = true
+            }
         }
         return getSnapshot()
     }
@@ -137,6 +144,18 @@ class LocalIdentityStore(private val context: Context) {
         LocaleHelper.saveLanguage(context, language)
         context.identityDataStore.edit { prefs ->
             prefs[Keys.LANGUAGE] = language.code
+        }
+    }
+
+    suspend fun setBackgroundConnectionEnabled(enabled: Boolean) {
+        context.identityDataStore.edit { prefs ->
+            prefs[Keys.BACKGROUND_CONN_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setBatteryPromptDismissed(dismissed: Boolean) {
+        context.identityDataStore.edit { prefs ->
+            prefs[Keys.BATTERY_PROMPT_DISMISSED] = dismissed
         }
     }
 

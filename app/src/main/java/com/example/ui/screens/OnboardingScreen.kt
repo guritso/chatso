@@ -56,6 +56,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.ui.components.ChatsoAvatar
+import com.example.ui.components.ProfileImageCropperDialog
 
 @Composable
 fun OnboardingScreen(
@@ -63,15 +64,28 @@ fun OnboardingScreen(
 ) {
     var username by rememberSaveable { mutableStateOf("") }
     var selectedAvatarUriString by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingCropUriString by rememberSaveable { mutableStateOf<String?>(null) }
     var isDiscoverable by rememberSaveable { mutableStateOf(true) }
 
     val selectedUri = selectedAvatarUriString?.let { Uri.parse(it) }
+    val pendingCropUri = pendingCropUriString?.let { Uri.parse(it) }
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            selectedAvatarUriString = uri.toString()
+            pendingCropUriString = uri.toString()
         }
+    }
+
+    if (pendingCropUri != null) {
+        ProfileImageCropperDialog(
+            sourceUri = pendingCropUri,
+            onDismiss = { pendingCropUriString = null },
+            onCropped = { croppedUri ->
+                selectedAvatarUriString = croppedUri.toString()
+                pendingCropUriString = null
+            }
+        )
     }
 
     Surface(

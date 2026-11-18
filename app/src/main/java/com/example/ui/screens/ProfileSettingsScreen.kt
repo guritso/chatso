@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddAPhoto
+import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Key
@@ -63,13 +64,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.example.R
 import com.example.data.AppLanguage
 import com.example.data.LocalIdentity
 import com.example.data.NetworkEndpointInfo
 import com.example.data.ThemeMode
+import com.example.network.NetworkUtils
 import com.example.ui.components.ChatsoAvatar
+import com.example.ui.components.ProfileImageCropperDialog
 import com.example.ui.theme.JetBrainsMonoFontFamily
+import com.example.ui.theme.OnlineEmerald
+import com.example.ui.theme.WarningAmber
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -80,6 +87,7 @@ fun ProfileSettingsScreen(
     onSaveProfile: (username: String, newAvatarUri: Uri?, keepExisting: Boolean) -> Unit,
     onToggleDiscoverable: (Boolean) -> Unit,
     onToggleBlockUnknown: (Boolean) -> Unit,
+    onToggleBackgroundConnection: (Boolean) -> Unit,
     onUpdateListenPort: (String) -> Unit,
     onChangeTheme: (ThemeMode) -> Unit,
     onChangeLanguage: (AppLanguage) -> Unit,
@@ -88,17 +96,37 @@ fun ProfileSettingsScreen(
     val context = LocalContext.current
     var editedUsername by rememberSaveable(identity.username) { mutableStateOf(identity.username) }
     var pickedAvatarUriString by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingCropUriString by rememberSaveable { mutableStateOf<String?>(null) }
     var portInput by rememberSaveable(identity.listenPort) {
         mutableStateOf(identity.listenPort.toString())
     }
+    var isIgnoringBattery by remember {
+        mutableStateOf(NetworkUtils.isIgnoringBatteryOptimizations(context))
+    }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        isIgnoringBattery = NetworkUtils.isIgnoringBatteryOptimizations(context)
+    }
 
     val pickedUri = pickedAvatarUriString?.let { Uri.parse(it) }
+    val pendingCropUri = pendingCropUriString?.let { Uri.parse(it) }
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            pickedAvatarUriString = uri.toString()
+            pendingCropUriString = uri.toString()
         }
+    }
+
+    if (pendingCropUri != null) {
+        ProfileImageCropperDialog(
+            sourceUri = pendingCropUri,
+            onDismiss = { pendingCropUriString = null },
+            onCropped = { croppedUri ->
+                pickedAvatarUriString = croppedUri.toString()
+                pendingCropUriString = null
+            }
+        )
     }
 
     val clipboard = remember(context) {
@@ -283,6 +311,93 @@ fun ProfileSettingsScreen(
                         onCheckedChange = onToggleBlockUnknown,
                         modifier = Modifier.testTag("profile_block_unknown_switch")
                     )
+                }
+            }
+        }
+
+        // 2B. Background Connection & Battery Optimization Card
+        Card(
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.BatteryChargingFull,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.battery_section),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onToggleBackgroundConnection(!identity.backgroundConnectionEnabled) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.bg_conn_title),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = stringResource(R.string.bg_conn_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = identity.backgroundConnectionEnabled,
+                        onCheckedChange = onToggleBackgroundConnection,
+                        modifier = Modifier.testTag("profile_bg_connection_switch")
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.battery_opt_title),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = if (isIgnoringBattery) {
+                                stringResource(R.string.battery_opt_ignored)
+                            } else {
+                                stringResource(R.string.battery_opt_active)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isIgnoringBattery) OnlineEmerald else WarningAmber
+                        )
+                    }
+                    if (!isIgnoringBattery) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = { NetworkUtils.openBatteryOptimizationRequest(context) },
+                            shape = MaterialTheme.shapes.small,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("profile_battery_disable_button")
+                        ) {
+                            Text(
+                                text = stringResource(R.string.battery_opt_disable_btn),
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
                 }
             }
         }

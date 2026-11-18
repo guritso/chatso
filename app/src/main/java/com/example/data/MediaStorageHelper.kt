@@ -30,15 +30,70 @@ class MediaStorageHelper(private val context: Context) {
     private val avatarsDir: File
         get() = File(context.filesDir, "avatars").apply { if (!exists()) mkdirs() }
 
+    suspend fun loadBitmapForCrop(sourceUri: Uri, maxSidePx: Int = 1280): Bitmap? =
+        withContext(Dispatchers.IO) {
+            try {
+                val cr = context.contentResolver
+                val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                cr.openInputStream(sourceUri)?.use { BitmapFactory.decodeStream(it, null, boundsOpts) }
+                val w = boundsOpts.outWidth
+                val h = boundsOpts.outHeight
+                if (w <= 0 || h <= 0) return@withContext null
+
+                var sampleSize = 1
+                while (w / sampleSize > maxSidePx * 2 || h / sampleSize > maxSidePx * 2) {
+                    sampleSize *= 2
+                }
+                val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                val raw = cr.openInputStream(sourceUri)?.use {
+                    BitmapFactory.decodeStream(it, null, decodeOpts)
+                } ?: return@withContext null
+
+                val orientation = cr.openInputStream(sourceUri)?.use {
+                    android.media.ExifInterface(it).getAttributeInt(
+                        android.media.ExifInterface.TAG_ORIENTATION,
+                        android.media.ExifInterface.ORIENTATION_NORMAL
+                    )
+                } ?: android.media.ExifInterface.ORIENTATION_NORMAL
+
+                val matrix = android.graphics.Matrix()
+                when (orientation) {
+                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                    android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+                    android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+                }
+                val rotated = if (!matrix.isIdentity) {
+                    Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true).also {
+                        if (it !== raw) raw.recycle()
+                    }
+                } else {
+                    raw
+                }
+                val maxDim = maxOf(rotated.width, rotated.height)
+                if (maxDim > maxSidePx) {
+                    val scale = maxSidePx.toFloat() / maxDim.toFloat()
+                    val nw = (rotated.width * scale).toInt().coerceAtLeast(1)
+                    val nh = (rotated.height * scale).toInt().coerceAtLeast(1)
+                    Bitmap.createScaledBitmap(rotated, nw, nh, true).also {
+                        if (it !== rotated) rotated.recycle()
+                    }
+                } else {
+                    rotated
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
     suspend fun saveProfileAvatar(sourceUri: Uri): String? = withContext(Dispatchers.IO) {
         try {
-            val bytes = context.contentResolver.openInputStream(sourceUri)?.use { it.readBytes() }
-                ?: return@withContext null
-            val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return@withContext null
+            val decoded = loadBitmapForCrop(sourceUri, 512) ?: return@withContext null
             val scaled = scaleCenterSquare(decoded, 256)
             val destFile = File(avatarsDir, "local_avatar_${System.currentTimeMillis()}.jpg")
             FileOutputStream(destFile).use { out ->
-                scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                scaled.compress(Bitmap.CompressFormat.JPEG, 88, out)
             }
             // Clean up older local avatar files
             avatarsDir.listFiles()?.forEach { f ->

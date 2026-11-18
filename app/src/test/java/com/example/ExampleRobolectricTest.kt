@@ -5,14 +5,19 @@ import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import com.example.crypto.CryptoEngine
 import com.example.data.AppLanguage
+import com.example.data.ChatDatabase
 import com.example.data.DeliveryStatus
 import com.example.data.LocalIdentity
 import com.example.data.LocaleHelper
+import com.example.data.MessageEntity
 import com.example.data.MessageType
+import com.example.network.ChatsoNotificationHelper
 import com.example.network.DiscoveryManager
+import com.example.network.NetworkUtils
 import com.example.network.P2PEventListener
 import com.example.network.P2PNodeManager
 import com.example.network.QrCodeHelper
+import kotlinx.coroutines.flow.first
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
@@ -291,5 +296,49 @@ class ExampleRobolectricTest {
         } finally {
             scope.cancel()
         }
+    }
+
+    @Test
+    fun `chat messages query returns newest first with limit pagination`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        val peerId = "peer_pagination_test"
+        dao.deleteAllMessagesForPeer(peerId)
+
+        val baseTime = 1_700_000_000_000L
+        for (i in 1..220) {
+            dao.upsertMessage(
+                MessageEntity(
+                    messageId = "m_$i",
+                    peerId = peerId,
+                    isOutgoing = i % 2 == 0,
+                    type = MessageType.TEXT.name,
+                    textContent = "Msg $i",
+                    createdAt = baseTime + i * 1000L
+                )
+            )
+        }
+
+        val page1 = dao.observeMessagesForPeer(peerId, limit = 150).first()
+        assertEquals(150, page1.size)
+        // Newest message must be at index 0 for reverseLayout LazyColumn instant bottom open
+        assertEquals("m_220", page1.first().messageId)
+        assertEquals("m_71", page1.last().messageId)
+
+        val page2 = dao.observeMessagesForPeer(peerId, limit = 300).first()
+        assertEquals(220, page2.size)
+        assertEquals("m_1", page2.last().messageId)
+
+        dao.deleteAllMessagesForPeer(peerId)
+    }
+
+    @Test
+    fun `background service notification and battery check work cleanly`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val notif = ChatsoNotificationHelper.buildServiceNotification(context, connectedCount = 2)
+        assertNotNull(notif)
+        // Simply ensure battery optimization query returns without exception
+        NetworkUtils.isIgnoringBatteryOptimizations(context)
     }
 }

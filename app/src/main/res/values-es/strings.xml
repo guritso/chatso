@@ -117,4 +117,29 @@
     <string name="cd_verify_key">Código de seguridad</string>
     <string name="cd_self_destruct">Autodestrucción</string>
     <string name="cd_toggle_visibility">Cambiar visibilidad</string>
+
+    <string name="crop_title">Ajustar Foto</string>
+    <string name="crop_hint">Arrastra o pellizca para alinear</string>
+    <string name="crop_reset">Centrar</string>
+    <string name="crop_load_error">No se pudo abrir la imagen.</string>
+    <string name="cancel_btn">Cancelar</string>
+
+    <string name="battery_section">Segundo Plano y Batería</string>
+    <string name="bg_conn_title">Conexión en segundo plano</string>
+    <string name="bg_conn_desc">Mantiene los sockets activos al minimizar</string>
+    <string name="battery_opt_title">Optimización de batería</string>
+    <string name="battery_opt_ignored">Desactivada · Conexión estable</string>
+    <string name="battery_opt_active">Activa · Puede retrasar mensajes</string>
+    <string name="battery_opt_disable_btn">Desactivar</string>
+    <string name="battery_dialog_title">Mantener Chatso activo</string>
+    <string name="battery_dialog_body">Para recibir mensajes en segundo plano sin retrasos por VPN o red local, desactiva la optimización de batería para Chatso.</string>
+    <string name="battery_dialog_confirm">Desactivar optimización</string>
+    <string name="later_btn">Ahora no</string>
+    <string name="msg_bg_conn_on">Conexión en segundo plano activada.</string>
+    <string name="msg_bg_conn_off">Conexión en segundo plano desactivada.</string>
+
+    <string name="notif_channel_connection">Conexión en segundo plano</string>
+    <string name="notif_channel_messages">Mensajes recibidos</string>
+    <string name="notif_service_listening">Conexión P2P activa · E2EE</string>
+    <string name="notif_service_connected">Conexión P2P activa · %1$d conectado(s)</string>
 </resources>

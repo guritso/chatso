@@ -117,4 +117,29 @@
     <string name="cd_verify_key">Code de sécurité</string>
     <string name="cd_self_destruct">Éphémère</string>
     <string name="cd_toggle_visibility">Visibilité</string>
+
+    <string name="crop_title">Ajuster la Photo</string>
+    <string name="crop_hint">Glissez ou pincez pour aligner</string>
+    <string name="crop_reset">Centrer</string>
+    <string name="crop_load_error">Impossible d\'ouvrir l\'image.</string>
+    <string name="cancel_btn">Annuler</string>
+
+    <string name="battery_section">Arrière-plan et Batterie</string>
+    <string name="bg_conn_title">Connexion en arrière-plan</string>
+    <string name="bg_conn_desc">Garde les sockets actifs en arrière-plan</string>
+    <string name="battery_opt_title">Optimisation batterie</string>
+    <string name="battery_opt_ignored">Désactivée · Connexion stable</string>
+    <string name="battery_opt_active">Active · Peut retarder les messages</string>
+    <string name="battery_opt_disable_btn">Désactiver</string>
+    <string name="battery_dialog_title">Garder Chatso actif</string>
+    <string name="battery_dialog_body">Pour recevoir vos messages en arrière-plan sans délai sur VPN ou réseau local, désactivez l\'optimisation de batterie pour Chatso.</string>
+    <string name="battery_dialog_confirm">Désactiver</string>
+    <string name="later_btn">Plus tard</string>
+    <string name="msg_bg_conn_on">Connexion en arrière-plan activée.</string>
+    <string name="msg_bg_conn_off">Connexion en arrière-plan désactivée.</string>
+
+    <string name="notif_channel_connection">Connexion en arrière-plan</string>
+    <string name="notif_channel_messages">Messages reçus</string>
+    <string name="notif_service_listening">Connexion P2P active · E2EE</string>
+    <string name="notif_service_connected">Connexion P2P active · %1$d connecté(s)</string>
 </resources>

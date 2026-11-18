@@ -82,8 +82,8 @@ interface ChatDao {
     @Query("DELETE FROM peers WHERE peerId = :peerId")
     suspend fun deletePeer(peerId: String)
 
-    @Query("SELECT * FROM messages WHERE peerId = :peerId ORDER BY createdAt ASC")
-    fun observeMessagesForPeer(peerId: String): Flow<List<MessageEntity>>
+    @Query("SELECT * FROM messages WHERE peerId = :peerId ORDER BY createdAt DESC, messageId DESC LIMIT :limit")
+    fun observeMessagesForPeer(peerId: String, limit: Int): Flow<List<MessageEntity>>
 
     @Query("SELECT * FROM messages WHERE messageId = :messageId LIMIT 1")
     suspend fun getMessageById(messageId: String): MessageEntity?

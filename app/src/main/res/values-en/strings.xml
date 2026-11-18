@@ -117,4 +117,29 @@
     <string name="cd_verify_key">Safety number</string>
     <string name="cd_self_destruct">Self-destruct</string>
     <string name="cd_toggle_visibility">Toggle visibility</string>
+
+    <string name="crop_title">Adjust Photo</string>
+    <string name="crop_hint">Drag or pinch to align</string>
+    <string name="crop_reset">Center</string>
+    <string name="crop_load_error">Could not open image.</string>
+    <string name="cancel_btn">Cancel</string>
+
+    <string name="battery_section">Background &amp; Battery</string>
+    <string name="bg_conn_title">Background connection</string>
+    <string name="bg_conn_desc">Keep P2P sockets alive when minimized</string>
+    <string name="battery_opt_title">Battery optimization</string>
+    <string name="battery_opt_ignored">Disabled · Reliable connection</string>
+    <string name="battery_opt_active">Enabled · May delay messages</string>
+    <string name="battery_opt_disable_btn">Disable</string>
+    <string name="battery_dialog_title">Keep Chatso active</string>
+    <string name="battery_dialog_body">To receive messages reliably in the background over VPN or local network, disable battery optimization for Chatso.</string>
+    <string name="battery_dialog_confirm">Disable optimization</string>
+    <string name="later_btn">Not now</string>
+    <string name="msg_bg_conn_on">Background connection enabled.</string>
+    <string name="msg_bg_conn_off">Background connection disabled.</string>
+
+    <string name="notif_channel_connection">Background connection</string>
+    <string name="notif_channel_messages">Incoming messages</string>
+    <string name="notif_service_listening">P2P connection active · E2EE</string>
+    <string name="notif_service_connected">P2P connection active · %1$d connected</string>
 </resources>
