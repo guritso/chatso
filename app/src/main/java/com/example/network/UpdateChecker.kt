@@ -21,7 +21,7 @@ sealed class UpdateCheckResult {
 
 object UpdateChecker {
     private const val LATEST_RELEASE_API =
-        "https://api.github.com/repos/gutitso/chatso/releases/latest"
+        "https://api.github.com/repos/guritso/chatso/releases/latest"
 
     suspend fun checkLatestRelease(
         currentVersion: String = BuildConfig.VERSION_NAME
@@ -57,7 +57,7 @@ object UpdateChecker {
         }
         val htmlUrl = json.optString(
             "html_url",
-            "https://github.com/gutitso/chatso/releases/latest"
+            "https://github.com/guritso/chatso/releases/latest"
         )
         val notes = json.optString("body", "").trim()
         var apkUrl: String? = null

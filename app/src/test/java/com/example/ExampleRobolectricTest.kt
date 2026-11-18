@@ -202,12 +202,12 @@ class ExampleRobolectricTest {
         val releaseJson = """
             {
               "tag_name": "v1.1.0",
-              "html_url": "https://github.com/gutitso/chatso/releases/tag/v1.1.0",
+              "html_url": "https://github.com/guritso/chatso/releases/tag/v1.1.0",
               "body": "Bug fixes and video player",
               "assets": [
                 {
                   "name": "chatso-1.1.0.apk",
-                  "browser_download_url": "https://github.com/gutitso/chatso/releases/download/v1.1.0/chatso-1.1.0.apk"
+                  "browser_download_url": "https://github.com/guritso/chatso/releases/download/v1.1.0/chatso-1.1.0.apk"
                 }
               ]
             }
@@ -217,7 +217,7 @@ class ExampleRobolectricTest {
         val avail = res as UpdateCheckResult.UpdateAvailable
         assertEquals("1.1.0", avail.latestVersion)
         assertEquals(
-            "https://github.com/gutitso/chatso/releases/download/v1.1.0/chatso-1.1.0.apk",
+            "https://github.com/guritso/chatso/releases/download/v1.1.0/chatso-1.1.0.apk",
             avail.downloadUrl
         )
     }
