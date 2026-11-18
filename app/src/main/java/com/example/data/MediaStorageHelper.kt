@@ -185,6 +185,20 @@ class MediaStorageHelper(private val context: Context) {
         }
     }
 
+    suspend fun loadVideoThumbnail(localPath: String): Bitmap? = withContext(Dispatchers.IO) {
+        val file = File(localPath)
+        if (!file.exists()) return@withContext null
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
     suspend fun deleteMediaFile(localPath: String?) = withContext(Dispatchers.IO) {
         if (localPath.isNullOrBlank()) return@withContext
         try {

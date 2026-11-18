@@ -142,4 +142,31 @@
     <string name="notif_channel_messages">Eingehende Nachrichten</string>
     <string name="notif_service_listening">P2P-Verbindung aktiv · E2EE</string>
     <string name="notif_service_connected">P2P-Verbindung aktiv · %1$d verbunden</string>
+
+    <string name="status_background">Im Hintergrund</string>
+    <string name="paste_qr_label">Oder Einladungslink einfügen</string>
+    <string name="paste_qr_hint">chatso://connect?...</string>
+    <string name="paste_btn">Einfügen</string>
+    <string name="msg_clipboard_empty">Zwischenablage ist leer.</string>
+
+    <string name="send_video">Video senden</string>
+    <string name="video_label">Video</string>
+    <string name="reply_action">Antworten</string>
+    <string name="reply_you">Du</string>
+    <string name="replying_to">Antwort an %1$s</string>
+    <string name="copy_text_action">Kopieren</string>
+    <string name="transfers_title">Aktive Übertragungen (%1$d)</string>
+    <string name="transfer_uploading">Wird gesendet</string>
+    <string name="transfer_downloading">Wird empfangen</string>
+
+    <string name="updates_section">Updates &amp; Über</string>
+    <string name="current_version_label">Version %1$s</string>
+    <string name="check_updates_btn">Nach Updates suchen</string>
+    <string name="checking_updates">Suche…</string>
+    <string name="update_available_title">Update verfügbar: v%1$s</string>
+    <string name="update_up_to_date">Du nutzt die neueste Version.</string>
+    <string name="update_check_failed">Updateprüfung fehlgeschlagen.</string>
+    <string name="update_download_btn">APK herunterladen</string>
+    <string name="open_source_licenses">Open-Source-Lizenzen</string>
+    <string name="open_source_licenses_desc">Von Chatso verwendete Open-Source-Bibliotheken</string>
 </resources>

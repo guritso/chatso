@@ -142,4 +142,31 @@
     <string name="notif_channel_messages">Mensajes recibidos</string>
     <string name="notif_service_listening">Conexión P2P activa · E2EE</string>
     <string name="notif_service_connected">Conexión P2P activa · %1$d conectado(s)</string>
+
+    <string name="status_background">En segundo plano</string>
+    <string name="paste_qr_label">O pega el enlace de invitación</string>
+    <string name="paste_qr_hint">chatso://connect?...</string>
+    <string name="paste_btn">Pegar</string>
+    <string name="msg_clipboard_empty">Portapapeles vacío.</string>
+
+    <string name="send_video">Enviar video</string>
+    <string name="video_label">Video</string>
+    <string name="reply_action">Responder</string>
+    <string name="reply_you">Tú</string>
+    <string name="replying_to">Respondiendo a %1$s</string>
+    <string name="copy_text_action">Copiar</string>
+    <string name="transfers_title">Transferencias activas (%1$d)</string>
+    <string name="transfer_uploading">Enviando</string>
+    <string name="transfer_downloading">Descargando</string>
+
+    <string name="updates_section">Actualizaciones y Acerca de</string>
+    <string name="current_version_label">Versión %1$s</string>
+    <string name="check_updates_btn">Buscar actualización</string>
+    <string name="checking_updates">Buscando…</string>
+    <string name="update_available_title">Actualización disponible: v%1$s</string>
+    <string name="update_up_to_date">Ya tienes la última versión.</string>
+    <string name="update_check_failed">No se pudo buscar actualizaciones.</string>
+    <string name="update_download_btn">Descargar APK</string>
+    <string name="open_source_licenses">Licencias Open Source</string>
+    <string name="open_source_licenses_desc">Bibliotecas de código abierto usadas por Chatso</string>
 </resources>

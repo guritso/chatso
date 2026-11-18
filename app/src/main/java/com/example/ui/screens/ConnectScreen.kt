@@ -37,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ImageSearch
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.QrCode2
@@ -365,6 +366,7 @@ private fun QrConnectPane(
         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     }
     var showScanner by rememberSaveable { mutableStateOf(false) }
+    var pastedInviteText by rememberSaveable { mutableStateOf("") }
     var selectedIpIndex by rememberSaveable { mutableIntStateOf(0) }
     val activeIp = endpoints.getOrNull(selectedIpIndex)?.ipAddress
         ?: endpoints.firstOrNull()?.ipAddress
@@ -627,6 +629,79 @@ private fun QrConnectPane(
                             maxLines = 1,
                             softWrap = false
                         )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    val emptyClipboardMsg = stringResource(R.string.msg_clipboard_empty)
+                    OutlinedTextField(
+                        value = pastedInviteText,
+                        onValueChange = { pastedInviteText = it },
+                        label = { Text(stringResource(R.string.paste_qr_label)) },
+                        placeholder = { Text(stringResource(R.string.paste_qr_hint)) },
+                        singleLine = true,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("qr_paste_input")
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val clipText = clipboard.primaryClip
+                                    ?.takeIf { it.itemCount > 0 }
+                                    ?.getItemAt(0)
+                                    ?.coerceToText(context)
+                                    ?.toString()
+                                    ?.trim()
+                                    .orEmpty()
+                                if (clipText.isBlank()) {
+                                    onNotify(emptyClipboardMsg)
+                                } else {
+                                    pastedInviteText = clipText
+                                }
+                            },
+                            shape = MaterialTheme.shapes.medium,
+                            contentPadding = PaddingValues(horizontal = 10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("qr_paste_clipboard_button")
+                        ) {
+                            Icon(Icons.Filled.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.paste_btn),
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                showScanner = false
+                                onConnectQrRaw(pastedInviteText.trim())
+                            },
+                            enabled = pastedInviteText.isNotBlank(),
+                            shape = MaterialTheme.shapes.medium,
+                            contentPadding = PaddingValues(horizontal = 10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("qr_connect_pasted_button")
+                        ) {
+                            Icon(Icons.Filled.Link, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.connect_btn),
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
                 }
             }

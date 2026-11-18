@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.ChatsoApplication
 import com.example.R
 import com.example.crypto.CryptoEngine
+import com.example.data.ActiveTransferInfo
 import com.example.data.AppLanguage
 import com.example.data.DiscoveredPeer
 import com.example.data.LocalIdentity
@@ -23,6 +24,8 @@ import com.example.media.VoiceRecordingState
 import com.example.network.ChatsoConnectionService
 import com.example.network.NetworkUtils
 import com.example.network.QrCodeHelper
+import com.example.network.UpdateCheckResult
+import com.example.network.UpdateChecker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -45,6 +48,12 @@ enum class HomeTab {
     PROFILE
 }
 
+sealed class UpdateUiState {
+    data object Idle : UpdateUiState()
+    data object Checking : UpdateUiState()
+    data class UpdateAvailable(val info: UpdateCheckResult.UpdateAvailable) : UpdateUiState()
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatsoViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -63,9 +72,11 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val connectedPeerIds: StateFlow<Set<String>> = repository.nodeManager.connectedPeers
+    val foregroundPeerIds: StateFlow<Set<String>> = repository.nodeManager.foregroundPeers
     val boundPort: StateFlow<Int> = repository.nodeManager.boundPort
     val serverRunning: StateFlow<Boolean> = repository.nodeManager.serverRunning
     val typingPeers: StateFlow<Set<String>> = repository.typingPeers
+    val activeTransfers: StateFlow<List<ActiveTransferInfo>> = repository.activeTransfers
 
     val discoveredPeers: StateFlow<List<DiscoveredPeer>> = repository.discoveryManager.discoveredPeers
         .map { it.values.sortedByDescending { p -> p.lastSeenAt } }
@@ -80,6 +91,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     val activePeerId: StateFlow<String?> = _activePeerId.asStateFlow()
 
     private val _messageLimit = MutableStateFlow(150)
+    val currentMessageLimit: StateFlow<Int> = _messageLimit.asStateFlow()
 
     val activePeer: StateFlow<PeerEntity?> = _activePeerId
         .flatMapLatest { id -> if (id == null) flowOf(null) else repository.observePeer(id) }
@@ -99,6 +111,9 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _snackbarMessage = MutableStateFlow<String?>(null)
     val snackbarMessage: StateFlow<String?> = _snackbarMessage.asStateFlow()
+
+    private val _updateUiState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
+    val updateUiState: StateFlow<UpdateUiState> = _updateUiState.asStateFlow()
 
     private val _nowClockMs = MutableStateFlow(System.currentTimeMillis())
     val nowClockMs: StateFlow<Long> = _nowClockMs.asStateFlow()
@@ -290,6 +305,35 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     fun setAppForeground(inForeground: Boolean) {
         container.isAppInForeground = inForeground
+        repository.onAppForegroundChanged(inForeground)
+    }
+
+    fun checkForUpdates(manual: Boolean) {
+        if (_updateUiState.value is UpdateUiState.Checking) return
+        viewModelScope.launch {
+            _updateUiState.value = UpdateUiState.Checking
+            when (val res = UpdateChecker.checkLatestRelease()) {
+                is UpdateCheckResult.UpdateAvailable -> {
+                    _updateUiState.value = UpdateUiState.UpdateAvailable(res)
+                }
+                is UpdateCheckResult.UpToDate -> {
+                    _updateUiState.value = UpdateUiState.Idle
+                    if (manual) {
+                        _snackbarMessage.value = str(R.string.update_up_to_date)
+                    }
+                }
+                is UpdateCheckResult.Error -> {
+                    _updateUiState.value = UpdateUiState.Idle
+                    if (manual) {
+                        _snackbarMessage.value = str(R.string.update_check_failed)
+                    }
+                }
+            }
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        _updateUiState.value = UpdateUiState.Idle
     }
 
     fun scanLanAndVpn() {
@@ -365,16 +409,23 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun sendTextMessage(text: String) {
+    fun sendTextMessage(text: String, replyTo: MessageEntity? = null) {
         val peerId = _activePeerId.value ?: return
         lastTypingPeerId = peerId
         lastTypingState = false
         viewModelScope.launch {
             repository.nodeManager.sendTyping(peerId, false)
-            val ok = repository.sendText(peerId, text)
+            val ok = repository.sendText(peerId, text, replyTo)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
             }
+        }
+    }
+
+    fun toggleReaction(messageId: String, emoji: String) {
+        val peerId = _activePeerId.value ?: return
+        viewModelScope.launch {
+            repository.toggleReaction(peerId, messageId, emoji)
         }
     }
 
@@ -388,20 +439,30 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun sendPhotoUri(uri: Uri) {
+    fun sendPhotoUri(uri: Uri, replyTo: MessageEntity? = null) {
         val peerId = _activePeerId.value ?: return
         viewModelScope.launch {
-            val ok = repository.sendUriAttachment(peerId, uri, forceImage = true)
+            val ok = repository.sendUriAttachment(peerId, uri, forceImage = true, replyTo = replyTo)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
             }
         }
     }
 
-    fun sendDocumentUri(uri: Uri) {
+    fun sendVideoUri(uri: Uri, replyTo: MessageEntity? = null) {
         val peerId = _activePeerId.value ?: return
         viewModelScope.launch {
-            val ok = repository.sendUriAttachment(peerId, uri, forceImage = false)
+            val ok = repository.sendUriAttachment(peerId, uri, forceImage = false, replyTo = replyTo)
+            if (!ok) {
+                _snackbarMessage.value = str(R.string.msg_peer_offline)
+            }
+        }
+    }
+
+    fun sendDocumentUri(uri: Uri, replyTo: MessageEntity? = null) {
+        val peerId = _activePeerId.value ?: return
+        viewModelScope.launch {
+            val ok = repository.sendUriAttachment(peerId, uri, forceImage = false, replyTo = replyTo)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
             }
@@ -417,11 +478,11 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         voiceRecorder.stopAndDiscard()
     }
 
-    fun finishAndSendVoiceRecording() {
+    fun finishAndSendVoiceRecording(replyTo: MessageEntity? = null) {
         val peerId = _activePeerId.value ?: return
         val finalized = voiceRecorder.stopAndFinalize() ?: return
         viewModelScope.launch {
-            val ok = repository.sendVoiceRecording(peerId, finalized.first, finalized.second)
+            val ok = repository.sendVoiceRecording(peerId, finalized.first, finalized.second, replyTo)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
             }
@@ -475,6 +536,5 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         super.onCleared()
         voiceRecorder.stopAndDiscard()
         voicePlayer.stop()
-        // Keep repository & sockets running in ChatsoApplication container for background connectivity
     }
 }

@@ -6,6 +6,7 @@ import com.example.crypto.SessionCipher
 import com.example.data.DeliveryStatus
 import com.example.data.LocalIdentity
 import com.example.data.MessageType
+import com.example.data.ReplySenderTags
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.DataInputStream
@@ -43,12 +44,16 @@ interface P2PEventListener {
         avatarBase64: String?
     )
     suspend fun onPeerDisconnected(peerId: String)
+    suspend fun onPeerForegroundChanged(peerId: String, inForeground: Boolean) {}
     suspend fun onIncomingTextMessage(
         peerId: String,
         messageId: String,
         text: String,
         selfDestructSec: Int,
-        createdAt: Long
+        createdAt: Long,
+        replyToMessageId: String? = null,
+        replyToSenderTag: String? = null,
+        replyToPreview: String? = null
     )
     suspend fun onIncomingFileStart(
         peerId: String,
@@ -59,11 +64,15 @@ interface P2PEventListener {
         totalBytes: Long,
         audioDurationMs: Long,
         selfDestructSec: Int,
-        createdAt: Long
+        createdAt: Long,
+        replyToMessageId: String? = null,
+        replyToSenderTag: String? = null,
+        replyToPreview: String? = null
     ): File
     suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int)
     suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File)
     suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus)
+    suspend fun onIncomingReaction(peerId: String, messageId: String, emoji: String) {}
     suspend fun onTypingChanged(peerId: String, isTyping: Boolean)
     suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int)
 }
@@ -112,11 +121,15 @@ class P2PNodeManager(
         val file: File,
         val outputStream: FileOutputStream,
         val totalBytes: Long,
-        var receivedBytes: Long = 0L
+        var receivedBytes: Long = 0L,
+        var lastReportedProgress: Int = 0
     )
 
     @Volatile
     private var currentIdentity: LocalIdentity = LocalIdentity()
+
+    @Volatile
+    private var localAppInForeground: Boolean = false
 
     @Volatile
     private var localAvatarBase64Provider: suspend () -> String? = { null }
@@ -128,6 +141,9 @@ class P2PNodeManager(
     private val _connectedPeers = MutableStateFlow<Set<String>>(emptySet())
     val connectedPeers: StateFlow<Set<String>> = _connectedPeers.asStateFlow()
 
+    private val _foregroundPeers = MutableStateFlow<Set<String>>(emptySet())
+    val foregroundPeers: StateFlow<Set<String>> = _foregroundPeers.asStateFlow()
+
     private val _boundPort = MutableStateFlow(LocalIdentity.DEFAULT_TCP_PORT)
     val boundPort: StateFlow<Int> = _boundPort.asStateFlow()
 
@@ -136,6 +152,14 @@ class P2PNodeManager(
 
     fun setAvatarProvider(provider: suspend () -> String?) {
         localAvatarBase64Provider = provider
+    }
+
+    fun setLocalAppInForeground(inForeground: Boolean) {
+        if (localAppInForeground == inForeground) return
+        localAppInForeground = inForeground
+        scope.launch(Dispatchers.IO) {
+            broadcastAppState(inForeground)
+        }
     }
 
     fun updateIdentityAndEnsureServer(identity: LocalIdentity) {
@@ -151,7 +175,6 @@ class P2PNodeManager(
         if (!wasInit || portChanged || !_serverRunning.value) {
             restartServer(identity.listenPort)
         } else {
-            // Sync updated profile name/avatar to already connected peers
             scope.launch(Dispatchers.IO) {
                 broadcastProfileSync()
             }
@@ -313,7 +336,7 @@ class P2PNodeManager(
                 serverNonceBase64 = serverNonceB64
             )
 
-            socket.soTimeout = 0 // Persistent real-time stream
+            socket.soTimeout = 0
             val rawPeerId = CryptoEngine.computePeerIdFromBase64(serverPubB64)
             val isSelfLoopback = rawPeerId == identity.peerId
             val sessionPeerId = if (isSelfLoopback) "loopback_${rawPeerId.take(12)}" else rawPeerId
@@ -321,10 +344,8 @@ class P2PNodeManager(
             val session = ActivePeerSession(sessionPeerId, socket, out, cipher)
             registerActiveSession(sessionPeerId, session)
 
-            // Send encrypted profile sync immediately
             sendProfileSync(session, identity)
 
-            // Read peer's initial encrypted profile sync or handle in reader loop
             listener.onPeerHandshaked(
                 peerId = sessionPeerId,
                 publicKeyBase64 = serverPubB64,
@@ -372,7 +393,6 @@ class P2PNodeManager(
             val firstPayload = ByteArray(firstLen)
             if (firstLen > 0) inp.readFully(firstPayload)
 
-            // 1. Handle network discovery probe — strictly gated by Invisible Mode!
             if (firstKind == DiscoveryManager.KIND_DISCOVERY_PROBE) {
                 if (identity.isDiscoverable) {
                     val reply = discoveryManager.buildDiscoveryReplyBytes(
@@ -383,7 +403,6 @@ class P2PNodeManager(
                     out.write(reply)
                     out.flush()
                 }
-                // When Invisible Mode is active, close silently with zero bytes transmitted
                 socket.close()
                 return
             }
@@ -416,7 +435,6 @@ class P2PNodeManager(
             val remotePeerId = CryptoEngine.computePeerIdFromBase64(clientPubB64)
             val isSelfLoopback = remotePeerId == identity.peerId
 
-            // Check strict unknown-peer block policy if enabled
             if (!isSelfLoopback && identity.blockUnknownPeers) {
                 val isKnown = listener.isKnownPeer(remotePeerId)
                 val validToken = inviteToken.isNotBlank() && inviteToken == identity.qrInviteToken
@@ -474,7 +492,6 @@ class P2PNodeManager(
             val remoteIp = socket.inetAddress?.hostAddress ?: "127.0.0.1"
 
             if (isSelfLoopback) {
-                // Single-device 127.0.0.1 loopback responder: decrypts real socket frames & echoes receipts
                 val responderSession = ActivePeerSession("loopback_srv", socket, out, cipher)
                 runSessionReadLoop(
                     session = responderSession,
@@ -567,6 +584,7 @@ class P2PNodeManager(
                 val removed = sessions.remove(session.peerId, session)
                 if (removed) {
                     _connectedPeers.update { it - session.peerId }
+                    _foregroundPeers.update { it - session.peerId }
                     listener.onPeerDisconnected(session.peerId)
                 }
             }
@@ -617,6 +635,9 @@ class P2PNodeManager(
                 val name = json.optString("name", remoteIp)
                 val avatarB64 = json.optString("avatar").takeIf { it.isNotBlank() }
                 val listenPort = json.optInt("port", remoteListenPort)
+                val isFg = json.optBoolean("fg", true)
+                _foregroundPeers.update { if (isFg) it + session.peerId else it - session.peerId }
+                listener.onPeerForegroundChanged(session.peerId, isFg)
                 listener.onPeerHandshaked(
                     peerId = session.peerId,
                     publicKeyBase64 = remotePubB64,
@@ -626,13 +647,37 @@ class P2PNodeManager(
                     avatarBase64 = avatarB64
                 )
             }
+            "APP_STATE" -> {
+                val isFg = json.optBoolean("fg", false)
+                _foregroundPeers.update { if (isFg) it + session.peerId else it - session.peerId }
+                listener.onPeerForegroundChanged(session.peerId, isFg)
+            }
             "TEXT_MSG" -> {
                 val msgId = json.getString("id")
                 val text = json.optString("text", "")
                 val sdSec = json.optInt("sd", 0)
                 val ts = json.optLong("ts", System.currentTimeMillis())
-                listener.onIncomingTextMessage(session.peerId, msgId, text, sdSec, ts)
+                val replyId = json.optString("replyId").takeIf { it.isNotBlank() }
+                val replySenderTag = invertWireAuthorType(json.optString("replyAuthorType"))
+                val replyPreview = json.optString("replyPreview").takeIf { it.isNotBlank() }
+                listener.onIncomingTextMessage(
+                    peerId = session.peerId,
+                    messageId = msgId,
+                    text = text,
+                    selfDestructSec = sdSec,
+                    createdAt = ts,
+                    replyToMessageId = replyId,
+                    replyToSenderTag = replySenderTag,
+                    replyToPreview = replyPreview
+                )
                 sendReceiptInternal(session, msgId, DeliveryStatus.DELIVERED)
+            }
+            "REACTION" -> {
+                val targetId = json.optString("targetId")
+                val emoji = json.optString("emoji", "")
+                if (targetId.isNotBlank()) {
+                    listener.onIncomingReaction(session.peerId, targetId, emoji)
+                }
             }
             "TYPING" -> {
                 listener.onTypingChanged(session.peerId, json.optBoolean("typing", false))
@@ -657,6 +702,9 @@ class P2PNodeManager(
                 val audioDur = json.optLong("audioMs", 0L)
                 val sdSec = json.optInt("sd", 0)
                 val ts = json.optLong("ts", System.currentTimeMillis())
+                val replyId = json.optString("replyId").takeIf { it.isNotBlank() }
+                val replySenderTag = invertWireAuthorType(json.optString("replyAuthorType"))
+                val replyPreview = json.optString("replyPreview").takeIf { it.isNotBlank() }
 
                 val outFile = listener.onIncomingFileStart(
                     peerId = session.peerId,
@@ -667,7 +715,10 @@ class P2PNodeManager(
                     totalBytes = totalBytes,
                     audioDurationMs = audioDur,
                     selfDestructSec = sdSec,
-                    createdAt = ts
+                    createdAt = ts,
+                    replyToMessageId = replyId,
+                    replyToSenderTag = replySenderTag,
+                    replyToPreview = replyPreview
                 )
                 incomingTransfers[msgId] = IncomingTransfer(
                     file = outFile,
@@ -688,6 +739,14 @@ class P2PNodeManager(
         }
     }
 
+    private fun invertWireAuthorType(wireType: String?): String? {
+        return when (wireType) {
+            "ME" -> ReplySenderTags.PEER
+            "PEER" -> ReplySenderTags.ME
+            else -> null
+        }
+    }
+
     private suspend fun handleChunkPacket(
         session: ActivePeerSession,
         plaintext: ByteArray,
@@ -704,7 +763,10 @@ class P2PNodeManager(
         val progress = ((transfer.receivedBytes * 100L) / transfer.totalBytes)
             .toInt()
             .coerceIn(1, 99)
-        listener.onIncomingFileProgress(session.peerId, msgId, progress)
+        if (progress != transfer.lastReportedProgress) {
+            transfer.lastReportedProgress = progress
+            listener.onIncomingFileProgress(session.peerId, msgId, progress)
+        }
     }
 
     private fun registerActiveSession(peerId: String, session: ActivePeerSession) {
@@ -719,6 +781,7 @@ class P2PNodeManager(
             put("cmd", "PROFILE_SYNC")
             put("name", identity.username)
             put("port", _boundPort.value)
+            put("fg", localAppInForeground)
             if (!avatarB64.isNullOrBlank()) put("avatar", avatarB64)
         }
         session.sendEncryptedFrame(
@@ -735,12 +798,25 @@ class P2PNodeManager(
         }
     }
 
+    private suspend fun broadcastAppState(inForeground: Boolean) {
+        val payload = JSONObject().apply {
+            put("cmd", "APP_STATE")
+            put("fg", inForeground)
+        }.toString().toByteArray(Charsets.UTF_8)
+        for (session in sessions.values) {
+            runCatching { session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload) }
+        }
+    }
+
     suspend fun sendTextMessage(
         peerId: String,
         messageId: String,
         text: String,
         selfDestructSec: Int,
-        createdAt: Long
+        createdAt: Long,
+        replyToMessageId: String? = null,
+        replyToAuthorType: String? = null,
+        replyToPreview: String? = null
     ): Boolean = withContext(Dispatchers.IO) {
         val session = sessions[peerId] ?: return@withContext false
         try {
@@ -750,6 +826,11 @@ class P2PNodeManager(
                 put("text", text)
                 put("sd", selfDestructSec)
                 put("ts", createdAt)
+                if (!replyToMessageId.isNullOrBlank()) {
+                    put("replyId", replyToMessageId)
+                    if (!replyToAuthorType.isNullOrBlank()) put("replyAuthorType", replyToAuthorType)
+                    if (!replyToPreview.isNullOrBlank()) put("replyPreview", replyToPreview)
+                }
             }.toString().toByteArray(Charsets.UTF_8)
             session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
             true
@@ -757,7 +838,27 @@ class P2PNodeManager(
             session.closeQuietly()
             if (sessions.remove(peerId, session)) {
                 _connectedPeers.update { it - peerId }
+                _foregroundPeers.update { it - peerId }
             }
+            false
+        }
+    }
+
+    suspend fun sendReaction(
+        peerId: String,
+        messageId: String,
+        emoji: String
+    ): Boolean = withContext(Dispatchers.IO) {
+        val session = sessions[peerId] ?: return@withContext false
+        try {
+            val payload = JSONObject().apply {
+                put("cmd", "REACTION")
+                put("targetId", messageId)
+                put("emoji", emoji)
+            }.toString().toByteArray(Charsets.UTF_8)
+            session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
+            true
+        } catch (_: Exception) {
             false
         }
     }
@@ -772,6 +873,9 @@ class P2PNodeManager(
         audioDurationMs: Long,
         selfDestructSec: Int,
         createdAt: Long,
+        replyToMessageId: String? = null,
+        replyToAuthorType: String? = null,
+        replyToPreview: String? = null,
         onProgress: suspend (Int) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val session = sessions[peerId] ?: return@withContext false
@@ -791,9 +895,15 @@ class P2PNodeManager(
                 put("audioMs", audioDurationMs)
                 put("sd", selfDestructSec)
                 put("ts", createdAt)
+                if (!replyToMessageId.isNullOrBlank()) {
+                    put("replyId", replyToMessageId)
+                    if (!replyToAuthorType.isNullOrBlank()) put("replyAuthorType", replyToAuthorType)
+                    if (!replyToPreview.isNullOrBlank()) put("replyPreview", replyToPreview)
+                }
             }.toString().toByteArray(Charsets.UTF_8)
             session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, startJson)
 
+            var lastPct = 0
             FileInputStream(file).use { fis ->
                 val buf = ByteArray(CHUNK_SIZE)
                 var chunkIndex = 0
@@ -808,8 +918,15 @@ class P2PNodeManager(
                         .array()
                     session.sendEncryptedFrame(KIND_ENCRYPTED_CHUNK, framePlain)
                     sentBytes += read
-                    val pct = if (totalBytes > 0) ((sentBytes * 100L) / totalBytes).toInt() else 100
-                    onProgress(pct.coerceIn(1, 99))
+                    val pct = if (totalBytes > 0) {
+                        ((sentBytes * 100L) / totalBytes).toInt().coerceIn(1, 99)
+                    } else {
+                        99
+                    }
+                    if (pct != lastPct) {
+                        lastPct = pct
+                        onProgress(pct)
+                    }
                 }
             }
 
@@ -870,5 +987,6 @@ class P2PNodeManager(
         sessions.values.forEach { it.closeQuietly() }
         sessions.clear()
         _connectedPeers.value = emptySet()
+        _foregroundPeers.value = emptySet()
     }
 }

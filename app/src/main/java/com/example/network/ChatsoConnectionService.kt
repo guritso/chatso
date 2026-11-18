@@ -10,15 +10,26 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
+import android.graphics.Typeface
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.example.ChatsoApplication
 import com.example.MainActivity
 import com.example.R
 import com.example.data.LocaleHelper
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +45,7 @@ object ChatsoNotificationHelper {
     const val CHANNEL_MESSAGES = "chatso_incoming_messages"
     const val NOTIFICATION_ID_SERVICE = 1001
     const val EXTRA_PEER_ID = "extra_peer_id"
+    private const val BRAND_TEAL = 0xFF0F766E.toInt()
 
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -84,7 +96,8 @@ object ChatsoNotificationHelper {
         }
 
         return NotificationCompat.Builder(context, CHANNEL_CONNECTION)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification_chatso)
+            .setColor(BRAND_TEAL)
             .setContentTitle(localized.getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
@@ -99,7 +112,8 @@ object ChatsoNotificationHelper {
         context: Context,
         peerId: String,
         senderName: String,
-        preview: String
+        preview: String,
+        avatarPath: String? = null
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -118,10 +132,23 @@ object ChatsoNotificationHelper {
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+
+        val avatarBitmap = buildNotificationAvatarBitmap(senderName, avatarPath)
+        val senderPerson = Person.Builder()
+            .setName(senderName)
+            .setKey(peerId)
+            .setIcon(IconCompat.createWithBitmap(avatarBitmap))
+            .build()
+        val style = NotificationCompat.MessagingStyle(senderPerson)
+            .addMessage(preview, System.currentTimeMillis(), senderPerson)
+
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification_chatso)
+            .setColor(BRAND_TEAL)
+            .setLargeIcon(avatarBitmap)
             .setContentTitle(senderName)
             .setContentText(preview)
+            .setStyle(style)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -130,6 +157,58 @@ object ChatsoNotificationHelper {
 
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         nm?.notify(peerId.hashCode(), notification)
+    }
+
+    private fun buildNotificationAvatarBitmap(senderName: String, avatarPath: String?): Bitmap {
+        val sizePx = 128
+        if (!avatarPath.isNullOrBlank()) {
+            val file = File(avatarPath)
+            if (file.exists()) {
+                val decoded = runCatching { BitmapFactory.decodeFile(file.absolutePath) }.getOrNull()
+                if (decoded != null) {
+                    val minSide = minOf(decoded.width, decoded.height)
+                    val x = (decoded.width - minSide) / 2
+                    val y = (decoded.height - minSide) / 2
+                    val square = Bitmap.createBitmap(decoded, x, y, minSide, minSide)
+                    val scaled = Bitmap.createScaledBitmap(square, sizePx, sizePx, true)
+                    val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+                    val canvas = Canvas(output)
+                    val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+                    val rect = Rect(0, 0, sizePx, sizePx)
+                    canvas.drawARGB(0, 0, 0, 0)
+                    canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
+                    paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+                    canvas.drawBitmap(scaled, rect, rect, paint)
+                    if (square !== decoded) square.recycle()
+                    if (scaled !== square) scaled.recycle()
+                    decoded.recycle()
+                    return output
+                }
+            }
+        }
+
+        val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = BRAND_TEAL }
+        canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, bgPaint)
+
+        val initials = senderName.trim()
+            .split(" ", "_", "-")
+            .filter { it.isNotBlank() }
+            .take(2)
+            .joinToString("") { it.first().uppercaseChar().toString() }
+            .ifBlank { "?" }
+
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            textSize = 48f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+        }
+        val fm = textPaint.fontMetrics
+        val baseline = sizePx / 2f - (fm.ascent + fm.descent) / 2f
+        canvas.drawText(initials, sizePx / 2f, baseline, textPaint)
+        return output
     }
 }
 
@@ -171,7 +250,6 @@ class ChatsoConnectionService : Service() {
             }
         }
 
-        // Ensure local TCP server stays alive and silently keep recent peer links healthy
         keepAliveJob = serviceScope.launch {
             while (isActive) {
                 delay(25_000L)

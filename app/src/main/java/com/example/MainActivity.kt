@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -29,6 +30,7 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Lan
 import androidx.compose.material.icons.outlined.Person
@@ -66,12 +68,14 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.LocaleHelper
+import com.example.data.PeerPresence
 import com.example.data.ThemeMode
 import com.example.network.ChatsoConnectionService
 import com.example.network.ChatsoNotificationHelper
 import com.example.network.NetworkUtils
 import com.example.ui.ChatsoViewModel
 import com.example.ui.HomeTab
+import com.example.ui.UpdateUiState
 import com.example.ui.screens.ChatDetailScreen
 import com.example.ui.screens.ChatsListScreen
 import com.example.ui.screens.ConnectScreen
@@ -111,11 +115,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        (application as? ChatsoApplication)?.container?.isAppInForeground = true
+        (application as? ChatsoApplication)?.container?.let { container ->
+            container.isAppInForeground = true
+            container.repository.onAppForegroundChanged(true)
+        }
     }
 
     override fun onStop() {
-        (application as? ChatsoApplication)?.container?.isAppInForeground = false
+        (application as? ChatsoApplication)?.container?.let { container ->
+            container.isAppInForeground = false
+            container.repository.onAppForegroundChanged(false)
+        }
         super.onStop()
     }
 }
@@ -137,6 +147,8 @@ fun ChatsoRootApp(
     }
 
     var askedNotifPermission by rememberSaveable { mutableStateOf(false) }
+    var checkedUpdateOnLaunch by rememberSaveable { mutableStateOf(false) }
+    val updateUiState by viewModel.updateUiState.collectAsStateWithLifecycle()
     val notifPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ -> }
@@ -147,6 +159,10 @@ fun ChatsoRootApp(
             context = context,
             shouldRun = id.isInitialized && id.backgroundConnectionEnabled
         )
+        if (id.isInitialized && !checkedUpdateOnLaunch) {
+            checkedUpdateOnLaunch = true
+            viewModel.checkForUpdates(manual = false)
+        }
         if (id.isInitialized && id.backgroundConnectionEnabled &&
             !askedNotifPermission &&
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
@@ -249,6 +265,57 @@ fun ChatsoRootApp(
                     }
                 )
             }
+
+            val availableUpdate = (updateUiState as? UpdateUiState.UpdateAvailable)?.info
+            if (availableUpdate != null) {
+                AlertDialog(
+                    onDismissRequest = { viewModel.dismissUpdateDialog() },
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.SystemUpdate,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    title = {
+                        Text(stringResource(R.string.update_available_title, availableUpdate.latestVersion))
+                    },
+                    text = {
+                        Text(
+                            text = availableUpdate.releaseNotes.ifBlank { availableUpdate.htmlUrl },
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 8,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                viewModel.dismissUpdateDialog()
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(availableUpdate.downloadUrl)).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                    )
+                                }
+                            },
+                            modifier = Modifier.testTag("update_download_button")
+                        ) {
+                            Text(
+                                text = stringResource(R.string.update_download_btn),
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { viewModel.dismissUpdateDialog() }) {
+                            Text(stringResource(R.string.later_btn))
+                        }
+                    }
+                )
+            }
         }
     }
 }
@@ -266,7 +333,9 @@ private fun ChatsoAuthenticatedShell(
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val peers by viewModel.peersState.collectAsStateWithLifecycle()
     val connectedPeerIds by viewModel.connectedPeerIds.collectAsStateWithLifecycle()
+    val foregroundPeerIds by viewModel.foregroundPeerIds.collectAsStateWithLifecycle()
     val typingPeerIds by viewModel.typingPeers.collectAsStateWithLifecycle()
+    val activeTransfers by viewModel.activeTransfers.collectAsStateWithLifecycle()
     val endpoints by viewModel.endpoints.collectAsStateWithLifecycle()
     val boundPort by viewModel.boundPort.collectAsStateWithLifecycle()
     val discoveredPeers by viewModel.discoveredPeers.collectAsStateWithLifecycle()
@@ -275,6 +344,8 @@ private fun ChatsoAuthenticatedShell(
     val activePeerId by viewModel.activePeerId.collectAsStateWithLifecycle()
     val activePeer by viewModel.activePeer.collectAsStateWithLifecycle()
     val activeMessages by viewModel.activeMessages.collectAsStateWithLifecycle()
+    val currentMessageLimit by viewModel.currentMessageLimit.collectAsStateWithLifecycle()
+    val updateUiState by viewModel.updateUiState.collectAsStateWithLifecycle()
     val voiceRecordingState by viewModel.voiceRecordingState.collectAsStateWithLifecycle()
     val voicePlaybackState by viewModel.voicePlaybackState.collectAsStateWithLifecycle()
 
@@ -378,6 +449,7 @@ private fun ChatsoAuthenticatedShell(
                                 identity = identity,
                                 peers = peers,
                                 connectedPeerIds = connectedPeerIds,
+                                foregroundPeerIds = foregroundPeerIds,
                                 typingPeerIds = typingPeerIds,
                                 selectedPeerId = activePeerId,
                                 onToggleDiscoverable = viewModel::toggleDiscoverable,
@@ -392,12 +464,19 @@ private fun ChatsoAuthenticatedShell(
                         Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                             val peer = activePeer
                             if (peer != null) {
+                                val presence = when {
+                                    !connectedPeerIds.contains(peer.peerId) -> PeerPresence.OFFLINE
+                                    foregroundPeerIds.contains(peer.peerId) -> PeerPresence.ONLINE
+                                    else -> PeerPresence.BACKGROUND
+                                }
                                 ChatDetailScreen(
                                     identity = identity,
                                     peer = peer,
                                     messages = activeMessages,
-                                    isConnected = connectedPeerIds.contains(peer.peerId),
+                                    currentMessageLimit = currentMessageLimit,
+                                    presence = presence,
                                     isPeerTyping = typingPeerIds.contains(peer.peerId),
+                                    activeTransfers = activeTransfers,
                                     nowClockFlow = viewModel.nowClockMs,
                                     voiceRecordingState = voiceRecordingState,
                                     voicePlaybackState = voicePlaybackState,
@@ -405,8 +484,10 @@ private fun ChatsoAuthenticatedShell(
                                     onBack = viewModel::closeConversation,
                                     onLoadMoreMessages = viewModel::loadMoreMessages,
                                     onSendText = viewModel::sendTextMessage,
+                                    onToggleReaction = viewModel::toggleReaction,
                                     onTypingChanged = viewModel::notifyTyping,
                                     onSendPhotoUri = viewModel::sendPhotoUri,
+                                    onSendVideoUri = viewModel::sendVideoUri,
                                     onSendDocumentUri = viewModel::sendDocumentUri,
                                     onStartVoiceRecording = viewModel::startVoiceRecording,
                                     onCancelVoiceRecording = viewModel::cancelVoiceRecording,
@@ -416,7 +497,8 @@ private fun ChatsoAuthenticatedShell(
                                     onSetSelfDestruct = viewModel::setSelfDestructSeconds,
                                     onVerifyPeerKey = viewModel::verifyActivePeerKey,
                                     onReconnect = viewModel::reconnectActivePeer,
-                                    onDeleteConversation = viewModel::deleteActiveConversation
+                                    onDeleteConversation = viewModel::deleteActiveConversation,
+                                    onNotify = viewModel::postMessage
                                 )
                             } else {
                                 Box(
@@ -463,6 +545,8 @@ private fun ChatsoAuthenticatedShell(
                                 onUpdateListenPort = viewModel::updateListenPort,
                                 onChangeTheme = viewModel::setThemeMode,
                                 onChangeLanguage = onChangeLanguage,
+                                onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
+                                isCheckingUpdates = updateUiState is UpdateUiState.Checking,
                                 onNotify = viewModel::postMessage
                             )
                         }
@@ -483,12 +567,19 @@ private fun ChatsoAuthenticatedShell(
                             .padding(innerPadding)
                             .windowInsetsPadding(WindowInsets.statusBars)
                     ) {
+                        val presence = when {
+                            !connectedPeerIds.contains(currentOpenPeer.peerId) -> PeerPresence.OFFLINE
+                            foregroundPeerIds.contains(currentOpenPeer.peerId) -> PeerPresence.ONLINE
+                            else -> PeerPresence.BACKGROUND
+                        }
                         ChatDetailScreen(
                             identity = identity,
                             peer = currentOpenPeer,
                             messages = activeMessages,
-                            isConnected = connectedPeerIds.contains(currentOpenPeer.peerId),
+                            currentMessageLimit = currentMessageLimit,
+                            presence = presence,
                             isPeerTyping = typingPeerIds.contains(currentOpenPeer.peerId),
+                            activeTransfers = activeTransfers,
                             nowClockFlow = viewModel.nowClockMs,
                             voiceRecordingState = voiceRecordingState,
                             voicePlaybackState = voicePlaybackState,
@@ -496,8 +587,10 @@ private fun ChatsoAuthenticatedShell(
                             onBack = viewModel::closeConversation,
                             onLoadMoreMessages = viewModel::loadMoreMessages,
                             onSendText = viewModel::sendTextMessage,
+                            onToggleReaction = viewModel::toggleReaction,
                             onTypingChanged = viewModel::notifyTyping,
                             onSendPhotoUri = viewModel::sendPhotoUri,
+                            onSendVideoUri = viewModel::sendVideoUri,
                             onSendDocumentUri = viewModel::sendDocumentUri,
                             onStartVoiceRecording = viewModel::startVoiceRecording,
                             onCancelVoiceRecording = viewModel::cancelVoiceRecording,
@@ -507,7 +600,8 @@ private fun ChatsoAuthenticatedShell(
                             onSetSelfDestruct = viewModel::setSelfDestructSeconds,
                             onVerifyPeerKey = viewModel::verifyActivePeerKey,
                             onReconnect = viewModel::reconnectActivePeer,
-                            onDeleteConversation = viewModel::deleteActiveConversation
+                            onDeleteConversation = viewModel::deleteActiveConversation,
+                            onNotify = viewModel::postMessage
                         )
                     }
                 }
@@ -589,6 +683,7 @@ private fun ChatsoAuthenticatedShell(
                                 identity = identity,
                                 peers = peers,
                                 connectedPeerIds = connectedPeerIds,
+                                foregroundPeerIds = foregroundPeerIds,
                                 typingPeerIds = typingPeerIds,
                                 selectedPeerId = activePeerId,
                                 onToggleDiscoverable = viewModel::toggleDiscoverable,
@@ -625,6 +720,8 @@ private fun ChatsoAuthenticatedShell(
                                 onUpdateListenPort = viewModel::updateListenPort,
                                 onChangeTheme = viewModel::setThemeMode,
                                 onChangeLanguage = onChangeLanguage,
+                                onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
+                                isCheckingUpdates = updateUiState is UpdateUiState.Checking,
                                 onNotify = viewModel::postMessage
                             )
                         }

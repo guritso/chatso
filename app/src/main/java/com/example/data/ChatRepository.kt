@@ -9,6 +9,7 @@ import com.example.network.P2PEventListener
 import com.example.network.P2PNodeManager
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -26,7 +27,8 @@ class ChatRepository(
     private val scope: CoroutineScope,
     private val chatDao: ChatDao,
     val identityStore: LocalIdentityStore,
-    val mediaStorage: MediaStorageHelper
+    val mediaStorage: MediaStorageHelper,
+    private val isAppInForegroundProvider: () -> Boolean = { true }
 ) : P2PEventListener {
 
     val discoveryManager = DiscoveryManager(context.applicationContext, scope)
@@ -37,10 +39,16 @@ class ChatRepository(
     private val _typingPeers = MutableStateFlow<Set<String>>(emptySet())
     val typingPeers: StateFlow<Set<String>> = _typingPeers.asStateFlow()
 
+    private val transfersMap = ConcurrentHashMap<String, ActiveTransferInfo>()
+    private val _activeTransfers = MutableStateFlow<List<ActiveTransferInfo>>(emptyList())
+    val activeTransfers: StateFlow<List<ActiveTransferInfo>> = _activeTransfers.asStateFlow()
+
     @Volatile
     var currentlyOpenPeerId: String? = null
 
-    var onIncomingNotification: ((peerId: String, senderName: String, preview: String) -> Unit)? = null
+    var onIncomingNotification: (
+        (peerId: String, senderName: String, preview: String, avatarPath: String?) -> Unit
+    )? = null
 
     init {
         nodeManager.setAvatarProvider {
@@ -52,7 +60,6 @@ class ChatRepository(
                 nodeManager.updateIdentityAndEnsureServer(identity)
             }
         }
-        // Self-destruct message reaper loop (runs every second)
         scope.launch(Dispatchers.IO) {
             while (isActive) {
                 cleanupExpiredMessages()
@@ -61,10 +68,35 @@ class ChatRepository(
         }
     }
 
+    private fun publishTransfersSnapshot() {
+        _activeTransfers.value = transfersMap.values.sortedBy { it.fileName }
+    }
+
+    private fun updateTransferEntry(info: ActiveTransferInfo) {
+        transfersMap[info.messageId] = info
+        publishTransfersSnapshot()
+    }
+
+    private fun removeTransferEntry(messageId: String) {
+        if (transfersMap.remove(messageId) != null) {
+            publishTransfersSnapshot()
+        }
+    }
+
     fun observePeer(peerId: String): Flow<PeerEntity?> = chatDao.observePeer(peerId)
 
     fun observeMessages(peerId: String, limit: Int): Flow<List<MessageEntity>> =
         chatDao.observeMessagesForPeer(peerId, limit)
+
+    fun onAppForegroundChanged(inForeground: Boolean) {
+        nodeManager.setLocalAppInForeground(inForeground)
+        if (inForeground) {
+            val openPeer = currentlyOpenPeerId ?: return
+            scope.launch(Dispatchers.IO) {
+                markConversationRead(openPeer)
+            }
+        }
+    }
 
     suspend fun connectDirect(
         ip: String,
@@ -86,13 +118,34 @@ class ChatRepository(
         ).isSuccess
     }
 
-    suspend fun sendText(peerId: String, rawText: String): Boolean {
+    private fun buildReplyMeta(replyTo: MessageEntity?): Triple<String?, String?, String?> {
+        if (replyTo == null) return Triple(null, null, null)
+        val authorTag = if (replyTo.isOutgoing) ReplySenderTags.ME else ReplySenderTags.PEER
+        val wireAuthorType = if (replyTo.isOutgoing) "ME" else "PEER"
+        val preview = when (replyTo.type) {
+            MessageType.IMAGE.name -> "Photo"
+            MessageType.VIDEO.name -> "Video"
+            MessageType.VOICE.name -> "Voice (${NetworkUtils.formatDurationMs(replyTo.audioDurationMs)})"
+            MessageType.FILE.name -> replyTo.fileName ?: "File"
+            else -> replyTo.textContent
+        }.take(100)
+        return Triple(replyTo.messageId, "$authorTag|$wireAuthorType", preview)
+    }
+
+    suspend fun sendText(
+        peerId: String,
+        rawText: String,
+        replyTo: MessageEntity? = null
+    ): Boolean {
         val text = rawText.trim()
         if (text.isEmpty()) return false
         val peer = chatDao.getPeerById(peerId) ?: return false
         val msgId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         val sdSec = peer.selfDestructSeconds
+        val (replyId, combinedTag, replyPreview) = buildReplyMeta(replyTo)
+        val localSenderTag = combinedTag?.substringBefore('|')
+        val wireAuthorType = combinedTag?.substringAfter('|')
 
         val entity = MessageEntity(
             messageId = msgId,
@@ -103,7 +156,10 @@ class ChatRepository(
             transferProgress = 100,
             status = DeliveryStatus.SENDING.name,
             selfDestructSeconds = sdSec,
-            createdAt = now
+            createdAt = now,
+            replyToMessageId = replyId,
+            replyToSenderTag = localSenderTag,
+            replyToPreview = replyPreview
         )
         chatDao.upsertMessage(entity)
         chatDao.upsertPeer(
@@ -115,15 +171,32 @@ class ChatRepository(
 
         var connected = ensurePeerConnected(peerId)
         var ok = if (connected) {
-            nodeManager.sendTextMessage(peerId, msgId, text, sdSec, now)
+            nodeManager.sendTextMessage(
+                peerId = peerId,
+                messageId = msgId,
+                text = text,
+                selfDestructSec = sdSec,
+                createdAt = now,
+                replyToMessageId = replyId,
+                replyToAuthorType = wireAuthorType,
+                replyToPreview = replyPreview
+            )
         } else {
             false
         }
         if (!ok) {
-            // Reconnect once in case cached VPN socket dropped silently
             connected = ensurePeerConnected(peerId)
             if (connected) {
-                ok = nodeManager.sendTextMessage(peerId, msgId, text, sdSec, now)
+                ok = nodeManager.sendTextMessage(
+                    peerId = peerId,
+                    messageId = msgId,
+                    text = text,
+                    selfDestructSec = sdSec,
+                    createdAt = now,
+                    replyToMessageId = replyId,
+                    replyToAuthorType = wireAuthorType,
+                    replyToPreview = replyPreview
+                )
             }
         }
         chatDao.updateMessageStatus(
@@ -133,6 +206,15 @@ class ChatRepository(
         return ok
     }
 
+    suspend fun toggleReaction(peerId: String, messageId: String, emoji: String) {
+        val msg = chatDao.getMessageById(messageId) ?: return
+        val (nextJson, outgoingEmoji) = ReactionCodec.toggleMyReaction(msg.reactionsJson, emoji)
+        chatDao.updateMessageReactions(messageId, nextJson)
+        if (ensurePeerConnected(peerId)) {
+            nodeManager.sendReaction(peerId, messageId, outgoingEmoji)
+        }
+    }
+
     suspend fun scanKnownAndNetworkPeers() {
         val known = chatDao.getAllPeersOnce()
             .filter { it.lastIp.isNotBlank() }
@@ -140,15 +222,26 @@ class ChatRepository(
         discoveryManager.scanNetworkNow(known)
     }
 
-    suspend fun sendUriAttachment(peerId: String, uri: Uri, forceImage: Boolean): Boolean {
+    suspend fun sendUriAttachment(
+        peerId: String,
+        uri: Uri,
+        forceImage: Boolean = false,
+        replyTo: MessageEntity? = null
+    ): Boolean {
         val copied = mediaStorage.copyUriToPrivateMedia(
             uri,
-            if (forceImage) "photo" else "file"
+            if (forceImage) "photo" else "media"
         ) ?: return false
-        val msgType = if (forceImage || copied.mimeType.startsWith("image/")) {
-            MessageType.IMAGE
+        val msgType = when {
+            forceImage -> MessageType.IMAGE
+            copied.mimeType.startsWith("image/") -> MessageType.IMAGE
+            copied.mimeType.startsWith("video/") -> MessageType.VIDEO
+            else -> MessageType.FILE
+        }
+        val videoDurMs = if (msgType == MessageType.VIDEO) {
+            mediaStorage.readAudioDurationMs(copied.localFile)
         } else {
-            MessageType.FILE
+            0L
         }
         return sendPreparedFile(
             peerId = peerId,
@@ -156,11 +249,17 @@ class ChatRepository(
             file = copied.localFile,
             fileName = copied.fileName,
             mimeType = copied.mimeType,
-            audioDurationMs = 0L
+            audioDurationMs = videoDurMs,
+            replyTo = replyTo
         )
     }
 
-    suspend fun sendVoiceRecording(peerId: String, audioFile: File, durationMs: Long): Boolean {
+    suspend fun sendVoiceRecording(
+        peerId: String,
+        audioFile: File,
+        durationMs: Long,
+        replyTo: MessageEntity? = null
+    ): Boolean {
         val actualDur = durationMs.takeIf { it > 0L } ?: mediaStorage.readAudioDurationMs(audioFile)
         return sendPreparedFile(
             peerId = peerId,
@@ -168,7 +267,8 @@ class ChatRepository(
             file = audioFile,
             fileName = audioFile.name,
             mimeType = "audio/mp4",
-            audioDurationMs = actualDur
+            audioDurationMs = actualDur,
+            replyTo = replyTo
         )
     }
 
@@ -178,7 +278,8 @@ class ChatRepository(
         file: File,
         fileName: String,
         mimeType: String,
-        audioDurationMs: Long
+        audioDurationMs: Long,
+        replyTo: MessageEntity? = null
     ): Boolean {
         val peer = chatDao.getPeerById(peerId) ?: return false
         val msgId = UUID.randomUUID().toString()
@@ -186,9 +287,14 @@ class ChatRepository(
         val sdSec = peer.selfDestructSeconds
         val preview = when (messageType) {
             MessageType.IMAGE -> "Photo: $fileName"
+            MessageType.VIDEO -> "Video: $fileName"
             MessageType.VOICE -> "Voice message (${NetworkUtils.formatDurationMs(audioDurationMs)})"
             else -> "File: $fileName"
         }
+        val (replyId, combinedTag, replyPreview) = buildReplyMeta(replyTo)
+        val localSenderTag = combinedTag?.substringBefore('|')
+        val wireAuthorType = combinedTag?.substringAfter('|')
+        val totalBytes = file.length()
 
         val entity = MessageEntity(
             messageId = msgId,
@@ -199,12 +305,15 @@ class ChatRepository(
             mediaLocalPath = file.absolutePath,
             fileName = fileName,
             mimeType = mimeType,
-            fileSizeBytes = file.length(),
+            fileSizeBytes = totalBytes,
             audioDurationMs = audioDurationMs,
             transferProgress = 1,
             status = DeliveryStatus.SENDING.name,
             selfDestructSeconds = sdSec,
-            createdAt = now
+            createdAt = now,
+            replyToMessageId = replyId,
+            replyToSenderTag = localSenderTag,
+            replyToPreview = replyPreview
         )
         chatDao.upsertMessage(entity)
         chatDao.upsertPeer(
@@ -214,24 +323,56 @@ class ChatRepository(
             )
         )
 
-        val connected = ensurePeerConnected(peerId)
-        val ok = if (connected) {
-            nodeManager.sendMediaOrFile(
-                peerId = peerId,
-                messageId = msgId,
-                messageType = messageType,
-                file = file,
-                fileName = fileName,
-                mimeType = mimeType,
-                audioDurationMs = audioDurationMs,
-                selfDestructSec = sdSec,
-                createdAt = now,
-                onProgress = { pct ->
-                    chatDao.updateTransferProgress(msgId, pct, DeliveryStatus.SENDING.name)
-                }
+        if (messageType != MessageType.VOICE || totalBytes > 64 * 1024) {
+            updateTransferEntry(
+                ActiveTransferInfo(
+                    messageId = msgId,
+                    peerId = peerId,
+                    fileName = fileName,
+                    progress = 1,
+                    isOutgoing = true,
+                    totalBytes = totalBytes
+                )
             )
-        } else {
-            false
+        }
+
+        val ok = try {
+            val connected = ensurePeerConnected(peerId)
+            if (connected) {
+                nodeManager.sendMediaOrFile(
+                    peerId = peerId,
+                    messageId = msgId,
+                    messageType = messageType,
+                    file = file,
+                    fileName = fileName,
+                    mimeType = mimeType,
+                    audioDurationMs = audioDurationMs,
+                    selfDestructSec = sdSec,
+                    createdAt = now,
+                    replyToMessageId = replyId,
+                    replyToAuthorType = wireAuthorType,
+                    replyToPreview = replyPreview,
+                    onProgress = { pct ->
+                        chatDao.updateTransferProgress(msgId, pct, DeliveryStatus.SENDING.name)
+                        if (pct in 1..99 && transfersMap.containsKey(msgId)) {
+                            updateTransferEntry(
+                                ActiveTransferInfo(
+                                    messageId = msgId,
+                                    peerId = peerId,
+                                    fileName = fileName,
+                                    progress = pct,
+                                    isOutgoing = true,
+                                    totalBytes = totalBytes
+                                )
+                            )
+                        }
+                    }
+                )
+            } else {
+                false
+            }
+        } finally {
+            removeTransferEntry(msgId)
         }
         chatDao.updateTransferProgress(
             msgId,
@@ -242,6 +383,7 @@ class ChatRepository(
     }
 
     suspend fun markConversationRead(peerId: String) {
+        if (!isAppInForegroundProvider()) return
         chatDao.clearUnread(peerId)
         val unread = chatDao.getUnreadIncomingMessages(peerId)
         val now = System.currentTimeMillis()
@@ -320,6 +462,11 @@ class ChatRepository(
 
     override suspend fun onPeerDisconnected(peerId: String) {
         _typingPeers.update { it - peerId }
+        val toRemove = transfersMap.values.filter { it.peerId == peerId && !it.isOutgoing }.map { it.messageId }
+        if (toRemove.isNotEmpty()) {
+            toRemove.forEach { transfersMap.remove(it) }
+            publishTransfersSnapshot()
+        }
     }
 
     override suspend fun onIncomingTextMessage(
@@ -327,10 +474,13 @@ class ChatRepository(
         messageId: String,
         text: String,
         selfDestructSec: Int,
-        createdAt: Long
+        createdAt: Long,
+        replyToMessageId: String?,
+        replyToSenderTag: String?,
+        replyToPreview: String?
     ) {
         _typingPeers.update { it - peerId }
-        val isOpen = currentlyOpenPeerId == peerId
+        val isOpen = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
         val now = System.currentTimeMillis()
         val expiresAt = if (isOpen && selfDestructSec > 0) {
             now + selfDestructSec * 1000L
@@ -348,7 +498,10 @@ class ChatRepository(
             selfDestructSeconds = selfDestructSec,
             createdAt = createdAt,
             readAt = if (isOpen) now else null,
-            expiresAt = expiresAt
+            expiresAt = expiresAt,
+            replyToMessageId = replyToMessageId,
+            replyToSenderTag = replyToSenderTag,
+            replyToPreview = replyToPreview
         )
         chatDao.upsertMessage(msg)
         val peer = chatDao.getPeerById(peerId)
@@ -365,8 +518,14 @@ class ChatRepository(
             nodeManager.sendReadReceipt(peerId, messageId)
         } else {
             val senderName = peer?.username ?: "Chatso"
-            onIncomingNotification?.invoke(peerId, senderName, text)
+            onIncomingNotification?.invoke(peerId, senderName, text, peer?.avatarPath)
         }
+    }
+
+    override suspend fun onIncomingReaction(peerId: String, messageId: String, emoji: String) {
+        val msg = chatDao.getMessageById(messageId) ?: return
+        val nextJson = ReactionCodec.applyPeerReaction(msg.reactionsJson, emoji)
+        chatDao.updateMessageReactions(messageId, nextJson)
     }
 
     override suspend fun onIncomingFileStart(
@@ -378,11 +537,15 @@ class ChatRepository(
         totalBytes: Long,
         audioDurationMs: Long,
         selfDestructSec: Int,
-        createdAt: Long
+        createdAt: Long,
+        replyToMessageId: String?,
+        replyToSenderTag: String?,
+        replyToPreview: String?
     ): File {
         val targetFile = mediaStorage.createIncomingMediaFile(messageId, fileName)
         val preview = when (messageType) {
             MessageType.IMAGE -> "Receiving photo: $fileName"
+            MessageType.VIDEO -> "Receiving video: $fileName"
             MessageType.VOICE -> "Receiving voice message…"
             else -> "Receiving file: $fileName"
         }
@@ -400,19 +563,39 @@ class ChatRepository(
             transferProgress = 1,
             status = DeliveryStatus.SENDING.name,
             selfDestructSeconds = selfDestructSec,
-            createdAt = createdAt
+            createdAt = createdAt,
+            replyToMessageId = replyToMessageId,
+            replyToSenderTag = replyToSenderTag,
+            replyToPreview = replyToPreview
         )
         chatDao.upsertMessage(msg)
+        if (messageType != MessageType.VOICE || totalBytes > 64 * 1024) {
+            updateTransferEntry(
+                ActiveTransferInfo(
+                    messageId = messageId,
+                    peerId = peerId,
+                    fileName = fileName,
+                    progress = 1,
+                    isOutgoing = false,
+                    totalBytes = totalBytes
+                )
+            )
+        }
         return targetFile
     }
 
     override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {
         chatDao.updateTransferProgress(messageId, progress, DeliveryStatus.SENDING.name)
+        val existing = transfersMap[messageId]
+        if (existing != null) {
+            updateTransferEntry(existing.copy(progress = progress))
+        }
     }
 
     override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {
+        removeTransferEntry(messageId)
         val existing = chatDao.getMessageById(messageId) ?: return
-        val isOpen = currentlyOpenPeerId == peerId
+        val isOpen = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
         val now = System.currentTimeMillis()
         val expiresAt = if (isOpen && existing.selfDestructSeconds > 0) {
             now + existing.selfDestructSeconds * 1000L
@@ -421,6 +604,7 @@ class ChatRepository(
         }
         val finalPreview = when (existing.type) {
             MessageType.IMAGE.name -> "Photo: ${existing.fileName ?: "image"}"
+            MessageType.VIDEO.name -> "Video: ${existing.fileName ?: "video"}"
             MessageType.VOICE.name -> "Voice message (${NetworkUtils.formatDurationMs(existing.audioDurationMs)})"
             else -> "File: ${existing.fileName ?: file.name}"
         }
@@ -448,7 +632,7 @@ class ChatRepository(
             nodeManager.sendReadReceipt(peerId, messageId)
         } else {
             val senderName = peer?.username ?: "Chatso"
-            onIncomingNotification?.invoke(peerId, senderName, finalPreview)
+            onIncomingNotification?.invoke(peerId, senderName, finalPreview, peer?.avatarPath)
         }
     }
 

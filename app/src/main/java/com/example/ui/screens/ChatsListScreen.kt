@@ -55,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.LocalIdentity
 import com.example.data.PeerEntity
+import com.example.data.PeerPresence
 import com.example.network.NetworkUtils
 import com.example.ui.components.ChatsoAvatar
 import com.example.ui.theme.OnlineEmerald
@@ -66,6 +67,7 @@ fun ChatsListScreen(
     identity: LocalIdentity,
     peers: List<PeerEntity>,
     connectedPeerIds: Set<String>,
+    foregroundPeerIds: Set<String>,
     typingPeerIds: Set<String>,
     selectedPeerId: String?,
     onToggleDiscoverable: (Boolean) -> Unit,
@@ -229,12 +231,17 @@ fun ChatsListScreen(
                 ) {
                     items(filteredPeers, key = { it.peerId }) { peer ->
                         val isConnected = connectedPeerIds.contains(peer.peerId)
+                        val presence = when {
+                            !isConnected -> PeerPresence.OFFLINE
+                            foregroundPeerIds.contains(peer.peerId) -> PeerPresence.ONLINE
+                            else -> PeerPresence.BACKGROUND
+                        }
                         val isTyping = typingPeerIds.contains(peer.peerId)
                         val isSelected = selectedPeerId == peer.peerId
 
                         PeerConversationCard(
                             peer = peer,
-                            isConnected = isConnected,
+                            presence = presence,
                             isTyping = isTyping,
                             isSelected = isSelected,
                             onClick = { onOpenPeer(peer.peerId) }
@@ -249,7 +256,7 @@ fun ChatsListScreen(
 @Composable
 private fun PeerConversationCard(
     peer: PeerEntity,
-    isConnected: Boolean,
+    presence: PeerPresence,
     isTyping: Boolean,
     isSelected: Boolean,
     onClick: () -> Unit
@@ -280,7 +287,7 @@ private fun PeerConversationCard(
                 name = peer.username,
                 avatarModel = peer.avatarPath,
                 size = 50.dp,
-                isOnline = isConnected,
+                presence = presence,
                 showPresenceDot = true
             )
 

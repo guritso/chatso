@@ -20,7 +20,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.data.PeerPresence
 import com.example.ui.theme.OnlineEmerald
+import com.example.ui.theme.WarningAmber
 import java.io.File
 
 @Composable
@@ -29,6 +31,7 @@ fun ChatsoAvatar(
     avatarModel: Any?,
     size: Dp = 48.dp,
     isOnline: Boolean = false,
+    presence: PeerPresence = if (isOnline) PeerPresence.ONLINE else PeerPresence.OFFLINE,
     showPresenceDot: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -81,14 +84,17 @@ fun ChatsoAvatar(
 
         if (showPresenceDot) {
             val dotSize = (size * 0.28f).coerceIn(11.dp, 16.dp)
+            val dotColor = when (presence) {
+                PeerPresence.ONLINE -> OnlineEmerald
+                PeerPresence.BACKGROUND -> WarningAmber
+                PeerPresence.OFFLINE -> MaterialTheme.colorScheme.outline
+            }
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .size(dotSize)
                     .clip(CircleShape)
-                    .background(
-                        if (isOnline) OnlineEmerald else MaterialTheme.colorScheme.outline
-                    )
+                    .background(dotColor)
                     .border(2.dp, MaterialTheme.colorScheme.surface, CircleShape)
             )
         }

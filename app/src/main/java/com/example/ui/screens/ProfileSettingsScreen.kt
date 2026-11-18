@@ -30,14 +30,17 @@ import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LightMode
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -66,6 +69,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.example.BuildConfig
 import com.example.R
 import com.example.data.AppLanguage
 import com.example.data.LocalIdentity
@@ -73,6 +77,7 @@ import com.example.data.NetworkEndpointInfo
 import com.example.data.ThemeMode
 import com.example.network.NetworkUtils
 import com.example.ui.components.ChatsoAvatar
+import com.example.ui.components.OpenSourceLicensesDialog
 import com.example.ui.components.ProfileImageCropperDialog
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OnlineEmerald
@@ -91,12 +96,15 @@ fun ProfileSettingsScreen(
     onUpdateListenPort: (String) -> Unit,
     onChangeTheme: (ThemeMode) -> Unit,
     onChangeLanguage: (AppLanguage) -> Unit,
+    onCheckUpdates: () -> Unit,
+    isCheckingUpdates: Boolean,
     onNotify: (String) -> Unit
 ) {
     val context = LocalContext.current
     var editedUsername by rememberSaveable(identity.username) { mutableStateOf(identity.username) }
     var pickedAvatarUriString by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingCropUriString by rememberSaveable { mutableStateOf<String?>(null) }
+    var showLicensesDialog by remember { mutableStateOf(false) }
     var portInput by rememberSaveable(identity.listenPort) {
         mutableStateOf(identity.listenPort.toString())
     }
@@ -127,6 +135,10 @@ fun ProfileSettingsScreen(
                 pendingCropUriString = null
             }
         )
+    }
+
+    if (showLicensesDialog) {
+        OpenSourceLicensesDialog(onDismiss = { showLicensesDialog = false })
     }
 
     val clipboard = remember(context) {
@@ -643,6 +655,104 @@ fun ProfileSettingsScreen(
                             text = stringResource(R.string.apply_btn),
                             maxLines = 1,
                             softWrap = false
+                        )
+                    }
+                }
+            }
+        }
+
+        // 7. Updates & Open Source Licenses
+        Card(
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.SystemUpdate,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.updates_section),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = stringResource(R.string.current_version_label, BuildConfig.VERSION_NAME),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = onCheckUpdates,
+                        enabled = !isCheckingUpdates,
+                        shape = MaterialTheme.shapes.small,
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("profile_check_updates_button")
+                    ) {
+                        if (isCheckingUpdates) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.checking_updates),
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        } else {
+                            Text(
+                                text = stringResource(R.string.check_updates_btn),
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showLicensesDialog = true }
+                        .padding(vertical = 4.dp)
+                        .testTag("profile_open_licenses_row"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.open_source_licenses),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = stringResource(R.string.open_source_licenses_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

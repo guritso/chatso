@@ -16,27 +16,30 @@ class ChatsoContainer(context: Context) {
     val database: ChatDatabase = ChatDatabase.getInstance(context)
     val identityStore = LocalIdentityStore(context)
     val mediaStorage = MediaStorageHelper(context)
+
+    @Volatile
+    var isAppInForeground: Boolean = false
+
     val repository = ChatRepository(
         context = context,
         scope = appScope,
         chatDao = database.chatDao(),
         identityStore = identityStore,
-        mediaStorage = mediaStorage
+        mediaStorage = mediaStorage,
+        isAppInForegroundProvider = { isAppInForeground }
     )
-
-    @Volatile
-    var isAppInForeground: Boolean = false
 
     init {
         ChatsoNotificationHelper.ensureChannels(context)
-        repository.onIncomingNotification = { peerId, senderName, preview ->
+        repository.onIncomingNotification = { peerId, senderName, preview, avatarPath ->
             val activeOpen = repository.currentlyOpenPeerId
             if (!isAppInForeground || activeOpen != peerId) {
                 ChatsoNotificationHelper.showIncomingMessageNotification(
                     context = context,
                     peerId = peerId,
                     senderName = senderName,
-                    preview = preview
+                    preview = preview,
+                    avatarPath = avatarPath
                 )
             }
         }

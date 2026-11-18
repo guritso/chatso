@@ -11,6 +11,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "peers")
@@ -50,7 +52,11 @@ data class MessageEntity(
     val selfDestructSeconds: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val readAt: Long? = null,
-    val expiresAt: Long? = null
+    val expiresAt: Long? = null,
+    val replyToMessageId: String? = null,
+    val replyToSenderTag: String? = null,
+    val replyToPreview: String? = null,
+    val reactionsJson: String = ""
 )
 
 @Dao
@@ -102,6 +108,9 @@ interface ChatDao {
     @Query("UPDATE messages SET status = :status WHERE messageId = :messageId")
     suspend fun updateMessageStatus(messageId: String, status: String)
 
+    @Query("UPDATE messages SET reactionsJson = :reactionsJson WHERE messageId = :messageId")
+    suspend fun updateMessageReactions(messageId: String, reactionsJson: String)
+
     @Query("UPDATE messages SET status = :status, readAt = :readAt, expiresAt = :expiresAt WHERE messageId = :messageId")
     suspend fun markMessageRead(
         messageId: String,
@@ -125,13 +134,22 @@ interface ChatDao {
 
 @Database(
     entities = [PeerEntity::class, MessageEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
 
     companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToMessageId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToSenderTag TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN replyToPreview TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN reactionsJson TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         @Volatile
         private var INSTANCE: ChatDatabase? = null
 
@@ -141,7 +159,11 @@ abstract class ChatDatabase : RoomDatabase() {
                     context.applicationContext,
                     ChatDatabase::class.java,
                     "chatso_local.db"
-                ).fallbackToDestructiveMigration(true).build().also { INSTANCE = it }
+                )
+                    .addMigrations(MIGRATION_1_2)
+                    .fallbackToDestructiveMigration(true)
+                    .build()
+                    .also { INSTANCE = it }
             }
         }
     }

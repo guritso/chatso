@@ -142,4 +142,31 @@
     <string name="notif_channel_messages">Incoming messages</string>
     <string name="notif_service_listening">P2P connection active · E2EE</string>
     <string name="notif_service_connected">P2P connection active · %1$d connected</string>
+
+    <string name="status_background">In background</string>
+    <string name="paste_qr_label">Or paste invite link</string>
+    <string name="paste_qr_hint">chatso://connect?...</string>
+    <string name="paste_btn">Paste</string>
+    <string name="msg_clipboard_empty">Clipboard is empty.</string>
+
+    <string name="send_video">Send video</string>
+    <string name="video_label">Video</string>
+    <string name="reply_action">Reply</string>
+    <string name="reply_you">You</string>
+    <string name="replying_to">Replying to %1$s</string>
+    <string name="copy_text_action">Copy</string>
+    <string name="transfers_title">Active transfers (%1$d)</string>
+    <string name="transfer_uploading">Uploading</string>
+    <string name="transfer_downloading">Downloading</string>
+
+    <string name="updates_section">Updates &amp; About</string>
+    <string name="current_version_label">Version %1$s</string>
+    <string name="check_updates_btn">Check updates</string>
+    <string name="checking_updates">Checking…</string>
+    <string name="update_available_title">Update available: v%1$s</string>
+    <string name="update_up_to_date">You are on the latest version.</string>
+    <string name="update_check_failed">Could not check for updates.</string>
+    <string name="update_download_btn">Download APK</string>
+    <string name="open_source_licenses">Open Source Licenses</string>
+    <string name="open_source_licenses_desc">Third-party libraries used by Chatso</string>
 </resources>
