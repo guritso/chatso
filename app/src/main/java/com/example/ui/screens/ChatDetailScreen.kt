@@ -176,8 +176,6 @@ fun ChatDetailScreen(
     onReconnect: () -> Unit,
     onDeleteMessage: (String) -> Unit,
     onDeleteConversation: () -> Unit,
-    onCancelTransfer: (String) -> Unit = {},
-    onRetryTransfer: (String) -> Unit = {},
     onNotify: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -588,9 +586,7 @@ fun ChatDetailScreen(
                                 if (idx >= 0) {
                                     scope.launch { listState.animateScrollToItem(idx) }
                                 }
-                            },
-                            onCancelTransfer = onCancelTransfer,
-                            onRetryTransfer = onRetryTransfer
+                            }
                         )
                     }
                 }
@@ -602,7 +598,6 @@ fun ChatDetailScreen(
                 expanded = transfersExpanded,
                 onToggleExpanded = { transfersExpanded = !transfersExpanded },
                 onCollapse = { transfersExpanded = false },
-                onCancelTransfer = onCancelTransfer,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 10.dp, end = 12.dp)

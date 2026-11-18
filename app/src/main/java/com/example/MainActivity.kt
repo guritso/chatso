@@ -499,8 +499,6 @@ private fun ChatsoAuthenticatedShell(
                                     onReconnect = viewModel::reconnectActivePeer,
                                     onDeleteMessage = viewModel::deleteSingleMessage,
                                     onDeleteConversation = viewModel::deleteActiveConversation,
-                                    onCancelTransfer = viewModel::cancelTransfer,
-                                    onRetryTransfer = viewModel::retryTransfer,
                                     onNotify = viewModel::postMessage
                                 )
                             } else {
@@ -605,8 +603,6 @@ private fun ChatsoAuthenticatedShell(
                             onReconnect = viewModel::reconnectActivePeer,
                             onDeleteMessage = viewModel::deleteSingleMessage,
                             onDeleteConversation = viewModel::deleteActiveConversation,
-                            onCancelTransfer = viewModel::cancelTransfer,
-                            onRetryTransfer = viewModel::retryTransfer,
                             onNotify = viewModel::postMessage
                         )
                     }

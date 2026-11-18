@@ -176,10 +176,4 @@
     <string name="safety_mutual_verified">Verificación mutua completa (ambos confirmaron).</string>
     <string name="safety_waiting_peer">Verificaste este contacto. Esperando a que te verifique.</string>
     <string name="safety_peer_verified_you">Este contacto te verificó. Confirma su código para completar.</string>
-
-    <string name="cancel_transfer_cd">Cancelar transferencia</string>
-    <string name="transfer_cancelled_status">Transferencia cancelada</string>
-    <string name="retry_download_btn">Descargar de nuevo</string>
-    <string name="retry_send_btn">Enviar de nuevo</string>
-    <string name="msg_transfer_unavailable">El archivo ya no está disponible en el dispositivo del remitente.</string>
 </resources>

@@ -176,10 +176,4 @@
     <string name="safety_mutual_verified">Gegenseitig verifiziert (beide bestätigt).</string>
     <string name="safety_waiting_peer">Du hast diesen Kontakt verifiziert. Warte auf Gegenbestätigung.</string>
     <string name="safety_peer_verified_you">Dieser Kontakt hat dich verifiziert. Bestätige seinen Code zum Abschließen.</string>
-
-    <string name="cancel_transfer_cd">Übertragung abbrechen</string>
-    <string name="transfer_cancelled_status">Übertragung abgebrochen</string>
-    <string name="retry_download_btn">Erneut laden</string>
-    <string name="retry_send_btn">Erneut senden</string>
-    <string name="msg_transfer_unavailable">Die Datei ist auf dem Gerät des Absenders nicht mehr verfügbar.</string>
 </resources>

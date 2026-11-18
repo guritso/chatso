@@ -118,9 +118,6 @@ interface ChatDao {
         localPath: String? = null
     )
 
-    @Query("UPDATE messages SET transferProgress = :progress WHERE messageId = :messageId AND status = 'SENDING'")
-    suspend fun updateOngoingTransferProgress(messageId: String, progress: Int)
-
     @Query("UPDATE messages SET status = :status WHERE messageId = :messageId")
     suspend fun updateMessageStatus(messageId: String, status: String)
 

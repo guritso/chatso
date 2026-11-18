@@ -2,12 +2,8 @@ package com.example.data
 
 import android.content.Context
 import android.net.Uri
-import android.net.wifi.WifiManager
-import android.os.Build
-import android.os.PowerManager
 import com.example.crypto.CryptoEngine
 import com.example.network.DiscoveryManager
-import com.example.network.FileSendResult
 import com.example.network.NetworkUtils
 import com.example.network.P2PEventListener
 import com.example.network.P2PNodeManager
@@ -28,15 +24,14 @@ import kotlinx.coroutines.launch
 
 class ChatRepository(
     context: Context,
-    val scope: CoroutineScope,
+    private val scope: CoroutineScope,
     private val chatDao: ChatDao,
     val identityStore: LocalIdentityStore,
     val mediaStorage: MediaStorageHelper,
     private val isAppInForegroundProvider: () -> Boolean = { true }
 ) : P2PEventListener {
 
-    private val appContext = context.applicationContext
-    val discoveryManager = DiscoveryManager(appContext, scope)
+    val discoveryManager = DiscoveryManager(context.applicationContext, scope)
     val nodeManager = P2PNodeManager(scope, discoveryManager, this)
 
     val allPeersFlow: Flow<List<PeerEntity>> = chatDao.observeAllPeers()
@@ -45,13 +40,8 @@ class ChatRepository(
     val typingPeers: StateFlow<Set<String>> = _typingPeers.asStateFlow()
 
     private val transfersMap = ConcurrentHashMap<String, ActiveTransferInfo>()
-    private val lastDbProgressSyncMs = ConcurrentHashMap<String, Long>()
     private val _activeTransfers = MutableStateFlow<List<ActiveTransferInfo>>(emptyList())
     val activeTransfers: StateFlow<List<ActiveTransferInfo>> = _activeTransfers.asStateFlow()
-
-    private val wakeLockGuard = Any()
-    private var transferWakeLock: PowerManager.WakeLock? = null
-    private var transferWifiLock: WifiManager.WifiLock? = null
 
     @Volatile
     var currentlyOpenPeerId: String? = null
@@ -71,8 +61,6 @@ class ChatRepository(
         ) -> Unit
     )? = null
 
-    var onTransferUnavailableNotice: ((peerId: String, messageId: String) -> Unit)? = null
-
     init {
         nodeManager.setAvatarProvider {
             val snap = identityStore.getSnapshot()
@@ -91,52 +79,8 @@ class ChatRepository(
         }
     }
 
-    private fun syncTransferWakeLocks(hasActiveTransfers: Boolean) {
-        synchronized(wakeLockGuard) {
-            if (hasActiveTransfers) {
-                runCatching {
-                    if (transferWakeLock == null) {
-                        val pm = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
-                        transferWakeLock = pm?.newWakeLock(
-                            PowerManager.PARTIAL_WAKE_LOCK,
-                            "Chatso::ActiveTransferWakeLock"
-                        )?.apply { setReferenceCounted(false) }
-                    }
-                    if (transferWakeLock?.isHeld == false) {
-                        transferWakeLock?.acquire(30 * 60 * 1000L)
-                    }
-                }
-                runCatching {
-                    if (transferWifiLock == null) {
-                        val wm = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-                        } else {
-                            @Suppress("DEPRECATION")
-                            WifiManager.WIFI_MODE_FULL_HIGH_PERF
-                        }
-                        transferWifiLock = wm?.createWifiLock(mode, "Chatso::ActiveTransferWifiLock")
-                            ?.apply { setReferenceCounted(false) }
-                    }
-                    if (transferWifiLock?.isHeld == false) {
-                        transferWifiLock?.acquire()
-                    }
-                }
-            } else {
-                runCatching {
-                    if (transferWakeLock?.isHeld == true) transferWakeLock?.release()
-                }
-                runCatching {
-                    if (transferWifiLock?.isHeld == true) transferWifiLock?.release()
-                }
-            }
-        }
-    }
-
     private fun publishTransfersSnapshot() {
-        val snapshot = transfersMap.values.sortedBy { it.fileName }
-        _activeTransfers.value = snapshot
-        syncTransferWakeLocks(snapshot.isNotEmpty())
+        _activeTransfers.value = transfersMap.values.sortedBy { it.fileName }
     }
 
     private fun updateTransferEntry(info: ActiveTransferInfo) {
@@ -145,20 +89,8 @@ class ChatRepository(
     }
 
     private fun removeTransferEntry(messageId: String) {
-        lastDbProgressSyncMs.remove(messageId)
         if (transfersMap.remove(messageId) != null) {
             publishTransfersSnapshot()
-        }
-    }
-
-    private fun scheduleThrottledDbProgress(messageId: String, pct: Int) {
-        val now = System.currentTimeMillis()
-        val prev = lastDbProgressSyncMs[messageId] ?: 0L
-        if (now - prev >= 350L) {
-            lastDbProgressSyncMs[messageId] = now
-            scope.launch(Dispatchers.IO) {
-                chatDao.updateOngoingTransferProgress(messageId, pct)
-            }
         }
     }
 
@@ -402,22 +334,6 @@ class ChatRepository(
             )
         )
 
-        return streamOutgoingMessage(entity, file) != FileSendResult.FAILED
-    }
-
-    private suspend fun streamOutgoingMessage(entity: MessageEntity, file: File): FileSendResult {
-        val msgId = entity.messageId
-        val peerId = entity.peerId
-        val fileName = entity.fileName ?: file.name
-        val totalBytes = file.length()
-        val messageType = MessageType.entries.firstOrNull { it.name == entity.type } ?: MessageType.FILE
-        val wireAuthorType = when (entity.replyToSenderTag) {
-            ReplySenderTags.ME -> "ME"
-            ReplySenderTags.PEER -> "PEER"
-            else -> null
-        }
-
-        nodeManager.clearTransferCancellation(msgId)
         if (messageType != MessageType.VOICE || totalBytes > 64 * 1024) {
             updateTransferEntry(
                 ActiveTransferInfo(
@@ -431,7 +347,7 @@ class ChatRepository(
             )
         }
 
-        val result = try {
+        val ok = try {
             val connected = ensurePeerConnected(peerId)
             if (connected) {
                 nodeManager.sendMediaOrFile(
@@ -440,79 +356,41 @@ class ChatRepository(
                     messageType = messageType,
                     file = file,
                     fileName = fileName,
-                    mimeType = entity.mimeType ?: "application/octet-stream",
-                    audioDurationMs = entity.audioDurationMs,
-                    selfDestructSec = entity.selfDestructSeconds,
-                    createdAt = entity.createdAt,
-                    replyToMessageId = entity.replyToMessageId,
+                    mimeType = mimeType,
+                    audioDurationMs = audioDurationMs,
+                    selfDestructSec = sdSec,
+                    createdAt = now,
+                    replyToMessageId = replyId,
                     replyToAuthorType = wireAuthorType,
-                    replyToPreview = entity.replyToPreview,
+                    replyToPreview = replyPreview,
                     onProgress = { pct ->
-                        if (pct in 1..99) {
-                            scheduleThrottledDbProgress(msgId, pct)
-                            val existing = transfersMap[msgId]
-                            if (existing != null && existing.progress != pct) {
-                                updateTransferEntry(existing.copy(progress = pct))
-                            }
+                        chatDao.updateTransferProgress(msgId, pct, DeliveryStatus.SENDING.name)
+                        if (pct in 1..99 && transfersMap.containsKey(msgId)) {
+                            updateTransferEntry(
+                                ActiveTransferInfo(
+                                    messageId = msgId,
+                                    peerId = peerId,
+                                    fileName = fileName,
+                                    progress = pct,
+                                    isOutgoing = true,
+                                    totalBytes = totalBytes
+                                )
+                            )
                         }
                     }
                 )
             } else {
-                FileSendResult.FAILED
+                false
             }
         } finally {
             removeTransferEntry(msgId)
         }
-
-        val finalStatus = when (result) {
-            FileSendResult.SENT -> DeliveryStatus.SENT.name
-            FileSendResult.CANCELLED -> DeliveryStatus.CANCELLED.name
-            FileSendResult.FAILED -> DeliveryStatus.FAILED.name
-        }
         chatDao.updateTransferProgress(
             msgId,
-            if (result == FileSendResult.SENT) 100 else 0,
-            finalStatus
+            if (ok) 100 else 0,
+            if (ok) DeliveryStatus.SENT.name else DeliveryStatus.FAILED.name
         )
-        return result
-    }
-
-    suspend fun cancelTransfer(messageId: String) {
-        val activeInfo = transfersMap[messageId]
-        val msg = chatDao.getMessageById(messageId)
-        val peerId = activeInfo?.peerId ?: msg?.peerId ?: return
-        val isOutgoing = msg?.isOutgoing ?: activeInfo?.isOutgoing ?: true
-
-        removeTransferEntry(messageId)
-        nodeManager.cancelTransfer(peerId, messageId, isOutgoing)
-
-        if (!isOutgoing) {
-            mediaStorage.deleteMediaFile(msg?.mediaLocalPath)
-        }
-        chatDao.updateTransferProgress(messageId, 0, DeliveryStatus.CANCELLED.name)
-    }
-
-    suspend fun retryTransfer(messageId: String): Boolean {
-        val msg = chatDao.getMessageById(messageId) ?: return false
-        nodeManager.clearTransferCancellation(messageId)
-        if (msg.isOutgoing) {
-            val file = msg.mediaLocalPath?.let { File(it) }
-            if (file == null || !file.exists()) {
-                onTransferUnavailableNotice?.invoke(msg.peerId, msg.messageId)
-                chatDao.updateTransferProgress(messageId, 0, DeliveryStatus.FAILED.name)
-                return true
-            }
-            chatDao.updateTransferProgress(messageId, 1, DeliveryStatus.SENDING.name)
-            return streamOutgoingMessage(msg, file) != FileSendResult.FAILED
-        } else {
-            chatDao.updateTransferProgress(messageId, 1, DeliveryStatus.SENDING.name)
-            val connected = ensurePeerConnected(msg.peerId)
-            val sentReq = connected && nodeManager.sendFileRetryRequest(msg.peerId, msg.messageId)
-            if (!sentReq) {
-                chatDao.updateTransferProgress(messageId, 0, DeliveryStatus.FAILED.name)
-            }
-            return sentReq
-        }
+        return ok
     }
 
     suspend fun markConversationRead(peerId: String) {
@@ -632,14 +510,8 @@ class ChatRepository(
         _typingPeers.update { it - peerId }
         val toRemove = transfersMap.values.filter { it.peerId == peerId && !it.isOutgoing }.map { it.messageId }
         if (toRemove.isNotEmpty()) {
-            toRemove.forEach { msgId ->
-                removeTransferEntry(msgId)
-                val msg = chatDao.getMessageById(msgId)
-                if (msg != null && msg.status == DeliveryStatus.SENDING.name) {
-                    mediaStorage.deleteMediaFile(msg.mediaLocalPath)
-                    chatDao.updateTransferProgress(msgId, 0, DeliveryStatus.FAILED.name)
-                }
-            }
+            toRemove.forEach { transfersMap.remove(it) }
+            publishTransfersSnapshot()
         }
     }
 
@@ -737,13 +609,12 @@ class ChatRepository(
         replyToSenderTag: String?,
         replyToPreview: String?
     ): File {
-        val existing = chatDao.getMessageById(messageId)
         val targetFile = mediaStorage.createIncomingMediaFile(messageId, fileName)
         val preview = when (messageType) {
-            MessageType.IMAGE -> "Photo: $fileName"
-            MessageType.VIDEO -> "Video: $fileName"
-            MessageType.VOICE -> "Voice message"
-            else -> "File: $fileName"
+            MessageType.IMAGE -> "Receiving photo: $fileName"
+            MessageType.VIDEO -> "Receiving video: $fileName"
+            MessageType.VOICE -> "Receiving voice message…"
+            else -> "Receiving file: $fileName"
         }
         val msg = MessageEntity(
             messageId = messageId,
@@ -759,11 +630,10 @@ class ChatRepository(
             transferProgress = 1,
             status = DeliveryStatus.SENDING.name,
             selfDestructSeconds = selfDestructSec,
-            createdAt = existing?.createdAt ?: createdAt,
+            createdAt = createdAt,
             replyToMessageId = replyToMessageId,
             replyToSenderTag = replyToSenderTag,
-            replyToPreview = replyToPreview,
-            reactionsJson = existing?.reactionsJson ?: ""
+            replyToPreview = replyToPreview
         )
         chatDao.upsertMessage(msg)
         if (messageType != MessageType.VOICE || totalBytes > 64 * 1024) {
@@ -782,41 +652,11 @@ class ChatRepository(
     }
 
     override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {
-        scheduleThrottledDbProgress(messageId, progress)
+        chatDao.updateTransferProgress(messageId, progress, DeliveryStatus.SENDING.name)
         val existing = transfersMap[messageId]
-        if (existing != null && existing.progress != progress) {
+        if (existing != null) {
             updateTransferEntry(existing.copy(progress = progress))
         }
-    }
-
-    override suspend fun onIncomingFileCancelled(peerId: String, messageId: String) {
-        removeTransferEntry(messageId)
-        val msg = chatDao.getMessageById(messageId)
-        mediaStorage.deleteMediaFile(msg?.mediaLocalPath)
-        chatDao.updateTransferProgress(messageId, 0, DeliveryStatus.CANCELLED.name)
-    }
-
-    override suspend fun onOutgoingFileCancelRequested(peerId: String, messageId: String) {
-        removeTransferEntry(messageId)
-        chatDao.updateTransferProgress(messageId, 0, DeliveryStatus.CANCELLED.name)
-    }
-
-    override suspend fun onFileRetryRequested(peerId: String, messageId: String) {
-        val msg = chatDao.getMessageById(messageId)
-        val file = msg?.mediaLocalPath?.let { File(it) }
-        if (msg == null || !msg.isOutgoing || file == null || !file.exists()) {
-            nodeManager.sendFileUnavailable(peerId, messageId)
-            return
-        }
-        scope.launch(Dispatchers.IO) {
-            streamOutgoingMessage(msg, file)
-        }
-    }
-
-    override suspend fun onFileRetryUnavailable(peerId: String, messageId: String) {
-        removeTransferEntry(messageId)
-        chatDao.updateTransferProgress(messageId, 0, DeliveryStatus.FAILED.name)
-        onTransferUnavailableNotice?.invoke(peerId, messageId)
     }
 
     override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {
@@ -898,7 +738,6 @@ class ChatRepository(
     }
 
     fun shutdown() {
-        syncTransferWakeLocks(false)
         discoveryManager.shutdown()
         nodeManager.disconnectAll()
     }
