@@ -17,6 +17,7 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    environment: android-release
 
     steps:
       - name: Checkout repository
@@ -59,20 +60,16 @@ jobs:
           fi
           echo "release_tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
 
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
-            echo "$KEYSTORE_BASE64" | base64 --decode > "${{ runner.temp }}/release-upload-key.jks"
-            export KEYSTORE_PATH="${{ runner.temp }}/release-upload-key.jks"
-            gradle :app:assembleRelease
-            APK_SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-            APK_OUT="Chatso-${TAG_NAME}-release.apk"
-          else
-            if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
-              base64 --decode debug.keystore.base64 > debug.keystore
-            fi
-            gradle :app:assembleDebug
-            APK_SRC=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-            APK_OUT="Chatso-${TAG_NAME}-debug.apk"
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error::Configure KEYSTORE_BASE64, STORE_PASSWORD, and KEY_PASSWORD secrets in the android-release environment."
+            exit 1
           fi
+
+          echo "$KEYSTORE_BASE64" | base64 --decode > "${{ runner.temp }}/release-upload-key.jks"
+          export KEYSTORE_PATH="${{ runner.temp }}/release-upload-key.jks"
+          gradle :app:assembleRelease
+          APK_SRC=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          APK_OUT="Chatso-${TAG_NAME}-release.apk"
 
           cp "$APK_SRC" "$APK_OUT"
           echo "apk_path=${APK_OUT}" >> "$GITHUB_OUTPUT"
