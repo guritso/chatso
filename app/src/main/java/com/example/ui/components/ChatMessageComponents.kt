@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.ErrorOutline
@@ -131,14 +132,20 @@ fun ChatMessageBubbleItem(
     }
     val bubbleShape = remember(isOutgoing) {
         RoundedCornerShape(
-            topStart = 18.dp,
-            topEnd = 18.dp,
-            bottomStart = if (isOutgoing) 18.dp else 4.dp,
-            bottomEnd = if (isOutgoing) 4.dp else 18.dp
+            topStart = 16.dp,
+            topEnd = 16.dp,
+            bottomStart = if (isOutgoing) 16.dp else 4.dp,
+            bottomEnd = if (isOutgoing) 4.dp else 16.dp
         )
     }
     val formattedTimestamp = remember(message.createdAt) {
         NetworkUtils.formatTimestamp(message.createdAt)
+    }
+    val mediaFileReady = remember(message.type, message.mediaLocalPath, message.transferProgress) {
+        (message.type == MessageType.IMAGE.name || message.type == MessageType.VIDEO.name) &&
+            !message.mediaLocalPath.isNullOrBlank() &&
+            message.transferProgress >= 100 &&
+            File(message.mediaLocalPath).exists()
     }
 
     val density = LocalDensity.current
@@ -205,7 +212,7 @@ fun ChatMessageBubbleItem(
                 shape = bubbleShape,
                 color = bubbleColor,
                 modifier = Modifier
-                    .widthIn(min = 96.dp, max = 304.dp)
+                    .widthIn(min = 68.dp, max = 276.dp)
                     .clip(bubbleShape)
                     .combinedClickable(
                         onClick = {},
@@ -213,7 +220,12 @@ fun ChatMessageBubbleItem(
                     )
                     .testTag("message_bubble_${message.messageId}")
             ) {
-                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
+                val outerPad = if (mediaFileReady) {
+                    PaddingValues(2.dp)
+                } else {
+                    PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                }
+                Column(modifier = Modifier.padding(outerPad)) {
                     if (!message.replyToMessageId.isNullOrBlank() && !message.replyToPreview.isNullOrBlank()) {
                         val replyAuthorName = when (message.replyToSenderTag) {
                             ReplySenderTags.ME -> stringResource(R.string.reply_you)
@@ -224,15 +236,20 @@ fun ChatMessageBubbleItem(
                             color = MaterialTheme.colorScheme.surface.copy(alpha = if (isOutgoing) 0.45f else 0.7f),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(bottom = 6.dp)
+                                .padding(
+                                    start = if (mediaFileReady) 4.dp else 0.dp,
+                                    end = if (mediaFileReady) 4.dp else 0.dp,
+                                    top = if (mediaFileReady) 4.dp else 0.dp,
+                                    bottom = 4.dp
+                                )
                                 .clip(RoundedCornerShape(10.dp))
                                 .clickable { onQuoteClick(message.replyToMessageId) }
                         ) {
-                            Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                            Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)) {
                                 Box(
                                     modifier = Modifier
                                         .width(3.dp)
-                                        .height(28.dp)
+                                        .height(26.dp)
                                         .clip(CircleShape)
                                         .background(MaterialTheme.colorScheme.primary)
                                 )
@@ -260,27 +277,35 @@ fun ChatMessageBubbleItem(
 
                     when (message.type) {
                         MessageType.IMAGE.name -> {
-                            val fileExists = remember(message.mediaLocalPath, message.transferProgress) {
-                                !message.mediaLocalPath.isNullOrBlank() &&
-                                    message.transferProgress >= 100 &&
-                                    File(message.mediaLocalPath).exists()
-                            }
-                            if (fileExists && message.mediaLocalPath != null) {
-                                AsyncImage(
-                                    model = File(message.mediaLocalPath),
-                                    contentDescription = message.fileName,
-                                    contentScale = ContentScale.Crop,
+                            if (mediaFileReady && message.mediaLocalPath != null) {
+                                Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(190.dp)
-                                        .clip(MaterialTheme.shapes.small)
+                                        .clip(RoundedCornerShape(14.dp))
                                         .combinedClickable(
                                             onClick = {
                                                 onOpenImageFullscreen(message.mediaLocalPath, message.fileName)
                                             },
                                             onLongClick = { onLongPressMessage(message) }
                                         )
-                                )
+                                ) {
+                                    AsyncImage(
+                                        model = File(message.mediaLocalPath),
+                                        contentDescription = message.fileName,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                    MediaTimestampOverlayPill(
+                                        message = message,
+                                        formattedTimestamp = formattedTimestamp,
+                                        isOutgoing = isOutgoing,
+                                        nowClockFlow = nowClockFlow,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(6.dp)
+                                    )
+                                }
                             } else {
                                 Text(
                                     text = message.textContent,
@@ -298,12 +323,7 @@ fun ChatMessageBubbleItem(
                         }
 
                         MessageType.VIDEO.name -> {
-                            val fileExists = remember(message.mediaLocalPath, message.transferProgress) {
-                                !message.mediaLocalPath.isNullOrBlank() &&
-                                    message.transferProgress >= 100 &&
-                                    File(message.mediaLocalPath).exists()
-                            }
-                            if (fileExists && message.mediaLocalPath != null) {
+                            if (mediaFileReady && message.mediaLocalPath != null) {
                                 val thumb by produceState<Bitmap?>(null, message.mediaLocalPath) {
                                     value = withContext(Dispatchers.IO) {
                                         val retriever = MediaMetadataRetriever()
@@ -321,7 +341,7 @@ fun ChatMessageBubbleItem(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(190.dp)
-                                        .clip(MaterialTheme.shapes.small)
+                                        .clip(RoundedCornerShape(14.dp))
                                         .background(Color.Black.copy(alpha = 0.85f))
                                         .combinedClickable(
                                             onClick = {
@@ -340,7 +360,7 @@ fun ChatMessageBubbleItem(
                                     }
                                     Box(
                                         modifier = Modifier
-                                            .size(50.dp)
+                                            .size(46.dp)
                                             .align(Alignment.Center)
                                             .clip(CircleShape)
                                             .background(Color.Black.copy(alpha = 0.58f)),
@@ -350,25 +370,25 @@ fun ChatMessageBubbleItem(
                                             imageVector = Icons.Filled.PlayArrow,
                                             contentDescription = stringResource(R.string.video_label),
                                             tint = Color.White,
-                                            modifier = Modifier.size(30.dp)
+                                            modifier = Modifier.size(28.dp)
                                         )
                                     }
                                     Surface(
                                         shape = CircleShape,
-                                        color = Color.Black.copy(alpha = 0.58f),
+                                        color = Color.Black.copy(alpha = 0.62f),
                                         modifier = Modifier
                                             .align(Alignment.BottomStart)
-                                            .padding(8.dp)
+                                            .padding(6.dp)
                                     ) {
                                         Row(
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Filled.Videocam,
                                                 contentDescription = null,
                                                 tint = Color.White,
-                                                modifier = Modifier.size(13.dp)
+                                                modifier = Modifier.size(12.dp)
                                             )
                                             Spacer(modifier = Modifier.width(4.dp))
                                             val durLabel = if (message.audioDurationMs > 0L) {
@@ -383,6 +403,15 @@ fun ChatMessageBubbleItem(
                                             )
                                         }
                                     }
+                                    MediaTimestampOverlayPill(
+                                        message = message,
+                                        formattedTimestamp = formattedTimestamp,
+                                        isOutgoing = isOutgoing,
+                                        nowClockFlow = nowClockFlow,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(6.dp)
+                                    )
                                 }
                             } else {
                                 Text(
@@ -425,17 +454,18 @@ fun ChatMessageBubbleItem(
                                         }
                                     },
                                     modifier = Modifier
-                                        .size(40.dp)
+                                        .size(36.dp)
                                         .clip(CircleShape)
                                         .background(MaterialTheme.colorScheme.primary)
                                 ) {
                                     Icon(
                                         imageVector = if (isThisPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                                         contentDescription = stringResource(R.string.voice_message_label),
-                                        tint = MaterialTheme.colorScheme.onPrimary
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(10.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     LinearProgressIndicator(
                                         progress = {
@@ -447,7 +477,7 @@ fun ChatMessageBubbleItem(
                                         },
                                         modifier = Modifier.fillMaxWidth()
                                     )
-                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Spacer(modifier = Modifier.height(3.dp))
                                     Text(
                                         text = "${stringResource(R.string.voice_message_label)} · ${NetworkUtils.formatDurationMs(message.audioDurationMs)}",
                                         style = MaterialTheme.typography.labelSmall,
@@ -464,7 +494,7 @@ fun ChatMessageBubbleItem(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(40.dp)
+                                        .size(36.dp)
                                         .clip(MaterialTheme.shapes.small)
                                         .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
                                     contentAlignment = Alignment.Center
@@ -472,10 +502,11 @@ fun ChatMessageBubbleItem(
                                     Icon(
                                         imageVector = Icons.Filled.Description,
                                         contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(10.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         text = message.fileName ?: "File",
@@ -500,22 +531,24 @@ fun ChatMessageBubbleItem(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             } else if (!message.mediaLocalPath.isNullOrBlank()) {
-                                Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedButton(
                                     onClick = {
                                         onOpenAttachment(message.mediaLocalPath, message.mimeType)
                                     },
                                     shape = MaterialTheme.shapes.small,
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(
                                         imageVector = Icons.Filled.OpenInNew,
                                         contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
+                                        modifier = Modifier.size(15.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = stringResource(R.string.open_file_btn),
+                                        style = MaterialTheme.typography.labelMedium,
                                         maxLines = 1,
                                         softWrap = false
                                     )
@@ -526,58 +559,60 @@ fun ChatMessageBubbleItem(
                         else -> {
                             Text(
                                 text = message.textContent,
-                                style = MaterialTheme.typography.bodyLarge,
+                                style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 19.sp),
                                 color = contentColor
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(3.dp))
+                    if (!mediaFileReady) {
+                        Spacer(modifier = Modifier.height(2.dp))
 
-                    Row(
-                        modifier = Modifier.align(Alignment.End),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        if (message.expiresAt != null) {
-                            SelfDestructCountdownText(
-                                expiresAt = message.expiresAt,
-                                nowClockFlow = nowClockFlow
-                            )
-                        } else if (message.selfDestructSeconds > 0) {
-                            Icon(
-                                imageVector = Icons.Filled.Timer,
-                                contentDescription = null,
-                                tint = contentColor.copy(alpha = 0.65f),
-                                modifier = Modifier.size(12.dp)
-                            )
-                        }
-
-                        Text(
-                            text = formattedTimestamp,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = contentColor.copy(alpha = 0.68f)
-                        )
-
-                        if (isOutgoing) {
-                            val statusIcon = when (message.status) {
-                                DeliveryStatus.SENDING.name -> Icons.Filled.Schedule
-                                DeliveryStatus.SENT.name -> Icons.Filled.Check
-                                DeliveryStatus.DELIVERED.name,
-                                DeliveryStatus.READ.name -> Icons.Filled.DoneAll
-                                else -> Icons.Filled.ErrorOutline
+                        Row(
+                            modifier = Modifier.align(Alignment.End),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (message.expiresAt != null) {
+                                SelfDestructCountdownText(
+                                    expiresAt = message.expiresAt,
+                                    nowClockFlow = nowClockFlow
+                                )
+                            } else if (message.selfDestructSeconds > 0) {
+                                Icon(
+                                    imageVector = Icons.Filled.Timer,
+                                    contentDescription = null,
+                                    tint = contentColor.copy(alpha = 0.65f),
+                                    modifier = Modifier.size(11.dp)
+                                )
                             }
-                            val iconTint = when (message.status) {
-                                DeliveryStatus.READ.name -> MaterialTheme.colorScheme.primary
-                                DeliveryStatus.FAILED.name -> DangerCoral
-                                else -> contentColor.copy(alpha = 0.7f)
-                            }
-                            Icon(
-                                imageVector = statusIcon,
-                                contentDescription = message.status,
-                                tint = iconTint,
-                                modifier = Modifier.size(15.dp)
+
+                            Text(
+                                text = formattedTimestamp,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = contentColor.copy(alpha = 0.68f)
                             )
+
+                            if (isOutgoing) {
+                                val statusIcon = when (message.status) {
+                                    DeliveryStatus.SENDING.name -> Icons.Filled.Schedule
+                                    DeliveryStatus.SENT.name -> Icons.Filled.Check
+                                    DeliveryStatus.DELIVERED.name,
+                                    DeliveryStatus.READ.name -> Icons.Filled.DoneAll
+                                    else -> Icons.Filled.ErrorOutline
+                                }
+                                val iconTint = when (message.status) {
+                                    DeliveryStatus.READ.name -> MaterialTheme.colorScheme.primary
+                                    DeliveryStatus.FAILED.name -> DangerCoral
+                                    else -> contentColor.copy(alpha = 0.7f)
+                                }
+                                Icon(
+                                    imageVector = statusIcon,
+                                    contentDescription = message.status,
+                                    tint = iconTint,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -633,9 +668,73 @@ fun ChatMessageBubbleItem(
 }
 
 @Composable
+private fun MediaTimestampOverlayPill(
+    message: MessageEntity,
+    formattedTimestamp: String,
+    isOutgoing: Boolean,
+    nowClockFlow: StateFlow<Long>,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = CircleShape,
+        color = Color.Black.copy(alpha = 0.62f),
+        modifier = modifier
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            if (message.expiresAt != null) {
+                SelfDestructCountdownText(
+                    expiresAt = message.expiresAt,
+                    nowClockFlow = nowClockFlow,
+                    tintColor = Color(0xFFFCA5A5)
+                )
+            } else if (message.selfDestructSeconds > 0) {
+                Icon(
+                    imageVector = Icons.Filled.Timer,
+                    contentDescription = null,
+                    tint = Color.White.copy(alpha = 0.9f),
+                    modifier = Modifier.size(11.dp)
+                )
+            }
+
+            Text(
+                text = formattedTimestamp,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White
+            )
+
+            if (isOutgoing) {
+                val statusIcon = when (message.status) {
+                    DeliveryStatus.SENDING.name -> Icons.Filled.Schedule
+                    DeliveryStatus.SENT.name -> Icons.Filled.Check
+                    DeliveryStatus.DELIVERED.name,
+                    DeliveryStatus.READ.name -> Icons.Filled.DoneAll
+                    else -> Icons.Filled.ErrorOutline
+                }
+                val iconTint = when (message.status) {
+                    DeliveryStatus.READ.name -> Color(0xFF5EEAD4)
+                    DeliveryStatus.FAILED.name -> DangerCoral
+                    else -> Color.White.copy(alpha = 0.9f)
+                }
+                Icon(
+                    imageVector = statusIcon,
+                    contentDescription = message.status,
+                    tint = iconTint,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SelfDestructCountdownText(
     expiresAt: Long,
-    nowClockFlow: StateFlow<Long>
+    nowClockFlow: StateFlow<Long>,
+    tintColor: Color = DangerCoral
 ) {
     val nowClockMs by nowClockFlow.collectAsStateWithLifecycle()
     val remainingSeconds = ((expiresAt - nowClockMs) / 1000L).coerceAtLeast(0L)
@@ -643,26 +742,28 @@ private fun SelfDestructCountdownText(
         Icon(
             imageVector = Icons.Filled.Timer,
             contentDescription = null,
-            tint = DangerCoral,
-            modifier = Modifier.size(12.dp)
+            tint = tintColor,
+            modifier = Modifier.size(11.dp)
         )
         Spacer(modifier = Modifier.width(3.dp))
         Text(
             text = "${remainingSeconds}s",
             fontFamily = JetBrainsMonoFontFamily,
             style = MaterialTheme.typography.labelSmall,
-            color = DangerCoral
+            color = tintColor
         )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MessageActionsReactionDialog(
     message: MessageEntity,
     onDismiss: () -> Unit,
     onSelectEmoji: (String) -> Unit,
     onReply: () -> Unit,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    onDelete: () -> Unit
 ) {
     val (myReaction, _) = remember(message.reactionsJson) {
         ReactionCodec.parse(message.reactionsJson)
@@ -709,26 +810,30 @@ fun MessageActionsReactionDialog(
 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
 
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     TextButton(
                         onClick = {
                             onDismiss()
                             onReply()
                         },
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("message_action_reply")
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("message_action_reply")
                     ) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.Reply,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(17.dp)
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(stringResource(R.string.reply_action))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = stringResource(R.string.reply_action),
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
 
                     if (message.type == MessageType.TEXT.name && message.textContent.isNotBlank()) {
@@ -737,18 +842,44 @@ fun MessageActionsReactionDialog(
                                 onDismiss()
                                 onCopy()
                             },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("message_action_copy")
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("message_action_copy")
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.ContentCopy,
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(17.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(stringResource(R.string.copy_text_action))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = stringResource(R.string.copy_text_action),
+                                maxLines = 1,
+                                softWrap = false
+                            )
                         }
+                    }
+
+                    TextButton(
+                        onClick = {
+                            onDismiss()
+                            onDelete()
+                        },
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("message_action_delete")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.DeleteOutline,
+                            contentDescription = null,
+                            tint = DangerCoral,
+                            modifier = Modifier.size(17.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = stringResource(R.string.delete_message_action),
+                            color = DangerCoral,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                 }
             }

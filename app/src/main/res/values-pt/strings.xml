@@ -181,4 +181,11 @@
     <string name="update_download_btn">Baixar APK</string>
     <string name="open_source_licenses">Licenças Open Source</string>
     <string name="open_source_licenses_desc">Bibliotecas de código aberto usadas no Chatso</string>
+
+    <string name="delete_message_action">Apagar</string>
+    <string name="msg_deleted">Mensagem apagada.</string>
+    <string name="notif_reacted_preview">reagiu com %1$s \"%2$s\"</string>
+    <string name="safety_mutual_verified">Verificação mútua concluída (ambos confirmaram).</string>
+    <string name="safety_waiting_peer">Você verificou este contato. Aguardando ele verificar você.</string>
+    <string name="safety_peer_verified_you">Este contato verificou você. Confirme o código para concluir.</string>
 </resources>

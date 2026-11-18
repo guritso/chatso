@@ -169,4 +169,11 @@
     <string name="update_download_btn">Télécharger l\'APK</string>
     <string name="open_source_licenses">Licences Open Source</string>
     <string name="open_source_licenses_desc">Bibliothèques open source utilisées par Chatso</string>
+
+    <string name="delete_message_action">Supprimer</string>
+    <string name="msg_deleted">Message supprimé.</string>
+    <string name="notif_reacted_preview">a réagi avec %1$s « %2$s »</string>
+    <string name="safety_mutual_verified">Vérification mutuelle terminée (les deux ont confirmé).</string>
+    <string name="safety_waiting_peer">Vous avez vérifié ce contact. En attente de sa confirmation.</string>
+    <string name="safety_peer_verified_you">Ce contact vous a vérifié. Confirmez son code pour terminer.</string>
 </resources>

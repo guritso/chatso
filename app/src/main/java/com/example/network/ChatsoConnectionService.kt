@@ -113,7 +113,9 @@ object ChatsoNotificationHelper {
         peerId: String,
         senderName: String,
         preview: String,
-        avatarPath: String? = null
+        avatarPath: String? = null,
+        localUsername: String = "You",
+        notificationId: Int = peerId.hashCode()
     ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
@@ -128,18 +130,22 @@ object ChatsoNotificationHelper {
         }
         val pi = PendingIntent.getActivity(
             context,
-            peerId.hashCode(),
+            notificationId,
             openIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val avatarBitmap = buildNotificationAvatarBitmap(senderName, avatarPath)
+        val avatarBitmap = buildNotificationAvatarBitmap(context, senderName, avatarPath)
+        val localUserPerson = Person.Builder()
+            .setName(localUsername.ifBlank { "You" })
+            .setKey("chatso_local_user")
+            .build()
         val senderPerson = Person.Builder()
             .setName(senderName)
             .setKey(peerId)
             .setIcon(IconCompat.createWithBitmap(avatarBitmap))
             .build()
-        val style = NotificationCompat.MessagingStyle(senderPerson)
+        val style = NotificationCompat.MessagingStyle(localUserPerson)
             .addMessage(preview, System.currentTimeMillis(), senderPerson)
 
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
@@ -156,11 +162,42 @@ object ChatsoNotificationHelper {
             .build()
 
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        nm?.notify(peerId.hashCode(), notification)
+        nm?.notify(notificationId, notification)
     }
 
-    private fun buildNotificationAvatarBitmap(senderName: String, avatarPath: String?): Bitmap {
-        val sizePx = 128
+    fun showIncomingReactionNotification(
+        context: Context,
+        peerId: String,
+        messageId: String,
+        senderName: String,
+        emoji: String,
+        reactedSnippet: String,
+        avatarPath: String? = null,
+        localUsername: String = "You"
+    ) {
+        val localized = LocaleHelper.wrapContext(context)
+        val body = localized.getString(R.string.notif_reacted_preview, emoji, reactedSnippet)
+        showIncomingMessageNotification(
+            context = context,
+            peerId = peerId,
+            senderName = senderName,
+            preview = body,
+            avatarPath = avatarPath,
+            localUsername = localUsername,
+            notificationId = ("reaction_${peerId}_$messageId").hashCode()
+        )
+    }
+
+    private fun buildNotificationAvatarBitmap(
+        context: Context,
+        senderName: String,
+        avatarPath: String?
+    ): Bitmap {
+        val sizePx = 144
+        val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(output)
+
+        var drewPhoto = false
         if (!avatarPath.isNullOrBlank()) {
             val file = File(avatarPath)
             if (file.exists()) {
@@ -171,43 +208,79 @@ object ChatsoNotificationHelper {
                     val y = (decoded.height - minSide) / 2
                     val square = Bitmap.createBitmap(decoded, x, y, minSide, minSide)
                     val scaled = Bitmap.createScaledBitmap(square, sizePx, sizePx, true)
-                    val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-                    val canvas = Canvas(output)
+                    val circleBitmap = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+                    val circleCanvas = Canvas(circleBitmap)
                     val paint = Paint(Paint.ANTI_ALIAS_FLAG)
                     val rect = Rect(0, 0, sizePx, sizePx)
-                    canvas.drawARGB(0, 0, 0, 0)
-                    canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
+                    circleCanvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
                     paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
-                    canvas.drawBitmap(scaled, rect, rect, paint)
+                    circleCanvas.drawBitmap(scaled, rect, rect, paint)
+                    canvas.drawBitmap(circleBitmap, 0f, 0f, null)
+                    circleBitmap.recycle()
                     if (square !== decoded) square.recycle()
                     if (scaled !== square) scaled.recycle()
                     decoded.recycle()
-                    return output
+                    drewPhoto = true
                 }
             }
         }
 
-        val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(output)
-        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = BRAND_TEAL }
-        canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, bgPaint)
+        if (!drewPhoto) {
+            val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = BRAND_TEAL }
+            canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, bgPaint)
 
-        val initials = senderName.trim()
-            .split(" ", "_", "-")
-            .filter { it.isNotBlank() }
-            .take(2)
-            .joinToString("") { it.first().uppercaseChar().toString() }
-            .ifBlank { "?" }
+            val initials = senderName.trim()
+                .split(" ", "_", "-")
+                .filter { it.isNotBlank() }
+                .take(2)
+                .joinToString("") { it.first().uppercaseChar().toString() }
+                .ifBlank { "?" }
 
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.WHITE
-            textSize = 48f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            textAlign = Paint.Align.CENTER
+            val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
+                textSize = 52f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+                textAlign = Paint.Align.CENTER
+            }
+            val fm = textPaint.fontMetrics
+            val baseline = sizePx / 2f - (fm.ascent + fm.descent) / 2f
+            canvas.drawText(initials, sizePx / 2f, baseline, textPaint)
         }
-        val fm = textPaint.fontMetrics
-        val baseline = sizePx / 2f - (fm.ascent + fm.descent) / 2f
-        canvas.drawText(initials, sizePx / 2f, baseline, textPaint)
+
+        // Draw small circular Chatso icon badge on bottom-right corner
+        val badgeRadius = sizePx * 0.19f
+        val cx = sizePx - badgeRadius - 3f
+        val cy = sizePx - badgeRadius - 3f
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+        }
+        val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = BRAND_TEAL
+        }
+        canvas.drawCircle(cx, cy, badgeRadius + 3.5f, borderPaint)
+        canvas.drawCircle(cx, cy, badgeRadius, badgeBgPaint)
+
+        val badgeDrawable = runCatching {
+            ContextCompat.getDrawable(context, R.drawable.img_launcher_icon_1794975444462)
+                ?: ContextCompat.getDrawable(context, R.drawable.ic_notification_chatso)
+        }.getOrNull()
+        if (badgeDrawable != null) {
+            val inset = (badgeRadius * 0.14f).toInt()
+            val clipPath = android.graphics.Path().apply {
+                addCircle(cx, cy, badgeRadius, android.graphics.Path.Direction.CW)
+            }
+            canvas.save()
+            canvas.clipPath(clipPath)
+            badgeDrawable.setBounds(
+                (cx - badgeRadius).toInt() + inset,
+                (cy - badgeRadius).toInt() + inset,
+                (cx + badgeRadius).toInt() - inset,
+                (cy + badgeRadius).toInt() - inset
+            )
+            badgeDrawable.draw(canvas)
+            canvas.restore()
+        }
+
         return output
     }
 }

@@ -523,6 +523,14 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun deleteSingleMessage(messageId: String) {
+        val peerId = _activePeerId.value ?: return
+        viewModelScope.launch {
+            repository.deleteSingleMessage(peerId, messageId)
+            _snackbarMessage.value = str(R.string.msg_deleted)
+        }
+    }
+
     fun deleteActiveConversation() {
         val peerId = _activePeerId.value ?: return
         closeConversation()

@@ -169,4 +169,11 @@
     <string name="update_download_btn">Download APK</string>
     <string name="open_source_licenses">Open Source Licenses</string>
     <string name="open_source_licenses_desc">Third-party libraries used by Chatso</string>
+
+    <string name="delete_message_action">Delete</string>
+    <string name="msg_deleted">Message deleted.</string>
+    <string name="notif_reacted_preview">reacted with %1$s \"%2$s\"</string>
+    <string name="safety_mutual_verified">Mutually verified (both devices confirmed).</string>
+    <string name="safety_waiting_peer">You verified this contact. Waiting for them to verify you.</string>
+    <string name="safety_peer_verified_you">This contact verified you. Confirm their code to finish mutual verification.</string>
 </resources>

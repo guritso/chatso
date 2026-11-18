@@ -25,12 +25,16 @@ data class PeerEntity(
     val lastIp: String = "",
     val lastPort: Int = LocalIdentity.DEFAULT_TCP_PORT,
     val isVerified: Boolean = false,
+    val peerVerifiedMe: Boolean = false,
     val keyChangedWarning: Boolean = false,
     val selfDestructSeconds: Int = 0,
     val lastMessagePreview: String = "",
     val lastActivityAt: Long = System.currentTimeMillis(),
     val unreadCount: Int = 0
-)
+) {
+    val isMutuallyVerified: Boolean
+        get() = isVerified && peerVerifiedMe
+}
 
 @Entity(
     tableName = "messages",
@@ -82,6 +86,12 @@ interface ChatDao {
     @Query("UPDATE peers SET isVerified = :verified, keyChangedWarning = 0 WHERE peerId = :peerId")
     suspend fun setPeerVerified(peerId: String, verified: Boolean)
 
+    @Query("UPDATE peers SET peerVerifiedMe = :verified WHERE peerId = :peerId")
+    suspend fun setPeerVerifiedMe(peerId: String, verified: Boolean)
+
+    @Query("UPDATE peers SET lastMessagePreview = :preview, lastActivityAt = :lastActivityAt WHERE peerId = :peerId")
+    suspend fun updatePeerLastPreview(peerId: String, preview: String, lastActivityAt: Long)
+
     @Query("UPDATE peers SET selfDestructSeconds = :seconds WHERE peerId = :peerId")
     suspend fun updatePeerSelfDestruct(peerId: String, seconds: Int)
 
@@ -90,6 +100,9 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE peerId = :peerId ORDER BY createdAt DESC, messageId DESC LIMIT :limit")
     fun observeMessagesForPeer(peerId: String, limit: Int): Flow<List<MessageEntity>>
+
+    @Query("SELECT * FROM messages WHERE peerId = :peerId ORDER BY createdAt DESC, messageId DESC LIMIT 1")
+    suspend fun getLatestMessageForPeer(peerId: String): MessageEntity?
 
     @Query("SELECT * FROM messages WHERE messageId = :messageId LIMIT 1")
     suspend fun getMessageById(messageId: String): MessageEntity?
@@ -134,7 +147,7 @@ interface ChatDao {
 
 @Database(
     entities = [PeerEntity::class, MessageEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {
@@ -150,6 +163,12 @@ abstract class ChatDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE peers ADD COLUMN peerVerifiedMe INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var INSTANCE: ChatDatabase? = null
 
@@ -160,7 +179,7 @@ abstract class ChatDatabase : RoomDatabase() {
                     ChatDatabase::class.java,
                     "chatso_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .fallbackToDestructiveMigration(true)
                     .build()
                     .also { INSTANCE = it }

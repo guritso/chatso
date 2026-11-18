@@ -497,6 +497,7 @@ private fun ChatsoAuthenticatedShell(
                                     onSetSelfDestruct = viewModel::setSelfDestructSeconds,
                                     onVerifyPeerKey = viewModel::verifyActivePeerKey,
                                     onReconnect = viewModel::reconnectActivePeer,
+                                    onDeleteMessage = viewModel::deleteSingleMessage,
                                     onDeleteConversation = viewModel::deleteActiveConversation,
                                     onNotify = viewModel::postMessage
                                 )
@@ -600,6 +601,7 @@ private fun ChatsoAuthenticatedShell(
                             onSetSelfDestruct = viewModel::setSelfDestructSeconds,
                             onVerifyPeerKey = viewModel::verifyActivePeerKey,
                             onReconnect = viewModel::reconnectActivePeer,
+                            onDeleteMessage = viewModel::deleteSingleMessage,
                             onDeleteConversation = viewModel::deleteActiveConversation,
                             onNotify = viewModel::postMessage
                         )

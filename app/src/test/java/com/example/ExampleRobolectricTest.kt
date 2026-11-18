@@ -230,6 +230,7 @@ class ExampleRobolectricTest {
         val receivedReplyTag = CompletableFuture<String?>()
         val receivedReaction = CompletableFuture<String>()
         val peerForegroundState = CompletableFuture<Boolean>()
+        val peerVerifiedState = CompletableFuture<Boolean>()
 
         try {
             val aliceMat = CryptoEngine.createIdentityMaterial()
@@ -281,6 +282,9 @@ class ExampleRobolectricTest {
                 override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
                 override suspend fun onIncomingReaction(peerId: String, messageId: String, emoji: String) {
                     receivedReaction.complete("$messageId:$emoji")
+                }
+                override suspend fun onPeerVerificationChanged(peerId: String, verifiedMe: Boolean) {
+                    if (verifiedMe) peerVerifiedState.complete(true)
                 }
                 override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
                 override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
@@ -374,6 +378,9 @@ class ExampleRobolectricTest {
 
             assertTrue(nodeA.sendReaction(connectedPeerId, "msg-001", "👍"))
             assertEquals("msg-001:👍", receivedReaction.get(3, TimeUnit.SECONDS))
+
+            nodeA.sendVerificationStatus(connectedPeerId, true)
+            assertTrue(peerVerifiedState.get(3, TimeUnit.SECONDS))
 
             nodeA.disconnectAll()
             nodeB.disconnectAll()
@@ -478,6 +485,71 @@ class ExampleRobolectricTest {
     }
 
     @Test
+    fun `single message deletion updates preview and mutual verification requires both peers`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        val peerId = "peer_delete_verify_test"
+        dao.deleteAllMessagesForPeer(peerId)
+        dao.deletePeer(peerId)
+
+        var foreground = false
+        var reactionNotifPayload: String? = null
+        val repo = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = LocalIdentityStore(context),
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { foreground }
+        )
+        repo.onIncomingReactionNotification = { _, msgId, sender, emoji, snippet, _ ->
+            reactionNotifPayload = "$sender:$emoji:$snippet:$msgId"
+        }
+
+        try {
+            val mat = CryptoEngine.createIdentityMaterial()
+            repo.onPeerHandshaked(
+                peerId = peerId,
+                publicKeyBase64 = mat.publicKeyBase64,
+                remoteIp = "10.8.0.22",
+                remoteListenPort = 42850,
+                username = "Guritso",
+                avatarBase64 = null
+            )
+
+            // Mutual verification requires both local and remote verification
+            dao.setPeerVerified(peerId, true)
+            assertFalse(dao.getPeerById(peerId)!!.isMutuallyVerified)
+            repo.onPeerVerificationChanged(peerId, true)
+            assertTrue(dao.getPeerById(peerId)!!.isMutuallyVerified)
+
+            // Incoming messages & reaction notification while backgrounded
+            val t = System.currentTimeMillis()
+            repo.onIncomingTextMessage(peerId, "m1", "First message", 0, t)
+            repo.onIncomingTextMessage(peerId, "m2", "Second message", 0, t + 100)
+            repo.onIncomingReaction(peerId, "m2", "🔥")
+            assertEquals("Guritso:🔥:Second message:m2", reactionNotifPayload)
+
+            // Deleting latest message restores previous message as peer preview
+            repo.deleteSingleMessage(peerId, "m2")
+            assertNull(dao.getMessageById("m2"))
+            assertEquals("First message", dao.getPeerById(peerId)!!.lastMessagePreview)
+
+            // Deleting last remaining message clears preview cleanly
+            repo.deleteSingleMessage(peerId, "m1")
+            assertNull(dao.getMessageById("m1"))
+            assertEquals("", dao.getPeerById(peerId)!!.lastMessagePreview)
+        } finally {
+            repo.shutdown()
+            dao.deleteAllMessagesForPeer(peerId)
+            dao.deletePeer(peerId)
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun `notification uses monochrome drawable icon and handles missing avatar safely`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val notif = ChatsoNotificationHelper.buildServiceNotification(context, connectedCount = 2)
@@ -486,9 +558,20 @@ class ExampleRobolectricTest {
         ChatsoNotificationHelper.showIncomingMessageNotification(
             context = context,
             peerId = "peer_notif_1",
-            senderName = "Marina Silva",
+            senderName = "Guritso",
             preview = "Oi!",
-            avatarPath = null
+            avatarPath = null,
+            localUsername = "Tester"
+        )
+        ChatsoNotificationHelper.showIncomingReactionNotification(
+            context = context,
+            peerId = "peer_notif_1",
+            messageId = "m_1",
+            senderName = "Guritso",
+            emoji = "❤️",
+            reactedSnippet = "Oi!",
+            avatarPath = null,
+            localUsername = "Tester"
         )
         NetworkUtils.isIgnoringBatteryOptimizations(context)
     }

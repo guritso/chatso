@@ -50,6 +50,17 @@ class ChatRepository(
         (peerId: String, senderName: String, preview: String, avatarPath: String?) -> Unit
     )? = null
 
+    var onIncomingReactionNotification: (
+        (
+            peerId: String,
+            messageId: String,
+            senderName: String,
+            emoji: String,
+            messageSnippet: String,
+            avatarPath: String?
+        ) -> Unit
+    )? = null
+
     init {
         nodeManager.setAvatarProvider {
             val snap = identityStore.getSnapshot()
@@ -406,6 +417,40 @@ class ChatRepository(
 
     suspend fun markPeerVerified(peerId: String, verified: Boolean) {
         chatDao.setPeerVerified(peerId, verified)
+        if (ensurePeerConnected(peerId)) {
+            nodeManager.sendVerificationStatus(peerId, verified)
+        }
+    }
+
+    override suspend fun isPeerVerifiedByMe(peerId: String): Boolean {
+        return chatDao.getPeerById(peerId)?.isVerified == true
+    }
+
+    override suspend fun onPeerVerificationChanged(peerId: String, verifiedMe: Boolean) {
+        chatDao.setPeerVerifiedMe(peerId, verifiedMe)
+    }
+
+    suspend fun deleteSingleMessage(peerId: String, messageId: String) {
+        val msg = chatDao.getMessageById(messageId) ?: return
+        mediaStorage.deleteMediaFile(msg.mediaLocalPath)
+        chatDao.deleteMessageById(messageId)
+        val latest = chatDao.getLatestMessageForPeer(peerId)
+        val peer = chatDao.getPeerById(peerId)
+        if (peer != null) {
+            val nextPreview = when {
+                latest == null -> ""
+                latest.type == MessageType.IMAGE.name -> "Photo: ${latest.fileName ?: "image"}"
+                latest.type == MessageType.VIDEO.name -> "Video: ${latest.fileName ?: "video"}"
+                latest.type == MessageType.VOICE.name -> "Voice message (${NetworkUtils.formatDurationMs(latest.audioDurationMs)})"
+                latest.type == MessageType.FILE.name -> "File: ${latest.fileName ?: "file"}"
+                else -> latest.textContent
+            }
+            chatDao.updatePeerLastPreview(
+                peerId = peerId,
+                preview = nextPreview,
+                lastActivityAt = latest?.createdAt ?: peer.lastActivityAt
+            )
+        }
     }
 
     suspend fun deleteConversation(peerId: String) {
@@ -450,6 +495,7 @@ class ChatRepository(
             lastIp = remoteIp,
             lastPort = remoteListenPort,
             isVerified = if (keyChanged) false else (existing?.isVerified ?: false),
+            peerVerifiedMe = if (keyChanged) false else (existing?.peerVerifiedMe ?: false),
             keyChangedWarning = keyChanged,
             selfDestructSeconds = existing?.selfDestructSeconds ?: 0,
             lastMessagePreview = existing?.lastMessagePreview?.ifBlank { "E2EE channel established" }
@@ -526,6 +572,27 @@ class ChatRepository(
         val msg = chatDao.getMessageById(messageId) ?: return
         val nextJson = ReactionCodec.applyPeerReaction(msg.reactionsJson, emoji)
         chatDao.updateMessageReactions(messageId, nextJson)
+
+        val isOpen = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
+        if (!isOpen && emoji.isNotBlank()) {
+            val peer = chatDao.getPeerById(peerId)
+            val senderName = peer?.username ?: "Chatso"
+            val snippet = when (msg.type) {
+                MessageType.IMAGE.name -> "Photo"
+                MessageType.VIDEO.name -> "Video"
+                MessageType.VOICE.name -> "Voice message"
+                MessageType.FILE.name -> msg.fileName ?: "File"
+                else -> msg.textContent
+            }.trim().let { if (it.length > 48) "${it.take(45)}..." else it }
+            onIncomingReactionNotification?.invoke(
+                peerId,
+                messageId,
+                senderName,
+                emoji,
+                snippet,
+                peer?.avatarPath
+            )
+        }
     }
 
     override suspend fun onIncomingFileStart(

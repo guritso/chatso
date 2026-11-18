@@ -72,6 +72,8 @@ interface P2PEventListener {
     suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int)
     suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File)
     suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus)
+    suspend fun isPeerVerifiedByMe(peerId: String): Boolean = false
+    suspend fun onPeerVerificationChanged(peerId: String, verifiedMe: Boolean) {}
     suspend fun onIncomingReaction(peerId: String, messageId: String, emoji: String) {}
     suspend fun onTypingChanged(peerId: String, isTyping: Boolean)
     suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int)
@@ -626,6 +628,14 @@ class P2PNodeManager(
                     sendReceiptInternal(session, msgId, DeliveryStatus.DELIVERED)
                     sendReceiptInternal(session, msgId, DeliveryStatus.READ)
                 }
+                "VERIFY_STATUS" -> {
+                    val verified = json.optBoolean("verified", false)
+                    val echoVerify = JSONObject().apply {
+                        put("cmd", "VERIFY_STATUS")
+                        put("verified", verified)
+                    }.toString().toByteArray(Charsets.UTF_8)
+                    session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, echoVerify)
+                }
             }
             return
         }
@@ -646,6 +656,12 @@ class P2PNodeManager(
                     username = name,
                     avatarBase64 = avatarB64
                 )
+                if (json.has("verifiedPeer")) {
+                    listener.onPeerVerificationChanged(session.peerId, json.optBoolean("verifiedPeer", false))
+                }
+            }
+            "VERIFY_STATUS" -> {
+                listener.onPeerVerificationChanged(session.peerId, json.optBoolean("verified", false))
             }
             "APP_STATE" -> {
                 val isFg = json.optBoolean("fg", false)
@@ -777,11 +793,13 @@ class P2PNodeManager(
 
     private suspend fun sendProfileSync(session: ActivePeerSession, identity: LocalIdentity) {
         val avatarB64 = localAvatarBase64Provider()
+        val verifiedPeer = listener.isPeerVerifiedByMe(session.peerId)
         val syncJson = JSONObject().apply {
             put("cmd", "PROFILE_SYNC")
             put("name", identity.username)
             put("port", _boundPort.value)
             put("fg", localAppInForeground)
+            put("verifiedPeer", verifiedPeer)
             if (!avatarB64.isNullOrBlank()) put("avatar", avatarB64)
         }
         session.sendEncryptedFrame(
@@ -964,6 +982,17 @@ class P2PNodeManager(
             val payload = JSONObject().apply {
                 put("cmd", "SELF_DESTRUCT_CONFIG")
                 put("sd", seconds)
+            }.toString().toByteArray(Charsets.UTF_8)
+            session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
+        }
+    }
+
+    suspend fun sendVerificationStatus(peerId: String, verified: Boolean) {
+        val session = sessions[peerId] ?: return
+        runCatching {
+            val payload = JSONObject().apply {
+                put("cmd", "VERIFY_STATUS")
+                put("verified", verified)
             }.toString().toByteArray(Charsets.UTF_8)
             session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
         }

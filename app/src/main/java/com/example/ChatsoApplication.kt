@@ -10,6 +10,7 @@ import com.example.network.ChatsoNotificationHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class ChatsoContainer(context: Context) {
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -34,15 +35,38 @@ class ChatsoContainer(context: Context) {
         repository.onIncomingNotification = { peerId, senderName, preview, avatarPath ->
             val activeOpen = repository.currentlyOpenPeerId
             if (!isAppInForeground || activeOpen != peerId) {
-                ChatsoNotificationHelper.showIncomingMessageNotification(
-                    context = context,
-                    peerId = peerId,
-                    senderName = senderName,
-                    preview = preview,
-                    avatarPath = avatarPath
-                )
+                appScope.launch {
+                    val localName = identityStore.getSnapshot().username.ifBlank { "You" }
+                    ChatsoNotificationHelper.showIncomingMessageNotification(
+                        context = context,
+                        peerId = peerId,
+                        senderName = senderName,
+                        preview = preview,
+                        avatarPath = avatarPath,
+                        localUsername = localName
+                    )
+                }
             }
         }
+        repository.onIncomingReactionNotification =
+            { peerId, messageId, senderName, emoji, snippet, avatarPath ->
+                val activeOpen = repository.currentlyOpenPeerId
+                if (!isAppInForeground || activeOpen != peerId) {
+                    appScope.launch {
+                        val localName = identityStore.getSnapshot().username.ifBlank { "You" }
+                        ChatsoNotificationHelper.showIncomingReactionNotification(
+                            context = context,
+                            peerId = peerId,
+                            messageId = messageId,
+                            senderName = senderName,
+                            emoji = emoji,
+                            reactedSnippet = snippet,
+                            avatarPath = avatarPath,
+                            localUsername = localName
+                        )
+                    }
+                }
+            }
     }
 }
 

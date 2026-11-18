@@ -174,6 +174,7 @@ fun ChatDetailScreen(
     onSetSelfDestruct: (Int) -> Unit,
     onVerifyPeerKey: (Boolean) -> Unit,
     onReconnect: () -> Unit,
+    onDeleteMessage: (String) -> Unit,
     onDeleteConversation: () -> Unit,
     onNotify: (String) -> Unit
 ) {
@@ -358,7 +359,7 @@ fun ChatDetailScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (peer.isVerified) {
+                        if (peer.isMutuallyVerified) {
                             Spacer(modifier = Modifier.width(4.dp))
                             Icon(
                                 imageVector = Icons.Filled.VerifiedUser,
@@ -421,7 +422,7 @@ fun ChatDetailScreen(
                     Icon(
                         imageVector = Icons.Filled.Shield,
                         contentDescription = stringResource(R.string.cd_verify_key),
-                        tint = if (peer.isVerified) {
+                        tint = if (peer.isMutuallyVerified) {
                             OnlineEmerald
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
@@ -927,7 +928,8 @@ fun ChatDetailScreen(
             onCopy = {
                 clipboard.setPrimaryClip(ClipData.newPlainText("Chatso", msg.textContent))
                 onNotify(copiedMsg)
-            }
+            },
+            onDelete = { onDeleteMessage(msg.messageId) }
         )
     }
 
@@ -1014,6 +1016,34 @@ fun ChatDetailScreen(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    val mutualStatusText = when {
+                        peer.isMutuallyVerified -> stringResource(R.string.safety_mutual_verified)
+                        peer.isVerified && !peer.peerVerifiedMe -> stringResource(R.string.safety_waiting_peer)
+                        !peer.isVerified && peer.peerVerifiedMe -> stringResource(R.string.safety_peer_verified_you)
+                        else -> null
+                    }
+                    if (mutualStatusText != null) {
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = if (peer.isMutuallyVerified) {
+                                OnlineEmerald.copy(alpha = 0.14f)
+                            } else {
+                                MaterialTheme.colorScheme.secondaryContainer
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = mutualStatusText,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (peer.isMutuallyVerified) {
+                                    OnlineEmerald
+                                } else {
+                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                },
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {

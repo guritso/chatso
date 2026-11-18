@@ -318,7 +318,7 @@ private fun PeerConversationCard(
                                 tint = WarningAmber,
                                 modifier = Modifier.size(16.dp)
                             )
-                        } else if (peer.isVerified) {
+                        } else if (peer.isMutuallyVerified) {
                             Spacer(modifier = Modifier.width(6.dp))
                             Icon(
                                 imageVector = Icons.Filled.VerifiedUser,
