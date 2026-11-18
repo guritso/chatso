@@ -54,7 +54,7 @@ fun ChatsoAvatar(
             if (resolvedModel != null) {
                 AsyncImage(
                     model = resolvedModel,
-                    contentDescription = "Foto de perfil de $name",
+                    contentDescription = "Profile photo of $name",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -72,7 +72,7 @@ fun ChatsoAvatar(
             } else {
                 Icon(
                     imageVector = Icons.Filled.Person,
-                    contentDescription = "Avatar padrão",
+                    contentDescription = "Default avatar",
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.size(size * 0.52f)
                 )

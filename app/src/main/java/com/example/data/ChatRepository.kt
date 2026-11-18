@@ -143,7 +143,7 @@ class ChatRepository(
     suspend fun sendUriAttachment(peerId: String, uri: Uri, forceImage: Boolean): Boolean {
         val copied = mediaStorage.copyUriToPrivateMedia(
             uri,
-            if (forceImage) "foto" else "arquivo"
+            if (forceImage) "photo" else "file"
         ) ?: return false
         val msgType = if (forceImage || copied.mimeType.startsWith("image/")) {
             MessageType.IMAGE
@@ -185,9 +185,9 @@ class ChatRepository(
         val now = System.currentTimeMillis()
         val sdSec = peer.selfDestructSeconds
         val preview = when (messageType) {
-            MessageType.IMAGE -> "Foto: $fileName"
-            MessageType.VOICE -> "Mensagem de voz (${NetworkUtils.formatDurationMs(audioDurationMs)})"
-            else -> "Arquivo: $fileName"
+            MessageType.IMAGE -> "Photo: $fileName"
+            MessageType.VOICE -> "Voice message (${NetworkUtils.formatDurationMs(audioDurationMs)})"
+            else -> "File: $fileName"
         }
 
         val entity = MessageEntity(
@@ -296,7 +296,7 @@ class ChatRepository(
         val resolvedName = if (username.isNotBlank() && username != remoteIp) {
             username
         } else {
-            existing?.username ?: username.ifBlank { "Contato P2P" }
+            existing?.username ?: username.ifBlank { "P2P Contact" }
         }
 
         val updated = PeerEntity(
@@ -310,8 +310,8 @@ class ChatRepository(
             isVerified = if (keyChanged) false else (existing?.isVerified ?: false),
             keyChangedWarning = keyChanged,
             selfDestructSeconds = existing?.selfDestructSeconds ?: 0,
-            lastMessagePreview = existing?.lastMessagePreview?.ifBlank { "Canal E2EE estabelecido" }
-                ?: "Canal E2EE estabelecido",
+            lastMessagePreview = existing?.lastMessagePreview?.ifBlank { "E2EE channel established" }
+                ?: "E2EE channel established",
             lastActivityAt = existing?.lastActivityAt ?: System.currentTimeMillis(),
             unreadCount = existing?.unreadCount ?: 0
         )
@@ -382,9 +382,9 @@ class ChatRepository(
     ): File {
         val targetFile = mediaStorage.createIncomingMediaFile(messageId, fileName)
         val preview = when (messageType) {
-            MessageType.IMAGE -> "Recebendo foto: $fileName"
-            MessageType.VOICE -> "Recebendo mensagem de voz…"
-            else -> "Recebendo arquivo: $fileName"
+            MessageType.IMAGE -> "Receiving photo: $fileName"
+            MessageType.VOICE -> "Receiving voice message…"
+            else -> "Receiving file: $fileName"
         }
         val msg = MessageEntity(
             messageId = messageId,
@@ -420,9 +420,9 @@ class ChatRepository(
             null
         }
         val finalPreview = when (existing.type) {
-            MessageType.IMAGE.name -> "Foto: ${existing.fileName ?: "imagem"}"
-            MessageType.VOICE.name -> "Mensagem de voz (${NetworkUtils.formatDurationMs(existing.audioDurationMs)})"
-            else -> "Arquivo: ${existing.fileName ?: file.name}"
+            MessageType.IMAGE.name -> "Photo: ${existing.fileName ?: "image"}"
+            MessageType.VOICE.name -> "Voice message (${NetworkUtils.formatDurationMs(existing.audioDurationMs)})"
+            else -> "File: ${existing.fileName ?: file.name}"
         }
         chatDao.upsertMessage(
             existing.copy(

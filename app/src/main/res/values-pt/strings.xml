@@ -1,0 +1,157 @@
+<resources>
+    <string name="app_name">Chatso</string>
+
+    <!-- Onboarding -->
+    <string name="onboarding_title">Privado por chave pública</string>
+    <string name="onboarding_subtitle">Chat direto na VPN, rede local ou localhost, sem servidores.</string>
+    <string name="username_label">Nome de usuário</string>
+    <string name="username_placeholder">Seu nome</string>
+    <string name="choose_avatar">Foto de perfil</string>
+    <string name="discoverable_title">Permitir ser encontrado</string>
+    <string name="discoverable_on_desc">Visível na busca da rede local/VPN</string>
+    <string name="discoverable_off_desc">Modo Invisível: oculto na rede</string>
+    <string name="create_local_identity">Criar e Entrar</string>
+
+    <!-- Navigation -->
+    <string name="tab_chats">Conversas</string>
+    <string name="tab_connect">Conectar</string>
+    <string name="tab_profile">Perfil</string>
+
+    <!-- Visibility & Status -->
+    <string name="status_visible">Visível</string>
+    <string name="status_invisible">Invisível</string>
+    <string name="status_online">Online</string>
+    <string name="status_typing">Digitando…</string>
+    <string name="status_offline_tap">Offline · Toque para reconectar</string>
+
+    <!-- Chats List -->
+    <string name="search_chats_hint">Pesquisar conversa…</string>
+    <string name="empty_chats_title">Nenhuma conversa</string>
+    <string name="empty_chats_body">Conecte-se na mesma VPN, Wi-Fi ou localhost para conversar com criptografia ponta a ponta.</string>
+    <string name="connect_cta">Conectar</string>
+    <string name="test_localhost_cta">Testar Localhost</string>
+    <string name="new_connection">Nova conexão</string>
+    <string name="select_chat_hint">Selecione uma conversa</string>
+
+    <!-- Connect Screen -->
+    <string name="connect_title">Conectar</string>
+    <string name="connect_lan_tab">Na Rede</string>
+    <string name="connect_qr_tab">QR Code</string>
+    <string name="connect_manual_tab">IP / VPN</string>
+    <string name="scan_network_btn">Buscar na Rede</string>
+    <string name="scanning_network">Buscando…</string>
+    <string name="no_peers_found">Nenhum dispositivo visível encontrado.\nContatos em Modo Invisível usam QR Code ou IP manual.</string>
+    <string name="connect_btn">Conectar</string>
+    <string name="connecting_btn">Conectando…</string>
+    <string name="my_qr_tab">Meu QR</string>
+    <string name="scan_qr_tab">Escanear</string>
+    <string name="copy_btn">Copiar</string>
+    <string name="renew_btn">Renovar</string>
+    <string name="camera_permission_msg">Permita a câmera para ler o QR Code.</string>
+    <string name="allow_camera_btn">Permitir câmera</string>
+    <string name="pick_qr_image_btn">Ler QR de imagem</string>
+    <string name="ip_address_label">Endereço IP</string>
+    <string name="ip_address_hint">10.8.0.2 ou 127.0.0.1</string>
+    <string name="port_label">Porta</string>
+    <string name="use_localhost_chip">Localhost (127.0.0.1)</string>
+    <string name="your_ip_label">Seu IP:</string>
+
+    <!-- Chat Detail -->
+    <string name="message_placeholder">Mensagem…</string>
+    <string name="key_changed_warning">A chave pública mudou. Toque para conferir.</string>
+    <string name="send_photo">Enviar foto</string>
+    <string name="send_file">Enviar arquivo</string>
+    <string name="delete_chat">Excluir conversa</string>
+    <string name="recording_voice">Gravando</string>
+    <string name="send_btn">Enviar</string>
+    <string name="voice_message_label">Áudio</string>
+    <string name="open_file_btn">Abrir</string>
+    <string name="open_external_btn">Abrir fora</string>
+    <string name="self_destruct_title">Autodestruição</string>
+    <string name="self_destruct_desc">Apaga mensagens e arquivos após a leitura.</string>
+    <string name="timer_off">Desativado</string>
+    <string name="timer_30s">30 seg</string>
+    <string name="timer_5m">5 min</string>
+    <string name="timer_1h">1 hora</string>
+    <string name="safety_title">Código de Segurança</string>
+    <string name="safety_desc">Compare com seu contato para confirmar a criptografia ponta a ponta:</string>
+    <string name="safety_pubkey_label">Impressão da chave:</string>
+    <string name="mark_verified">Marcar verificada</string>
+    <string name="unmark_verified">Remover verificação</string>
+    <string name="close_btn">Fechar</string>
+
+    <!-- Profile & Settings -->
+    <string name="profile_title">Perfil e Rede</string>
+    <string name="change_photo">Trocar foto</string>
+    <string name="save_btn">Salvar</string>
+    <string name="privacy_section">Privacidade</string>
+    <string name="block_unknown_title">Bloquear desconhecidos</string>
+    <string name="block_unknown_desc">Aceitar apenas contatos salvos ou QR Code</string>
+    <string name="theme_section">Aparência</string>
+    <string name="theme_auto">Auto</string>
+    <string name="theme_light">Claro</string>
+    <string name="theme_dark">Escuro</string>
+    <string name="language_section">Idioma</string>
+    <string name="language_system">Sistema</string>
+    <string name="public_key_section">Chave Pública</string>
+    <string name="copy_key_btn">Copiar chave</string>
+    <string name="network_section">Rede e Porta</string>
+    <string name="tcp_port_label">Porta TCP</string>
+    <string name="apply_btn">Aplicar</string>
+
+    <!-- Feedback / Toasts -->
+    <string name="msg_enter_username">Informe um nome de usuário.</string>
+    <string name="msg_profile_saved">Perfil salvo.</string>
+    <string name="msg_visible_on">Visível na rede.</string>
+    <string name="msg_invisible_on">Modo Invisível ativado.</string>
+    <string name="msg_block_unknown_on">Apenas contatos salvos ou QR.</string>
+    <string name="msg_block_unknown_off">Conexões por IP liberadas.</string>
+    <string name="msg_qr_renewed">Token QR renovado.</string>
+    <string name="msg_invalid_port">Porta inválida (1024–65535).</string>
+    <string name="msg_port_applied">Porta alterada para %1$d.</string>
+    <string name="msg_enter_ip">Informe um endereço IP.</string>
+    <string name="msg_invalid_qr">QR Code inválido.</string>
+    <string name="msg_no_qr_image">Nenhum QR encontrado na imagem.</string>
+    <string name="msg_peer_offline">Contato offline no socket.</string>
+    <string name="msg_reconnected">Conectado.</string>
+    <string name="msg_reconnect_failed">Contato inacessível.</string>
+    <string name="msg_chat_deleted">Conversa removida.</string>
+    <string name="msg_copied">Copiado.</string>
+
+    <!-- Content Descriptions -->
+    <string name="cd_send_message">Enviar mensagem</string>
+    <string name="cd_attach_file">Anexar</string>
+    <string name="cd_record_voice">Gravar voz</string>
+    <string name="cd_back">Voltar</string>
+    <string name="cd_verify_key">Código de segurança</string>
+    <string name="cd_self_destruct">Autodestruição</string>
+    <string name="cd_toggle_visibility">Alternar visibilidade</string>
+
+    <!-- Image Cropper -->
+    <string name="crop_title">Ajustar Foto</string>
+    <string name="crop_hint">Arraste ou faça pinça para enquadrar</string>
+    <string name="crop_reset">Centralizar</string>
+    <string name="crop_load_error">Não foi possível abrir a imagem.</string>
+    <string name="cancel_btn">Cancelar</string>
+
+    <!-- Background & Battery Optimization -->
+    <string name="battery_section">Segundo Plano e Bateria</string>
+    <string name="bg_conn_title">Conexão em segundo plano</string>
+    <string name="bg_conn_desc">Mantém os sockets ativos ao minimizar</string>
+    <string name="battery_opt_title">Otimização de bateria</string>
+    <string name="battery_opt_ignored">Desativada · Conexão estável</string>
+    <string name="battery_opt_active">Ativa · Pode pausar mensagens</string>
+    <string name="battery_opt_disable_btn">Desativar</string>
+    <string name="battery_dialog_title">Manter Chatso ativo</string>
+    <string name="battery_dialog_body">Para receber mensagens em segundo plano sem atrasos na VPN ou rede local, desative a otimização de bateria para o Chatso.</string>
+    <string name="battery_dialog_confirm">Desativar otimização</string>
+    <string name="later_btn">Agora não</string>
+    <string name="msg_bg_conn_on">Conexão em segundo plano ativada.</string>
+    <string name="msg_bg_conn_off">Conexão em segundo plano desativada.</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_connection">Conexão em segundo plano</string>
+    <string name="notif_channel_messages">Mensagens recebidas</string>
+    <string name="notif_service_listening">Conexão P2P ativa · E2EE</string>
+    <string name="notif_service_connected">Conexão P2P ativa · %1$d conectado(s)</string>
+</resources>

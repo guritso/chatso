@@ -164,12 +164,12 @@ class MediaStorageHelper(private val context: Context) {
         }
 
     fun createIncomingMediaFile(messageId: String, originalFileName: String): File {
-        val safeName = sanitizeFileName(originalFileName.ifBlank { "arquivo.bin" })
+        val safeName = sanitizeFileName(originalFileName.ifBlank { "file.bin" })
         return File(mediaDir, "${messageId}_$safeName")
     }
 
     fun createNewVoiceRecordingFile(): File {
-        return File(mediaDir, "voz_${System.currentTimeMillis()}.m4a")
+        return File(mediaDir, "voice_${System.currentTimeMillis()}.m4a")
     }
 
     fun readAudioDurationMs(file: File): Long {

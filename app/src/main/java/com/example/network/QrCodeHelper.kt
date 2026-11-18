@@ -51,7 +51,7 @@ object QrCodeHelper {
                 val ip = uri.getQueryParameter("ip")?.takeIf { it.isNotBlank() } ?: return null
                 val port = uri.getQueryParameter("port")?.toIntOrNull() ?: return null
                 val pub = uri.getQueryParameter("pub") ?: ""
-                val name = uri.getQueryParameter("name") ?: "Contato"
+                val name = uri.getQueryParameter("name") ?: "Contact"
                 val token = uri.getQueryParameter("token") ?: ""
                 QrInvitePayload(ip = ip, port = port, publicKeyBase64 = pub, username = name, inviteToken = token)
             } else if (trimmed.contains(":")) {

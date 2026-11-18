@@ -7,7 +7,7 @@ enum class ThemeMode {
 }
 
 enum class AppLanguage(val code: String, val nativeName: String) {
-    SYSTEM("system", "Sistema"),
+    SYSTEM("system", "System"),
     PT("pt", "Português"),
     EN("en", "English"),
     ES("es", "Español"),

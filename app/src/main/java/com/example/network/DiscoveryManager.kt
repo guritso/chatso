@@ -168,7 +168,7 @@ class DiscoveryManager(
                             launch {
                                 knownTargets.distinct().forEach { (ip, port) ->
                                     if (ip.isNotBlank()) {
-                                        launch { probeSingleHost(ip, port, "Salvo") }
+                                        launch { probeSingleHost(ip, port, "Saved") }
                                     }
                                 }
                             }
@@ -293,7 +293,7 @@ class DiscoveryManager(
         if (pubB64.isBlank() || sourceIp.isBlank()) return
         val peerId = CryptoEngine.computePeerIdFromBase64(pubB64)
         if (peerId == latestIdentity.peerId) return
-        val name = json.optString("name", "Usuário Chatso")
+        val name = json.optString("name", "Chatso User")
         val port = json.optInt("port", LocalIdentity.DEFAULT_TCP_PORT)
         val peer = DiscoveredPeer(
             peerId = peerId,

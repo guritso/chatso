@@ -113,7 +113,7 @@ fun ConnectScreen(
     onToggleDiscoverable: (Boolean) -> Unit,
     onNotify: (String) -> Unit
 ) {
-    // Primary option is "Na Rede" (index 0) as requested
+    // Primary option is "On Network" (index 0)
     var modeIndex by rememberSaveable { mutableIntStateOf(0) }
     val modes = listOf(
         stringResource(R.string.connect_lan_tab),
@@ -121,7 +121,7 @@ fun ConnectScreen(
         stringResource(R.string.connect_manual_tab)
     )
 
-    // Auto-scan swiftly once when opening the default "Na Rede" tab
+    // Auto-scan swiftly once when opening the default "On Network" tab
     LaunchedEffect(Unit) {
         if (discoveredPeers.isEmpty() && !isScanning) {
             onScanNetwork()

@@ -141,7 +141,7 @@ class ExampleRobolectricTest {
             serverNonceBase64 = sNonce
         )
 
-        val secretMsg = "Olá via VPN criptografada!".toByteArray(Charsets.UTF_8)
+        val secretMsg = "Hello via encrypted VPN!".toByteArray(Charsets.UTF_8)
         val encrypted = aliceCipher.encrypt(0x10, secretMsg)
         val decrypted = bobCipher.decrypt(0x10, encrypted)
         assertArrayEquals(secretMsg, decrypted)
@@ -282,12 +282,12 @@ class ExampleRobolectricTest {
             val sent = nodeA.sendTextMessage(
                 peerId = connectedPeerId,
                 messageId = "msg-001",
-                text = "Mensagem secreta via socket P2P!",
+                text = "Secret message over P2P socket!",
                 selfDestructSec = 30,
                 createdAt = System.currentTimeMillis()
             )
             assertTrue(sent)
-            assertEquals("Mensagem secreta via socket P2P!", receivedText.get(3, TimeUnit.SECONDS))
+            assertEquals("Secret message over P2P socket!", receivedText.get(3, TimeUnit.SECONDS))
 
             nodeA.disconnectAll()
             nodeB.disconnectAll()

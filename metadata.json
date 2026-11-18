@@ -1,6 +1,6 @@
 {
   "name": "Chatso",
-  "description": "Mensageiro P2P criptografado de ponta a ponta via sockets locais, LAN ou VPN, com identidade por chave pública local, envio multimídia e Modo Invisível.",
+  "description": "End-to-end encrypted P2P messenger over local sockets, LAN, or VPN, with local public-key identity, multimedia transfers, and Invisible Mode.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -76,7 +76,7 @@ object CryptoEngine {
             val iv = payload.copyOfRange(1, 1 + ivLen)
             val ciphertext = payload.copyOfRange(1 + ivLen, payload.size)
             val secretKey = getOrCreateKeystoreMasterKey()
-                ?: throw IllegalStateException("Chave mestre do Android Keystore indisponível")
+                ?: throw IllegalStateException("Android Keystore master key unavailable")
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_BITS, iv))
             cipher.doFinal(ciphertext)
@@ -342,11 +342,11 @@ class SessionCipher(
 
     fun decrypt(frameKind: Byte, packet: ByteArray): ByteArray {
         synchronized(rxLock) {
-            require(packet.size >= 8 + 16) { "Pacote criptografado truncado" }
+            require(packet.size >= 8 + 16) { "Truncated encrypted packet" }
             val buf = ByteBuffer.wrap(packet)
             val seq = buf.long
             if (seq <= highestRxSeq) {
-                throw SecurityException("Pacote repetido ou fora de ordem detectado (anti-replay)")
+                throw SecurityException("Replayed or out-of-order packet detected (anti-replay)")
             }
             val ciphertext = ByteArray(packet.size - 8)
             buf.get(ciphertext)

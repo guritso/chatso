@@ -214,7 +214,7 @@ class P2PNodeManager(
     ): Result<String> = withContext(Dispatchers.IO) {
         val identity = currentIdentity
         if (!identity.isInitialized) {
-            return@withContext Result.failure(IllegalStateException("Identidade local ainda não inicializada"))
+            return@withContext Result.failure(IllegalStateException("Local identity is not initialized yet"))
         }
         try {
             val socket = Socket()
@@ -256,7 +256,7 @@ class P2PNodeManager(
             val respLen = inp.readInt()
             if (respLen < 0 || respLen > MAX_FRAME_BYTES) {
                 socket.close()
-                return@withContext Result.failure(SecurityException("Resposta de handshake inválida"))
+                return@withContext Result.failure(SecurityException("Invalid handshake response"))
             }
             val respBytes = ByteArray(respLen)
             if (respLen > 0) inp.readFully(respBytes)
@@ -265,12 +265,12 @@ class P2PNodeManager(
                 socket.close()
                 val reason = runCatching {
                     JSONObject(String(respBytes, Charsets.UTF_8)).optString("reason")
-                }.getOrDefault("Conexão recusada pela política de privacidade do contato")
+                }.getOrDefault("Connection rejected by peer privacy policy")
                 return@withContext Result.failure(SecurityException(reason))
             }
             if (respKind != KIND_HANDSHAKE_WELCOME) {
                 socket.close()
-                return@withContext Result.failure(IllegalStateException("Protocolo inesperado no socket"))
+                return@withContext Result.failure(IllegalStateException("Unexpected protocol frame on socket"))
             }
 
             val welcomeJson = JSONObject(String(respBytes, Charsets.UTF_8))
@@ -283,7 +283,7 @@ class P2PNodeManager(
             if (expectedPubKeyBase64.isNotBlank() && expectedPubKeyBase64 != serverPubB64) {
                 socket.close()
                 return@withContext Result.failure(
-                    SecurityException("Chave pública divergente do convite QR! Possível interceptação bloqueada.")
+                    SecurityException("Public key mismatch against QR invite. Possible interception blocked.")
                 )
             }
 
@@ -297,7 +297,7 @@ class P2PNodeManager(
             if (!validSig) {
                 socket.close()
                 return@withContext Result.failure(
-                    SecurityException("Assinatura criptográfica ECDSA inválida no handshake")
+                    SecurityException("Invalid ECDSA cryptographic signature during handshake")
                 )
             }
 
@@ -422,7 +422,7 @@ class P2PNodeManager(
                 val validToken = inviteToken.isNotBlank() && inviteToken == identity.qrInviteToken
                 if (!isKnown && !validToken) {
                     val rej = JSONObject().apply {
-                        put("reason", "Este dispositivo aceita conexões apenas de contatos salvos ou convite QR.")
+                        put("reason", "This device only accepts connections from saved contacts or QR invites.")
                     }.toString().toByteArray(Charsets.UTF_8)
                     out.writeByte(KIND_HANDSHAKE_REJECT.toInt())
                     out.writeInt(rej.size)
@@ -594,7 +594,7 @@ class P2PNodeManager(
                     val echoReply = JSONObject().apply {
                         put("cmd", "TEXT_MSG")
                         put("id", java.util.UUID.randomUUID().toString())
-                        put("text", "Eco Localhost (AES-256-GCM verificado): $text")
+                        put("text", "Localhost Echo (AES-256-GCM verified): $text")
                         put("sd", sdSec)
                         put("ts", System.currentTimeMillis())
                     }
@@ -651,7 +651,7 @@ class P2PNodeManager(
                 val msgId = json.getString("id")
                 val typeStr = json.optString("msgType", MessageType.FILE.name)
                 val msgType = MessageType.entries.firstOrNull { it.name == typeStr } ?: MessageType.FILE
-                val fileName = json.optString("fileName", "arquivo")
+                val fileName = json.optString("fileName", "file")
                 val mimeType = json.optString("mimeType", "application/octet-stream")
                 val totalBytes = json.optLong("totalBytes", 0L)
                 val audioDur = json.optLong("audioMs", 0L)
