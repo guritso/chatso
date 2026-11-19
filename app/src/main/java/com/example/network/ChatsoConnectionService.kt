@@ -293,7 +293,7 @@ object ChatsoNotificationHelper {
         // without the redundant top "Chatso" app title row).
         runCatching {
             val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
-                .setShortLabel(cache.senderName.ifBlank { "Chatso" })
+                .setShortLabel(cache.senderName.ifBlank { "chatso" })
                 .setLongLived(true)
                 .setPerson(senderPerson)
                 .setCategories(setOf("android.shortcut.conversation"))
@@ -475,7 +475,7 @@ object ChatsoNotificationHelper {
             canvas.drawCircle(cx, cy, badgeRadius, badgeBgPaint)
 
             val badgeDrawable = runCatching {
-                ContextCompat.getDrawable(context, R.drawable.img_launcher_icon_1794975444462)
+                ContextCompat.getDrawable(context, R.drawable.ic_launcher_foreground)
                     ?: ContextCompat.getDrawable(context, R.drawable.ic_notification_chatso)
             }.getOrNull()
             if (badgeDrawable != null) {

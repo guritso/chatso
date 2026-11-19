@@ -117,6 +117,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        AppIconManager.clearTemporarySuppression()
         (application as? ChatsoApplication)?.container?.let { container ->
             container.isAppInForeground = true
             container.repository.onAppForegroundChanged(true)
@@ -127,6 +128,9 @@ class MainActivity : ComponentActivity() {
         (application as? ChatsoApplication)?.container?.let { container ->
             container.isAppInForeground = false
             container.repository.onAppForegroundChanged(false)
+        }
+        if (!isChangingConfigurations) {
+            AppIconManager.flushPendingIconIfNeeded(this)
         }
         super.onStop()
     }
@@ -191,9 +195,9 @@ fun ChatsoRootApp(
     val activePalette = identity?.themePalette ?: ThemePalette.PURPLE
     val themeAdvanced = identity?.themeAdvanced ?: false
 
-    LaunchedEffect(identity?.isInitialized, activePalette) {
-        if (identity?.isInitialized == true) {
-            AppIconManager.applyPaletteIcon(context, activePalette)
+    LaunchedEffect(identity != null, activePalette, themeAdvanced) {
+        if (identity != null) {
+            AppIconManager.scheduleIconSync(activePalette, themeAdvanced)
         }
     }
 
@@ -636,7 +640,8 @@ private fun ChatsoAuthenticatedShell(
                     containerColor = MaterialTheme.colorScheme.background,
                     bottomBar = {
                         NavigationBar(
-                            containerColor = MaterialTheme.colorScheme.surface
+                            containerColor = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 0.dp
                         ) {
                             NavigationBarItem(
                                 selected = selectedTab == HomeTab.CHATS,

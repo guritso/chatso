@@ -103,6 +103,7 @@ import com.example.network.NetworkUtils
 import com.example.ui.components.ChatsoAvatar
 import com.example.ui.components.OpenSourceLicensesDialog
 import com.example.ui.components.ProfileImageCropperDialog
+import com.example.ui.theme.AppIconManager
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OnlineEmerald
 import com.example.ui.theme.WarningAmber
@@ -203,6 +204,7 @@ fun ProfileSettingsScreen(
                         size = 56.dp,
                         modifier = Modifier
                             .clickable {
+                                AppIconManager.suppressNextFlush()
                                 photoPicker.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
@@ -230,6 +232,7 @@ fun ProfileSettingsScreen(
                 ) {
                     OutlinedButton(
                         onClick = {
+                            AppIconManager.suppressNextFlush()
                             photoPicker.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                             )
@@ -425,7 +428,10 @@ fun ProfileSettingsScreen(
                     if (!isIgnoringBattery) {
                         Spacer(modifier = Modifier.width(8.dp))
                         OutlinedButton(
-                            onClick = { NetworkUtils.openBatteryOptimizationRequest(context) },
+                            onClick = {
+                                AppIconManager.suppressNextFlush()
+                                NetworkUtils.openBatteryOptimizationRequest(context)
+                            },
                             shape = MaterialTheme.shapes.small,
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                             modifier = Modifier.testTag("profile_battery_disable_button")

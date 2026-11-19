@@ -68,9 +68,9 @@ import org.robolectric.annotation.Config
 class ExampleRobolectricTest {
 
     @Test
-    fun `app name matches Chatso`() {
+    fun `app name matches chatso`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        assertEquals("Chatso", context.getString(R.string.app_name))
+        assertEquals("chatso", context.getString(R.string.app_name))
     }
 
     @Test
@@ -859,8 +859,8 @@ class ExampleRobolectricTest {
         assertEquals(ThemePalette.PURPLE, store.getSnapshot().themePalette)
         assertFalse(store.getSnapshot().themeAdvanced)
         assertEquals(12, ThemePalette.entries.size)
-        assertEquals("1.1.5", BuildConfig.VERSION_NAME)
-        assertEquals(7, BuildConfig.VERSION_CODE)
+        assertEquals("1.1.6", BuildConfig.VERSION_NAME)
+        assertEquals(8, BuildConfig.VERSION_CODE)
 
         val lightPrimaries = ThemePalette.entries.map { palette ->
             store.setThemePalette(palette)
@@ -889,9 +889,52 @@ class ExampleRobolectricTest {
         assertTrue(basicDark.surface != advDark.surface)
         assertTrue(basicDark.secondaryContainer != advDark.secondaryContainer)
 
-        // Verify dynamic launcher icon switching via activity-alias
-        AppIconManager.applyPaletteIcon(context, ThemePalette.ORANGE)
+        // Verify default icon is dark-navy DEFAULT_ALIAS_CLASS when full theme is OFF,
+        // and switches to the palette alias only when full theme is ON + background flush runs
+        assertEquals(
+            AppIconManager.DEFAULT_ALIAS_CLASS,
+            AppIconManager.resolveTargetAlias(ThemePalette.PURPLE, fullThemeEnabled = false)
+        )
+        assertEquals(
+            AppIconManager.DEFAULT_ALIAS_CLASS,
+            AppIconManager.resolveTargetAlias(ThemePalette.ORANGE, fullThemeEnabled = false)
+        )
+        assertEquals(
+            ThemePalette.PURPLE.aliasClassName,
+            AppIconManager.resolveTargetAlias(ThemePalette.PURPLE, fullThemeEnabled = true)
+        )
+
+        AppIconManager.applyAlias(context, AppIconManager.DEFAULT_ALIAS_CLASS)
+        AppIconManager.clearTemporarySuppression()
+        AppIconManager.scheduleIconSync(ThemePalette.ORANGE, fullThemeEnabled = false)
+        AppIconManager.flushPendingIconIfNeeded(context)
+        assertTrue(AppIconManager.isDefaultIconActive(context))
+        assertFalse(AppIconManager.isPaletteIconActive(context, ThemePalette.ORANGE))
+
+        AppIconManager.scheduleIconSync(ThemePalette.ORANGE, fullThemeEnabled = true)
+        // Still default dark-navy icon while in foreground until background flush runs
+        assertTrue(AppIconManager.isDefaultIconActive(context))
+        AppIconManager.flushPendingIconIfNeeded(context)
         assertTrue(AppIconManager.isPaletteIconActive(context, ThemePalette.ORANGE))
+        assertFalse(AppIconManager.isDefaultIconActive(context))
+
+        // Turning full theme back OFF schedules revert to dark-navy default icon
+        AppIconManager.scheduleIconSync(ThemePalette.ORANGE, fullThemeEnabled = false)
+        AppIconManager.flushPendingIconIfNeeded(context)
+        assertTrue(AppIconManager.isDefaultIconActive(context))
+        assertFalse(AppIconManager.isPaletteIconActive(context, ThemePalette.ORANGE))
+
+        // Simulate app upgrade where an old palette alias remained ENABLED alongside DEFAULT_ALIAS_CLASS
+        context.packageManager.setComponentEnabledSetting(
+            android.content.ComponentName(context.packageName, ThemePalette.PURPLE.aliasClassName),
+            android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+            android.content.pm.PackageManager.DONT_KILL_APP
+        )
+        assertTrue(AppIconManager.isDefaultIconActive(context))
+        assertTrue(AppIconManager.isPaletteIconActive(context, ThemePalette.PURPLE))
+        AppIconManager.scheduleIconSync(ThemePalette.PURPLE, fullThemeEnabled = false)
+        AppIconManager.flushPendingIconIfNeeded(context)
+        assertTrue(AppIconManager.isDefaultIconActive(context))
         assertFalse(AppIconManager.isPaletteIconActive(context, ThemePalette.PURPLE))
     }
 }

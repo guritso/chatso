@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Chatso</string>
+    <string name="app_name">chatso</string>
 
     <string name="onboarding_title">Private by public key</string>
     <string name="onboarding_subtitle">Direct chat over VPN, local network or localhost, with zero servers.</string>
@@ -98,8 +98,8 @@
     <string name="palette_orange">Orange</string>
     <string name="palette_coral">Coral red</string>
     <string name="palette_rose">Rose</string>
-    <string name="theme_advanced_title">Advanced (full theme)</string>
-    <string name="theme_advanced_desc">Apply the palette to backgrounds, bars, cards, and all surfaces</string>
+    <string name="theme_advanced_title">Full theme</string>
+    <string name="theme_advanced_desc">Applies the color to backgrounds, bars, cards, and the app icon</string>
     <string name="theme_preview_incoming">End-to-end encrypted</string>
     <string name="theme_preview_outgoing">Looks great!</string>
     <string name="language_section">Language</string>
@@ -149,8 +149,8 @@
     <string name="battery_opt_ignored">Disabled · Reliable connection</string>
     <string name="battery_opt_active">Enabled · May delay messages</string>
     <string name="battery_opt_disable_btn">Disable</string>
-    <string name="battery_dialog_title">Keep Chatso active</string>
-    <string name="battery_dialog_body">To receive messages reliably in the background over VPN or local network, disable battery optimization for Chatso.</string>
+    <string name="battery_dialog_title">Keep chatso active</string>
+    <string name="battery_dialog_body">To receive messages reliably in the background over VPN or local network, disable battery optimization for chatso.</string>
     <string name="battery_dialog_confirm">Disable optimization</string>
     <string name="later_btn">Not now</string>
     <string name="msg_bg_conn_on">Background connection enabled.</string>
@@ -186,7 +186,7 @@
     <string name="update_check_failed">Could not check for updates.</string>
     <string name="update_download_btn">Download APK</string>
     <string name="open_source_licenses">Open Source Licenses</string>
-    <string name="open_source_licenses_desc">Third-party libraries used by Chatso</string>
+    <string name="open_source_licenses_desc">Third-party libraries used by chatso</string>
 
     <string name="delete_message_action">Delete</string>
     <string name="msg_deleted">Message deleted.</string>

@@ -362,10 +362,10 @@ fun ChatDetailScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        // Minimalist Header Bar
+        // Flat Header Bar matching chat canvas
         Surface(
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 2.dp
+            color = MaterialTheme.colorScheme.background,
+            tonalElevation = 0.dp
         ) {
             Row(
                 modifier = Modifier

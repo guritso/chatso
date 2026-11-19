@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Chatso</string>
+    <string name="app_name">chatso</string>
 
     <!-- Onboarding -->
     <string name="onboarding_title">Privado por chave pública</string>
@@ -105,8 +105,8 @@
     <string name="palette_orange">Laranja</string>
     <string name="palette_coral">Vermelho</string>
     <string name="palette_rose">Rosa</string>
-    <string name="theme_advanced_title">Avançado (tema completo)</string>
-    <string name="theme_advanced_desc">Aplica a cor também nos fundos, barras, cartões e telas</string>
+    <string name="theme_advanced_title">Tema completo</string>
+    <string name="theme_advanced_desc">Aplica a cor em fundos, telas, barras e no ícone do app</string>
     <string name="theme_preview_incoming">Criptografado ponta a ponta</string>
     <string name="theme_preview_outgoing">Ficou ótimo!</string>
     <string name="language_section">Idioma</string>
@@ -160,8 +160,8 @@
     <string name="battery_opt_ignored">Desativada · Conexão estável</string>
     <string name="battery_opt_active">Ativa · Pode pausar mensagens</string>
     <string name="battery_opt_disable_btn">Desativar</string>
-    <string name="battery_dialog_title">Manter Chatso ativo</string>
-    <string name="battery_dialog_body">Para receber mensagens em segundo plano sem atrasos na VPN ou rede local, desative a otimização de bateria para o Chatso.</string>
+    <string name="battery_dialog_title">Manter chatso ativo</string>
+    <string name="battery_dialog_body">Para receber mensagens em segundo plano sem atrasos na VPN ou rede local, desative a otimização de bateria para o chatso.</string>
     <string name="battery_dialog_confirm">Desativar otimização</string>
     <string name="later_btn">Agora não</string>
     <string name="msg_bg_conn_on">Conexão em segundo plano ativada.</string>
@@ -198,7 +198,7 @@
     <string name="update_check_failed">Não foi possível verificar atualizações.</string>
     <string name="update_download_btn">Baixar APK</string>
     <string name="open_source_licenses">Licenças Open Source</string>
-    <string name="open_source_licenses_desc">Bibliotecas de código aberto usadas no Chatso</string>
+    <string name="open_source_licenses_desc">Bibliotecas de código aberto usadas no chatso</string>
 
     <string name="delete_message_action">Apagar</string>
     <string name="msg_deleted">Mensagem apagada.</string>

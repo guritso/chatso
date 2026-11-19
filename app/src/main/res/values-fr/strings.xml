@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Chatso</string>
+    <string name="app_name">chatso</string>
 
     <string name="onboarding_title">Privé par clé publique</string>
     <string name="onboarding_subtitle">Chat direct via VPN, réseau local ou localhost, sans serveur.</string>
@@ -98,8 +98,8 @@
     <string name="palette_orange">Orange</string>
     <string name="palette_coral">Rouge corail</string>
     <string name="palette_rose">Rose</string>
-    <string name="theme_advanced_title">Avancé (thème complet)</string>
-    <string name="theme_advanced_desc">Applique la couleur aux fonds, barres, cartes et écrans</string>
+    <string name="theme_advanced_title">Thème complet</string>
+    <string name="theme_advanced_desc">Applique la couleur aux fonds, barres, cartes et à l’icône</string>
     <string name="theme_preview_incoming">Chiffré de bout en bout</string>
     <string name="theme_preview_outgoing">Super rendu !</string>
     <string name="language_section">Langue</string>
@@ -149,8 +149,8 @@
     <string name="battery_opt_ignored">Désactivée · Connexion stable</string>
     <string name="battery_opt_active">Active · Peut retarder les messages</string>
     <string name="battery_opt_disable_btn">Désactiver</string>
-    <string name="battery_dialog_title">Garder Chatso actif</string>
-    <string name="battery_dialog_body">Pour recevoir vos messages en arrière-plan sans délai sur VPN ou réseau local, désactivez l\'optimisation de batterie pour Chatso.</string>
+    <string name="battery_dialog_title">Garder chatso actif</string>
+    <string name="battery_dialog_body">Pour recevoir vos messages en arrière-plan sans délai sur VPN ou réseau local, désactivez l\'optimisation de batterie pour chatso.</string>
     <string name="battery_dialog_confirm">Désactiver</string>
     <string name="later_btn">Plus tard</string>
     <string name="msg_bg_conn_on">Connexion en arrière-plan activée.</string>
@@ -186,7 +186,7 @@
     <string name="update_check_failed">Impossible de vérifier les mises à jour.</string>
     <string name="update_download_btn">Télécharger l\'APK</string>
     <string name="open_source_licenses">Licences Open Source</string>
-    <string name="open_source_licenses_desc">Bibliothèques open source utilisées par Chatso</string>
+    <string name="open_source_licenses_desc">Bibliothèques open source utilisées par chatso</string>
 
     <string name="delete_message_action">Supprimer</string>
     <string name="msg_deleted">Message supprimé.</string>

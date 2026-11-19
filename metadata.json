@@ -1,5 +1,5 @@
 {
-  "name": "Chatso",
+  "name": "chatso",
   "description": "End-to-end encrypted P2P messenger over local sockets, LAN, or VPN, with local public-key identity, multimedia transfers, and Invisible Mode.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
