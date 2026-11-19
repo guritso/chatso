@@ -178,4 +178,12 @@
     <string name="safety_peer_verified_you">Este contacto te verificó. Confirma su código para completar.</string>
     <string name="video_playback_error_title">No se pudo reproducir el video</string>
     <string name="video_playback_error_body">Códec incompatible o archivo dañado (%1$s). Intenta abrirlo en un reproductor externo.</string>
+    <string name="cancel_transfer_cd">Cancelar transferencia</string>
+    <string name="transfer_cancelled">Transferencia cancelada</string>
+    <string name="download_again_btn">Descargar de nuevo</string>
+    <string name="msg_file_unavailable">El archivo ya no está disponible en el dispositivo del contacto.</string>
+    <string name="notif_action_mark_read">Marcar como leído</string>
+    <string name="notif_action_reply">Responder</string>
+    <string name="notif_reply_hint">Mensaje…</string>
+    <string name="sticker_label">Sticker</string>
 </resources>

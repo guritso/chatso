@@ -178,4 +178,12 @@
     <string name="safety_peer_verified_you">Dieser Kontakt hat dich verifiziert. Bestätige seinen Code zum Abschließen.</string>
     <string name="video_playback_error_title">Video konnte nicht abgespielt werden</string>
     <string name="video_playback_error_body">Nicht unterstützter Codec oder beschädigte Datei (%1$s). Versuche, es extern zu öffnen.</string>
+    <string name="cancel_transfer_cd">Übertragung abbrechen</string>
+    <string name="transfer_cancelled">Übertragung abgebrochen</string>
+    <string name="download_again_btn">Erneut herunterladen</string>
+    <string name="msg_file_unavailable">Datei ist auf dem Gerät des Kontakts nicht mehr verfügbar.</string>
+    <string name="notif_action_mark_read">Als gelesen markieren</string>
+    <string name="notif_action_reply">Antworten</string>
+    <string name="notif_reply_hint">Nachricht…</string>
+    <string name="sticker_label">Sticker</string>
 </resources>

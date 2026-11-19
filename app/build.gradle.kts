@@ -12,8 +12,8 @@ android {
     applicationId = "com.aistudio.chatso.vxpqmr"
     minSdk = 24
     targetSdk = 36
-    versionCode = 5
-    versionName = "1.1.3"
+    versionCode = 6
+    versionName = "1.1.4"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -92,6 +92,7 @@ dependencies {
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
+  implementation(libs.coil.gif)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.zxing.core)

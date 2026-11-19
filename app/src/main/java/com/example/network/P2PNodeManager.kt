@@ -75,6 +75,10 @@ interface P2PEventListener {
     suspend fun isPeerVerifiedByMe(peerId: String): Boolean = false
     suspend fun onPeerVerificationChanged(peerId: String, verifiedMe: Boolean) {}
     suspend fun onIncomingReaction(peerId: String, messageId: String, emoji: String) {}
+    suspend fun onIncomingFileCancelledBySender(peerId: String, messageId: String) {}
+    suspend fun onOutgoingFileCancelledByReceiver(peerId: String, messageId: String) {}
+    suspend fun onPeerRequestedFileRetry(peerId: String, messageId: String) {}
+    suspend fun onRemoteFileUnavailable(peerId: String, messageId: String) {}
     suspend fun onTypingChanged(peerId: String, isTyping: Boolean)
     suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int)
 }
@@ -99,7 +103,9 @@ class P2PNodeManager(
         val socket: Socket,
         val output: DataOutputStream,
         val cipher: SessionCipher,
-        val writeMutex: Mutex = Mutex()
+        val writeMutex: Mutex = Mutex(),
+        val incomingTransfers: ConcurrentHashMap<String, IncomingTransfer> = ConcurrentHashMap(),
+        val cancelledIncomingIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
     ) {
         suspend fun sendEncryptedFrame(kind: Byte, plaintext: ByteArray) = withContext(Dispatchers.IO) {
             writeMutex.withLock {
@@ -124,7 +130,8 @@ class P2PNodeManager(
         val outputStream: FileOutputStream,
         val totalBytes: Long,
         var receivedBytes: Long = 0L,
-        var lastReportedProgress: Int = 0
+        var lastReportedProgress: Int = 0,
+        @Volatile var cancelled: Boolean = false
     )
 
     @Volatile
@@ -540,7 +547,6 @@ class P2PNodeManager(
         remoteListenPort: Int,
         isSelfLoopbackResponder: Boolean
     ) {
-        val incomingTransfers = HashMap<String, IncomingTransfer>()
         try {
             while (scope.isActive && !session.socket.isClosed) {
                 val kind = inp.readByte()
@@ -559,7 +565,6 @@ class P2PNodeManager(
                             remotePubB64 = remotePubB64,
                             remoteIp = remoteIp,
                             remoteListenPort = remoteListenPort,
-                            incomingTransfers = incomingTransfers,
                             isSelfLoopbackResponder = isSelfLoopbackResponder
                         )
                     }
@@ -567,7 +572,6 @@ class P2PNodeManager(
                         handleChunkPacket(
                             session = session,
                             plaintext = plaintext,
-                            incomingTransfers = incomingTransfers,
                             isSelfLoopbackResponder = isSelfLoopbackResponder
                         )
                     }
@@ -575,12 +579,13 @@ class P2PNodeManager(
             }
         } catch (_: Exception) {
         } finally {
-            incomingTransfers.values.forEach {
-                try {
-                    it.outputStream.close()
-                } catch (_: Exception) {
+            session.incomingTransfers.values.forEach { tr ->
+                synchronized(tr) {
+                    tr.cancelled = true
+                    runCatching { tr.outputStream.close() }
                 }
             }
+            session.incomingTransfers.clear()
             session.closeQuietly()
             if (!isSelfLoopbackResponder) {
                 val removed = sessions.remove(session.peerId, session)
@@ -599,7 +604,6 @@ class P2PNodeManager(
         remotePubB64: String,
         remoteIp: String,
         remoteListenPort: Int,
-        incomingTransfers: HashMap<String, IncomingTransfer>,
         isSelfLoopbackResponder: Boolean
     ) {
         val cmd = json.optString("cmd")
@@ -710,6 +714,7 @@ class P2PNodeManager(
             }
             "FILE_START" -> {
                 val msgId = json.getString("id")
+                session.cancelledIncomingIds.remove(msgId)
                 val typeStr = json.optString("msgType", MessageType.FILE.name)
                 val msgType = MessageType.entries.firstOrNull { it.name == typeStr } ?: MessageType.FILE
                 val fileName = json.optString("fileName", "file")
@@ -736,7 +741,7 @@ class P2PNodeManager(
                     replyToSenderTag = replySenderTag,
                     replyToPreview = replyPreview
                 )
-                incomingTransfers[msgId] = IncomingTransfer(
+                session.incomingTransfers[msgId] = IncomingTransfer(
                     file = outFile,
                     outputStream = FileOutputStream(outFile),
                     totalBytes = totalBytes.coerceAtLeast(1L)
@@ -744,12 +749,55 @@ class P2PNodeManager(
             }
             "FILE_END" -> {
                 val msgId = json.getString("id")
-                val transfer = incomingTransfers.remove(msgId)
+                val transfer = session.incomingTransfers.remove(msgId)
+                val wasCancelled = session.cancelledIncomingIds.remove(msgId)
                 if (transfer != null) {
-                    transfer.outputStream.flush()
-                    transfer.outputStream.close()
-                    listener.onIncomingFileComplete(session.peerId, msgId, transfer.file)
-                    sendReceiptInternal(session, msgId, DeliveryStatus.DELIVERED)
+                    val skipped = synchronized(transfer) {
+                        val isCancelledNow = transfer.cancelled || wasCancelled
+                        runCatching { transfer.outputStream.flush() }
+                        runCatching { transfer.outputStream.close() }
+                        isCancelledNow
+                    }
+                    if (!skipped) {
+                        listener.onIncomingFileComplete(session.peerId, msgId, transfer.file)
+                        sendReceiptInternal(session, msgId, DeliveryStatus.DELIVERED)
+                    } else {
+                        runCatching { if (transfer.file.exists()) transfer.file.delete() }
+                    }
+                }
+            }
+            "FILE_CANCEL" -> {
+                val msgId = json.optString("id")
+                val bySender = json.optBoolean("bySender", true)
+                if (msgId.isNotBlank()) {
+                    if (bySender) {
+                        session.cancelledIncomingIds.add(msgId)
+                        val transfer = session.incomingTransfers.remove(msgId)
+                        if (transfer != null) {
+                            synchronized(transfer) {
+                                transfer.cancelled = true
+                                runCatching { transfer.outputStream.close() }
+                            }
+                            runCatching { if (transfer.file.exists()) transfer.file.delete() }
+                        }
+                        listener.onIncomingFileCancelledBySender(session.peerId, msgId)
+                    } else {
+                        listener.onOutgoingFileCancelledByReceiver(session.peerId, msgId)
+                    }
+                }
+            }
+            "FILE_RETRY" -> {
+                val msgId = json.optString("id")
+                if (msgId.isNotBlank()) {
+                    scope.launch(Dispatchers.IO) {
+                        listener.onPeerRequestedFileRetry(session.peerId, msgId)
+                    }
+                }
+            }
+            "FILE_UNAVAILABLE" -> {
+                val msgId = json.optString("id")
+                if (msgId.isNotBlank()) {
+                    listener.onRemoteFileUnavailable(session.peerId, msgId)
                 }
             }
         }
@@ -766,22 +814,30 @@ class P2PNodeManager(
     private suspend fun handleChunkPacket(
         session: ActivePeerSession,
         plaintext: ByteArray,
-        incomingTransfers: HashMap<String, IncomingTransfer>,
         isSelfLoopbackResponder: Boolean
     ) {
         if (isSelfLoopbackResponder) return
         if (plaintext.size <= 40) return
         val msgId = String(plaintext, 0, 36, Charsets.US_ASCII).trim()
-        val transfer = incomingTransfers[msgId] ?: return
+        if (session.cancelledIncomingIds.contains(msgId)) return
+        val transfer = session.incomingTransfers[msgId] ?: return
         val dataLen = plaintext.size - 40
-        transfer.outputStream.write(plaintext, 40, dataLen)
-        transfer.receivedBytes += dataLen
-        val progress = ((transfer.receivedBytes * 100L) / transfer.totalBytes)
-            .toInt()
-            .coerceIn(1, 99)
-        if (progress != transfer.lastReportedProgress) {
-            transfer.lastReportedProgress = progress
-            listener.onIncomingFileProgress(session.peerId, msgId, progress)
+        val reportProgress: Int? = synchronized(transfer) {
+            if (transfer.cancelled) return@synchronized null
+            transfer.outputStream.write(plaintext, 40, dataLen)
+            transfer.receivedBytes += dataLen
+            val progress = ((transfer.receivedBytes * 100L) / transfer.totalBytes)
+                .toInt()
+                .coerceIn(1, 99)
+            if (progress != transfer.lastReportedProgress) {
+                transfer.lastReportedProgress = progress
+                progress
+            } else {
+                null
+            }
+        }
+        if (reportProgress != null && !session.cancelledIncomingIds.contains(msgId)) {
+            listener.onIncomingFileProgress(session.peerId, msgId, reportProgress)
         }
     }
 
@@ -881,6 +937,55 @@ class P2PNodeManager(
         }
     }
 
+    fun cancelIncomingTransfer(peerId: String, messageId: String) {
+        val session = sessions[peerId] ?: return
+        session.cancelledIncomingIds.add(messageId)
+        val transfer = session.incomingTransfers.remove(messageId) ?: return
+        synchronized(transfer) {
+            transfer.cancelled = true
+            runCatching { transfer.outputStream.close() }
+        }
+        runCatching { if (transfer.file.exists()) transfer.file.delete() }
+    }
+
+    suspend fun sendFileCancel(peerId: String, messageId: String, bySender: Boolean): Boolean {
+        val session = sessions[peerId] ?: return false
+        return runCatching {
+            val payload = JSONObject().apply {
+                put("cmd", "FILE_CANCEL")
+                put("id", messageId)
+                put("bySender", bySender)
+            }.toString().toByteArray(Charsets.UTF_8)
+            session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
+            true
+        }.getOrDefault(false)
+    }
+
+    suspend fun sendFileRetryRequest(peerId: String, messageId: String): Boolean {
+        val session = sessions[peerId] ?: return false
+        session.cancelledIncomingIds.remove(messageId)
+        return runCatching {
+            val payload = JSONObject().apply {
+                put("cmd", "FILE_RETRY")
+                put("id", messageId)
+            }.toString().toByteArray(Charsets.UTF_8)
+            session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
+            true
+        }.getOrDefault(false)
+    }
+
+    suspend fun sendFileUnavailable(peerId: String, messageId: String): Boolean {
+        val session = sessions[peerId] ?: return false
+        return runCatching {
+            val payload = JSONObject().apply {
+                put("cmd", "FILE_UNAVAILABLE")
+                put("id", messageId)
+            }.toString().toByteArray(Charsets.UTF_8)
+            session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload)
+            true
+        }.getOrDefault(false)
+    }
+
     suspend fun sendMediaOrFile(
         peerId: String,
         messageId: String,
@@ -894,9 +999,11 @@ class P2PNodeManager(
         replyToMessageId: String? = null,
         replyToAuthorType: String? = null,
         replyToPreview: String? = null,
+        isCancelled: () -> Boolean = { false },
         onProgress: suspend (Int) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val session = sessions[peerId] ?: return@withContext false
+        if (isCancelled()) return@withContext false
         try {
             val totalBytes = file.length()
             val totalChunks = ((totalBytes + CHUNK_SIZE - 1) / CHUNK_SIZE).toInt().coerceAtLeast(1)
@@ -927,6 +1034,7 @@ class P2PNodeManager(
                 var chunkIndex = 0
                 var sentBytes = 0L
                 while (true) {
+                    if (isCancelled()) return@withContext false
                     val read = fis.read(buf)
                     if (read <= 0) break
                     val framePlain = ByteBuffer.allocate(40 + read)
@@ -941,13 +1049,14 @@ class P2PNodeManager(
                     } else {
                         99
                     }
-                    if (pct != lastPct) {
+                    if (pct != lastPct && !isCancelled()) {
                         lastPct = pct
                         onProgress(pct)
                     }
                 }
             }
 
+            if (isCancelled()) return@withContext false
             val endJson = JSONObject().apply {
                 put("cmd", "FILE_END")
                 put("id", messageId)

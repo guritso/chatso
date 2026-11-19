@@ -178,4 +178,12 @@
     <string name="safety_peer_verified_you">This contact verified you. Confirm their code to finish mutual verification.</string>
     <string name="video_playback_error_title">Could not play video</string>
     <string name="video_playback_error_body">Unsupported codec or damaged file (%1$s). Try opening it in an external player.</string>
+    <string name="cancel_transfer_cd">Cancel transfer</string>
+    <string name="transfer_cancelled">Transfer cancelled</string>
+    <string name="download_again_btn">Download again</string>
+    <string name="msg_file_unavailable">File is no longer available on the contact\'s device.</string>
+    <string name="notif_action_mark_read">Mark as read</string>
+    <string name="notif_action_reply">Reply</string>
+    <string name="notif_reply_hint">Message…</string>
+    <string name="sticker_label">Sticker</string>
 </resources>

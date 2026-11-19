@@ -371,10 +371,10 @@ private data class OpenSourceCredit(
 )
 
 private val chatsoOpenSourceCredits = listOf(
-    OpenSourceCredit("AndroidX Media3 (ExoPlayer)", "The Android Open Source Project", "Apache License 2.0"),
+    OpenSourceCredit("AndroidX Media3 (ExoPlayer & Transformer)", "The Android Open Source Project", "Apache License 2.0"),
     OpenSourceCredit("Jetpack Compose & Material 3", "The Android Open Source Project", "Apache License 2.0"),
     OpenSourceCredit("AndroidX Room & CameraX", "The Android Open Source Project", "Apache License 2.0"),
-    OpenSourceCredit("Coil Compose", "Coil Contributors", "Apache License 2.0"),
+    OpenSourceCredit("Coil Compose & GIF", "Coil Contributors", "Apache License 2.0"),
     OpenSourceCredit("ZXing Core", "ZXing Authors", "Apache License 2.0"),
     OpenSourceCredit("Kotlin Coroutines", "JetBrains", "Apache License 2.0"),
     OpenSourceCredit("JetBrains Mono Font", "JetBrains", "SIL Open Font License 1.1")

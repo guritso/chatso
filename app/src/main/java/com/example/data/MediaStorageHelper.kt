@@ -8,10 +8,12 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Base64
+import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -162,6 +164,43 @@ class MediaStorageHelper(private val context: Context) {
                 null
             }
         }
+
+    suspend fun copyStreamToPrivateMedia(
+        inputStream: InputStream,
+        mimeType: String,
+        fileNameHint: String? = null,
+        fallbackPrefix: String = "sticker"
+    ): CopiedMediaInfo? = withContext(Dispatchers.IO) {
+        try {
+            val cleanMime = mimeType.substringBefore(';').trim().ifBlank { "image/webp" }
+            val extFromMime = MimeTypeMap.getSingleton().getExtensionFromMimeType(cleanMime)
+                ?: cleanMime.substringAfterLast('/', "webp").take(6)
+            val resolvedName = fileNameHint?.takeIf { it.isNotBlank() }
+                ?: "${fallbackPrefix}_${System.currentTimeMillis()}.$extFromMime"
+            val safeName = sanitizeFileName(
+                if (resolvedName.contains('.')) resolvedName else "$resolvedName.$extFromMime"
+            )
+            val targetFile = File(mediaDir, "${UUID.randomUUID()}_$safeName")
+            inputStream.use { input ->
+                FileOutputStream(targetFile).use { output ->
+                    input.copyTo(output, bufferSize = 32 * 1024)
+                }
+            }
+            if (targetFile.length() <= 0L) {
+                runCatching { targetFile.delete() }
+                return@withContext null
+            }
+            CopiedMediaInfo(
+                localFile = targetFile,
+                fileName = safeName,
+                mimeType = cleanMime,
+                sizeBytes = targetFile.length()
+            )
+        } catch (_: Exception) {
+            runCatching { inputStream.close() }
+            null
+        }
+    }
 
     fun createIncomingMediaFile(messageId: String, originalFileName: String): File {
         val safeName = sanitizeFileName(originalFileName.ifBlank { "file.bin" })

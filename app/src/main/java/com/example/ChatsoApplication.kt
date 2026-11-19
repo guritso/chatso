@@ -2,6 +2,11 @@ package com.example
 
 import android.app.Application
 import android.content.Context
+import android.os.Build
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
 import com.example.data.ChatDatabase
 import com.example.data.ChatRepository
 import com.example.data.LocalIdentityStore
@@ -32,6 +37,9 @@ class ChatsoContainer(context: Context) {
 
     init {
         ChatsoNotificationHelper.ensureChannels(context)
+        repository.onClearPeerNotification = { peerId ->
+            ChatsoNotificationHelper.cancelPeerNotification(context, peerId)
+        }
         repository.onIncomingNotification = { peerId, senderName, preview, avatarPath ->
             val activeOpen = repository.currentlyOpenPeerId
             if (!isAppInForeground || activeOpen != peerId) {
@@ -70,6 +78,19 @@ class ChatsoContainer(context: Context) {
     }
 }
 
-class ChatsoApplication : Application() {
+class ChatsoApplication : Application(), ImageLoaderFactory {
     val container: ChatsoContainer by lazy { ChatsoContainer(this) }
+
+    override fun newImageLoader(): ImageLoader {
+        return ImageLoader.Builder(this)
+            .components {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    add(ImageDecoderDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
+            }
+            .crossfade(false)
+            .build()
+    }
 }

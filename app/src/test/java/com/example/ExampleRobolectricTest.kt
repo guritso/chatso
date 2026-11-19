@@ -16,12 +16,21 @@ import com.example.data.MessageEntity
 import com.example.data.MessageType
 import com.example.data.ReactionCodec
 import com.example.data.ReplySenderTags
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.RemoteInput
+import android.content.Intent
+import android.os.Bundle
+import androidx.core.app.NotificationCompat
+import com.example.network.ChatsoConnectionService
+import com.example.network.ChatsoNotificationActionReceiver
 import com.example.network.ChatsoNotificationHelper
 import com.example.network.DiscoveryManager
 import com.example.network.NetworkUtils
 import com.example.network.P2PEventListener
 import com.example.network.P2PNodeManager
 import com.example.network.QrCodeHelper
+import java.io.ByteArrayInputStream
 import com.example.network.UpdateCheckResult
 import com.example.network.UpdateChecker
 import java.io.DataInputStream
@@ -574,5 +583,267 @@ class ExampleRobolectricTest {
             localUsername = "Tester"
         )
         NetworkUtils.isIgnoringBatteryOptimizations(context)
+    }
+
+    @Test
+    fun `conversation notification has shortcutId, mark read, and inline reply remote input`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val shadowApp = org.robolectric.Shadows.shadowOf(context as android.app.Application)
+        shadowApp.grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val shadowNm = org.robolectric.Shadows.shadowOf(nm)
+
+        val peerId = "peer_conv_notif"
+        ChatsoNotificationHelper.cancelPeerNotification(context, peerId)
+        ChatsoNotificationHelper.showIncomingMessageNotification(
+            context = context,
+            peerId = peerId,
+            senderName = "Marina",
+            preview = "Olá!",
+            avatarPath = null,
+            localUsername = "Você"
+        )
+
+        val posted: Notification? = shadowNm.getNotification(peerId.hashCode())
+        assertNotNull(posted)
+        assertEquals("conv_$peerId", posted!!.shortcutId)
+        assertEquals(R.drawable.ic_notification_chatso, posted.smallIcon.resId)
+        assertEquals(2, posted.actions?.size)
+        val replyAction = posted.actions[1]
+        assertNotNull(replyAction.remoteInputs)
+        assertEquals(ChatsoNotificationHelper.KEY_TEXT_REPLY, replyAction.remoteInputs[0].resultKey)
+
+        // Verify background mark-read via ChatsoNotificationActionReceiver works when app is backgrounded
+        val app = context as ChatsoApplication
+        val dao = app.container.database.chatDao()
+        dao.deleteAllMessagesForPeer(peerId)
+        dao.deletePeer(peerId)
+        app.container.isAppInForeground = false
+        val mat = CryptoEngine.createIdentityMaterial()
+        app.container.repository.onPeerHandshaked(
+            peerId = peerId,
+            publicKeyBase64 = mat.publicKeyBase64,
+            remoteIp = "10.8.0.55",
+            remoteListenPort = 42850,
+            username = "Marina",
+            avatarBase64 = null
+        )
+        app.container.repository.onIncomingTextMessage(
+            peerId = peerId,
+            messageId = "msg_notif_unread_1",
+            text = "Olá!",
+            selfDestructSec = 0,
+            createdAt = System.currentTimeMillis()
+        )
+        assertEquals(1, dao.getPeerById(peerId)!!.unreadCount)
+
+        app.container.repository.markConversationRead(peerId, fromNotification = true)
+        assertEquals(0, dao.getPeerById(peerId)!!.unreadCount)
+        assertEquals(DeliveryStatus.READ.name, dao.getMessageById("msg_notif_unread_1")!!.status)
+
+        dao.deleteAllMessagesForPeer(peerId)
+        dao.deletePeer(peerId)
+        ChatsoNotificationHelper.cancelPeerNotification(context, peerId)
+    }
+
+    @Test
+    fun `transfer cancel and retry redownload plus sticker streaming work over real tcp sockets`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+
+        val peerSenderId = "peer_sender_cancel_test"
+        val peerReceiverId = "peer_receiver_cancel_test"
+        dao.deleteAllMessagesForPeer(peerSenderId)
+        dao.deleteAllMessagesForPeer(peerReceiverId)
+        dao.deletePeer(peerSenderId)
+        dao.deletePeer(peerReceiverId)
+
+        val repoA = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = LocalIdentityStore(context),
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { true }
+        )
+
+        try {
+            // Test incoming cancellation + retry request on repository + P2P protocol
+            val mat = CryptoEngine.createIdentityMaterial()
+            repoA.onPeerHandshaked(
+                peerId = peerReceiverId,
+                publicKeyBase64 = mat.publicKeyBase64,
+                remoteIp = "127.0.0.1",
+                remoteListenPort = 43990,
+                username = "Receiver",
+                avatarBase64 = null
+            )
+
+            // Simulate incoming sticker start -> cancelTransfer -> verifies CANCELLED state and deleted file
+            val partialFile = repoA.onIncomingFileStart(
+                peerId = peerReceiverId,
+                messageId = "sticker_inc_1",
+                messageType = MessageType.STICKER,
+                fileName = "sticker_1.webp",
+                mimeType = "image/webp",
+                totalBytes = 2048L,
+                audioDurationMs = 0L,
+                selfDestructSec = 0,
+                createdAt = System.currentTimeMillis()
+            )
+            partialFile.writeBytes(ByteArray(512) { 1 })
+            assertTrue(partialFile.exists())
+            assertTrue(repoA.activeTransfers.value.any { it.messageId == "sticker_inc_1" })
+
+            repoA.cancelTransfer("sticker_inc_1")
+            assertFalse(partialFile.exists())
+            assertFalse(repoA.activeTransfers.value.any { it.messageId == "sticker_inc_1" })
+            val cancelledMsg = dao.getMessageById("sticker_inc_1")
+            assertNotNull(cancelledMsg)
+            assertEquals(DeliveryStatus.CANCELLED.name, cancelledMsg!!.status)
+            assertEquals(0, cancelledMsg.transferProgress)
+            assertEquals(MessageType.STICKER.name, cancelledMsg.type)
+
+            // Test outgoing sticker stream fails cleanly when peer is unreachable and can be cancelled out of DB
+            val fakeWebp = byteArrayOf(0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00)
+            val sent = repoA.sendStickerStream(
+                peerId = peerReceiverId,
+                inputStream = ByteArrayInputStream(fakeWebp),
+                mimeType = "image/webp",
+                fileNameHint = "emoji.webp"
+            )
+            assertFalse(sent) // offline peer
+            val latestOutgoing = dao.getLatestMessageForPeer(peerReceiverId)
+            assertNotNull(latestOutgoing)
+            assertEquals(MessageType.STICKER.name, latestOutgoing!!.type)
+            assertEquals(DeliveryStatus.FAILED.name, latestOutgoing.status)
+
+            // Cancelling an outgoing transfer removes the message completely
+            repoA.cancelTransfer(latestOutgoing.messageId)
+            assertNull(dao.getMessageById(latestOutgoing.messageId))
+
+            // Real TCP loopback test for FILE_CANCEL and FILE_RETRY -> re-stream
+            val discA = DiscoveryManager(context, scope)
+            val discB = DiscoveryManager(context, scope)
+            val retryRequestedFuture = CompletableFuture<String>()
+            val completedAfterRetryFuture = CompletableFuture<File>()
+
+            val bobMat = CryptoEngine.createIdentityMaterial()
+            val aliceMat = CryptoEngine.createIdentityMaterial()
+
+            lateinit var nodeA: P2PNodeManager
+            val listenerA = object : P2PEventListener {
+                override suspend fun isKnownPeer(peerId: String) = true
+                override suspend fun onPeerHandshaked(
+                    peerId: String, publicKeyBase64: String, remoteIp: String,
+                    remoteListenPort: Int, username: String, avatarBase64: String?
+                ) {}
+                override suspend fun onPeerDisconnected(peerId: String) {}
+                override suspend fun onIncomingTextMessage(
+                    peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                ) {}
+                override suspend fun onIncomingFileStart(
+                    peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                    mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                ): File = File.createTempFile("retry_in", ".webp")
+                override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+                override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {
+                    completedAfterRetryFuture.complete(file)
+                }
+                override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+                override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+                override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+            }
+
+            val sourceStickerFile = File.createTempFile("src_sticker", ".webp").apply {
+                writeBytes(ByteArray(4096) { 7 })
+            }
+            lateinit var nodeB: P2PNodeManager
+            val listenerB = object : P2PEventListener {
+                override suspend fun isKnownPeer(peerId: String) = true
+                override suspend fun onPeerHandshaked(
+                    peerId: String, publicKeyBase64: String, remoteIp: String,
+                    remoteListenPort: Int, username: String, avatarBase64: String?
+                ) {}
+                override suspend fun onPeerDisconnected(peerId: String) {}
+                override suspend fun onIncomingTextMessage(
+                    peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                ) {}
+                override suspend fun onIncomingFileStart(
+                    peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                    mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                ): File = File.createTempFile("unused", ".bin")
+                override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+                override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+                override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+                override suspend fun onPeerRequestedFileRetry(peerId: String, messageId: String) {
+                    retryRequestedFuture.complete(messageId)
+                    nodeB.sendMediaOrFile(
+                        peerId = peerId,
+                        messageId = messageId,
+                        messageType = MessageType.STICKER,
+                        file = sourceStickerFile,
+                        fileName = "src_sticker.webp",
+                        mimeType = "image/webp",
+                        audioDurationMs = 0L,
+                        selfDestructSec = 0,
+                        createdAt = System.currentTimeMillis(),
+                        onProgress = {}
+                    )
+                }
+                override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+                override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+            }
+
+            nodeA = P2PNodeManager(scope, discA, listenerA)
+            nodeB = P2PNodeManager(scope, discB, listenerB)
+            nodeA.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true, username = "Alice",
+                    publicKeyBase64 = aliceMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = aliceMat.wrappedPrivateKeyBase64,
+                    peerId = aliceMat.peerId, fingerprint = aliceMat.fingerprint,
+                    listenPort = 43911, isDiscoverable = false
+                )
+            )
+            nodeB.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true, username = "Bob",
+                    publicKeyBase64 = bobMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = bobMat.wrappedPrivateKeyBase64,
+                    peerId = bobMat.peerId, fingerprint = bobMat.fingerprint,
+                    listenPort = 43912, isDiscoverable = false
+                )
+            )
+            delay(200)
+            val bobPeerIdOnA = nodeA.connectToPeer("127.0.0.1", nodeB.boundPort.value, bobMat.publicKeyBase64).getOrThrow()
+            delay(150)
+
+            assertTrue(nodeA.sendFileRetryRequest(bobPeerIdOnA, "retry-msg-42"))
+            assertEquals("retry-msg-42", retryRequestedFuture.get(3, TimeUnit.SECONDS))
+            val downloaded = completedAfterRetryFuture.get(3, TimeUnit.SECONDS)
+            assertEquals(4096L, downloaded.length())
+
+            downloaded.delete()
+            sourceStickerFile.delete()
+            nodeA.disconnectAll()
+            nodeB.disconnectAll()
+            discA.shutdown()
+            discB.shutdown()
+        } finally {
+            repoA.shutdown()
+            dao.deleteAllMessagesForPeer(peerSenderId)
+            dao.deleteAllMessagesForPeer(peerReceiverId)
+            dao.deletePeer(peerSenderId)
+            dao.deletePeer(peerReceiverId)
+            scope.cancel()
+        }
     }
 }

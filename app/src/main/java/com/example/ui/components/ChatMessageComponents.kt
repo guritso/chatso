@@ -30,11 +30,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -44,8 +46,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
@@ -114,12 +116,22 @@ fun ChatMessageBubbleItem(
     onOpenImageFullscreen: (path: String, fileName: String?) -> Unit,
     onOpenVideoFullscreen: (path: String, fileName: String?) -> Unit,
     onOpenAttachment: (String, String?) -> Unit,
+    onCancelTransfer: (messageId: String) -> Unit = {},
+    onRetryDownload: (messageId: String) -> Unit = {},
     onSwipeReply: (MessageEntity) -> Unit,
     onLongPressMessage: (MessageEntity) -> Unit,
     onReactionChipClick: (messageId: String, emoji: String) -> Unit,
     onQuoteClick: (replyToMessageId: String) -> Unit
 ) {
     val isOutgoing = message.isOutgoing
+    val isSticker = message.type == MessageType.STICKER.name
+    val isTransferActive = message.type != MessageType.TEXT.name &&
+        message.status == DeliveryStatus.SENDING.name &&
+        message.transferProgress in 1..99
+    val isIncomingCancelled = !isOutgoing &&
+        message.type != MessageType.TEXT.name &&
+        message.status == DeliveryStatus.CANCELLED.name
+
     val bubbleColor = if (isOutgoing) {
         MaterialTheme.colorScheme.primaryContainer
     } else {
@@ -141,12 +153,17 @@ fun ChatMessageBubbleItem(
     val formattedTimestamp = remember(message.createdAt) {
         NetworkUtils.formatTimestamp(message.createdAt)
     }
-    val mediaFileReady = remember(message.type, message.mediaLocalPath, message.transferProgress) {
-        (message.type == MessageType.IMAGE.name || message.type == MessageType.VIDEO.name) &&
+    val mediaFileReady = remember(message.type, message.mediaLocalPath, message.transferProgress, message.status) {
+        (message.type == MessageType.IMAGE.name ||
+            message.type == MessageType.VIDEO.name ||
+            message.type == MessageType.STICKER.name) &&
+            message.status != DeliveryStatus.CANCELLED.name &&
             !message.mediaLocalPath.isNullOrBlank() &&
             message.transferProgress >= 100 &&
             File(message.mediaLocalPath).exists()
     }
+    val effectiveBubbleColor = if (isSticker && mediaFileReady) Color.Transparent else bubbleColor
+    val effectiveSurfaceShape = if (isSticker && mediaFileReady) RoundedCornerShape(12.dp) else bubbleShape
 
     val density = LocalDensity.current
     val maxSwipePx = remember(density) { with(density) { 64.dp.toPx() } }
@@ -209,11 +226,11 @@ fun ChatMessageBubbleItem(
             horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start
         ) {
             Surface(
-                shape = bubbleShape,
-                color = bubbleColor,
+                shape = effectiveSurfaceShape,
+                color = effectiveBubbleColor,
                 modifier = Modifier
                     .widthIn(min = 68.dp, max = 276.dp)
-                    .clip(bubbleShape)
+                    .clip(effectiveSurfaceShape)
                     .combinedClickable(
                         onClick = {},
                         onLongClick = { onLongPressMessage(message) }
@@ -233,7 +250,11 @@ fun ChatMessageBubbleItem(
                         }
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = if (isOutgoing) 0.45f else 0.7f),
+                            color = if (isSticker && mediaFileReady) {
+                                bubbleColor.copy(alpha = 0.92f)
+                            } else {
+                                MaterialTheme.colorScheme.surface.copy(alpha = if (isOutgoing) 0.45f else 0.7f)
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
@@ -276,6 +297,69 @@ fun ChatMessageBubbleItem(
                     }
 
                     when (message.type) {
+                        MessageType.STICKER.name -> {
+                            if (mediaFileReady && message.mediaLocalPath != null) {
+                                Box(
+                                    modifier = Modifier
+                                        .sizeIn(
+                                            minWidth = 96.dp,
+                                            minHeight = 96.dp,
+                                            maxWidth = 156.dp,
+                                            maxHeight = 156.dp
+                                        )
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .combinedClickable(
+                                            onClick = {
+                                                onOpenImageFullscreen(message.mediaLocalPath, message.fileName)
+                                            },
+                                            onLongClick = { onLongPressMessage(message) }
+                                        )
+                                ) {
+                                    AsyncImage(
+                                        model = File(message.mediaLocalPath),
+                                        contentDescription = stringResource(R.string.sticker_label),
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier.sizeIn(
+                                            minWidth = 96.dp,
+                                            minHeight = 96.dp,
+                                            maxWidth = 156.dp,
+                                            maxHeight = 156.dp
+                                        )
+                                    )
+                                    MediaTimestampOverlayPill(
+                                        message = message,
+                                        formattedTimestamp = formattedTimestamp,
+                                        isOutgoing = isOutgoing,
+                                        nowClockFlow = nowClockFlow,
+                                        modifier = Modifier
+                                            .align(Alignment.BottomEnd)
+                                            .padding(4.dp)
+                                    )
+                                }
+                            } else if (isIncomingCancelled) {
+                                CancelledIncomingDownloadBlock(
+                                    message = message,
+                                    contentColor = contentColor,
+                                    onRetryDownload = onRetryDownload
+                                )
+                            } else {
+                                Text(
+                                    text = message.textContent,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = contentColor
+                                )
+                            }
+                            if (isTransferActive) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                BubbleTransferCancelRow(
+                                    messageId = message.messageId,
+                                    progress = message.transferProgress,
+                                    contentColor = contentColor,
+                                    onCancel = { onCancelTransfer(message.messageId) }
+                                )
+                            }
+                        }
+
                         MessageType.IMAGE.name -> {
                             if (mediaFileReady && message.mediaLocalPath != null) {
                                 Box(
@@ -306,6 +390,12 @@ fun ChatMessageBubbleItem(
                                             .padding(6.dp)
                                     )
                                 }
+                            } else if (isIncomingCancelled) {
+                                CancelledIncomingDownloadBlock(
+                                    message = message,
+                                    contentColor = contentColor,
+                                    onRetryDownload = onRetryDownload
+                                )
                             } else {
                                 Text(
                                     text = message.textContent,
@@ -313,11 +403,13 @@ fun ChatMessageBubbleItem(
                                     color = contentColor
                                 )
                             }
-                            if (message.transferProgress in 1..99) {
+                            if (isTransferActive) {
                                 Spacer(modifier = Modifier.height(6.dp))
-                                LinearProgressIndicator(
-                                    progress = { message.transferProgress / 100f },
-                                    modifier = Modifier.fillMaxWidth()
+                                BubbleTransferCancelRow(
+                                    messageId = message.messageId,
+                                    progress = message.transferProgress,
+                                    contentColor = contentColor,
+                                    onCancel = { onCancelTransfer(message.messageId) }
                                 )
                             }
                         }
@@ -413,6 +505,12 @@ fun ChatMessageBubbleItem(
                                             .padding(6.dp)
                                     )
                                 }
+                            } else if (isIncomingCancelled) {
+                                CancelledIncomingDownloadBlock(
+                                    message = message,
+                                    contentColor = contentColor,
+                                    onRetryDownload = onRetryDownload
+                                )
                             } else {
                                 Text(
                                     text = message.textContent,
@@ -420,69 +518,95 @@ fun ChatMessageBubbleItem(
                                     color = contentColor
                                 )
                             }
-                            if (message.transferProgress in 1..99) {
+                            if (isTransferActive) {
                                 Spacer(modifier = Modifier.height(6.dp))
-                                LinearProgressIndicator(
-                                    progress = { message.transferProgress / 100f },
-                                    modifier = Modifier.fillMaxWidth()
+                                BubbleTransferCancelRow(
+                                    messageId = message.messageId,
+                                    progress = message.transferProgress,
+                                    contentColor = contentColor,
+                                    onCancel = { onCancelTransfer(message.messageId) }
                                 )
                             }
                         }
 
                         MessageType.VOICE.name -> {
-                            val isThisPlaying = voicePlaybackState.activeMessageId == message.messageId &&
-                                voicePlaybackState.isPlaying
-                            val progressFraction = if (
-                                voicePlaybackState.activeMessageId == message.messageId &&
-                                voicePlaybackState.durationMs > 0
-                            ) {
-                                (voicePlaybackState.positionMs.toFloat() / voicePlaybackState.durationMs.toFloat())
-                                    .coerceIn(0f, 1f)
+                            if (isIncomingCancelled) {
+                                CancelledIncomingDownloadBlock(
+                                    message = message,
+                                    contentColor = contentColor,
+                                    onRetryDownload = onRetryDownload
+                                )
                             } else {
-                                0f
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                IconButton(
-                                    onClick = {
-                                        val path = message.mediaLocalPath
-                                        if (!path.isNullOrBlank() && message.transferProgress >= 100) {
-                                            onToggleVoice(message.messageId, path)
-                                        }
-                                    },
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primary)
+                                val isThisPlaying = voicePlaybackState.activeMessageId == message.messageId &&
+                                    voicePlaybackState.isPlaying
+                                val progressFraction = if (
+                                    voicePlaybackState.activeMessageId == message.messageId &&
+                                    voicePlaybackState.durationMs > 0
                                 ) {
-                                    Icon(
-                                        imageVector = if (isThisPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
-                                        contentDescription = stringResource(R.string.voice_message_label),
-                                        tint = MaterialTheme.colorScheme.onPrimary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    (voicePlaybackState.positionMs.toFloat() / voicePlaybackState.durationMs.toFloat())
+                                        .coerceIn(0f, 1f)
+                                } else {
+                                    0f
                                 }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    LinearProgressIndicator(
-                                        progress = {
-                                            if (message.transferProgress < 100) {
-                                                message.transferProgress / 100f
-                                            } else {
-                                                progressFraction
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            val path = message.mediaLocalPath
+                                            if (!path.isNullOrBlank() && message.transferProgress >= 100) {
+                                                onToggleVoice(message.messageId, path)
                                             }
                                         },
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                    Spacer(modifier = Modifier.height(3.dp))
-                                    Text(
-                                        text = "${stringResource(R.string.voice_message_label)} · ${NetworkUtils.formatDurationMs(message.audioDurationMs)}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = contentColor.copy(alpha = 0.8f)
-                                    )
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primary)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (isThisPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                            contentDescription = stringResource(R.string.voice_message_label),
+                                            tint = MaterialTheme.colorScheme.onPrimary,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        LinearProgressIndicator(
+                                            progress = {
+                                                if (message.transferProgress < 100) {
+                                                    message.transferProgress / 100f
+                                                } else {
+                                                    progressFraction
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Spacer(modifier = Modifier.height(3.dp))
+                                        Text(
+                                            text = "${stringResource(R.string.voice_message_label)} · ${NetworkUtils.formatDurationMs(message.audioDurationMs)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = contentColor.copy(alpha = 0.8f)
+                                        )
+                                    }
+                                    if (isTransferActive) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        IconButton(
+                                            onClick = { onCancelTransfer(message.messageId) },
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .testTag("chat_cancel_transfer_${message.messageId}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Close,
+                                                contentDescription = stringResource(R.string.cancel_transfer_cd),
+                                                tint = DangerCoral,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -524,11 +648,22 @@ fun ChatMessageBubbleItem(
                                 }
                             }
 
-                            if (message.transferProgress < 100) {
+                            if (isIncomingCancelled) {
                                 Spacer(modifier = Modifier.height(6.dp))
-                                LinearProgressIndicator(
-                                    progress = { message.transferProgress / 100f },
-                                    modifier = Modifier.fillMaxWidth()
+                                CancelledIncomingDownloadBlock(
+                                    message = message,
+                                    contentColor = contentColor,
+                                    onRetryDownload = onRetryDownload,
+                                    showFileHeader = false
+                                )
+                            } else if (isTransferActive || message.transferProgress < 100) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                BubbleTransferCancelRow(
+                                    messageId = message.messageId,
+                                    progress = message.transferProgress,
+                                    contentColor = contentColor,
+                                    showCancel = isTransferActive,
+                                    onCancel = { onCancelTransfer(message.messageId) }
                                 )
                             } else if (!message.mediaLocalPath.isNullOrBlank()) {
                                 Spacer(modifier = Modifier.height(6.dp))
@@ -541,7 +676,7 @@ fun ChatMessageBubbleItem(
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Filled.OpenInNew,
+                                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                                         contentDescription = null,
                                         modifier = Modifier.size(15.dp)
                                     )
@@ -663,6 +798,97 @@ fun ChatMessageBubbleItem(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun BubbleTransferCancelRow(
+    messageId: String,
+    progress: Int,
+    contentColor: Color,
+    showCancel: Boolean = true,
+    onCancel: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        LinearProgressIndicator(
+            progress = { (progress / 100f).coerceIn(0f, 1f) },
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = "${progress.coerceIn(0, 99)}%",
+            fontFamily = JetBrainsMonoFontFamily,
+            style = MaterialTheme.typography.labelSmall,
+            color = contentColor.copy(alpha = 0.8f)
+        )
+        if (showCancel) {
+            IconButton(
+                onClick = onCancel,
+                modifier = Modifier
+                    .size(32.dp)
+                    .testTag("chat_cancel_transfer_$messageId")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.cancel_transfer_cd),
+                    tint = DangerCoral,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CancelledIncomingDownloadBlock(
+    message: MessageEntity,
+    contentColor: Color,
+    onRetryDownload: (String) -> Unit,
+    showFileHeader: Boolean = true
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        if (showFileHeader && !message.fileName.isNullOrBlank()) {
+            Text(
+                text = "${message.fileName} (${NetworkUtils.formatBytes(message.fileSizeBytes)})",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = contentColor,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Text(
+            text = stringResource(R.string.transfer_cancelled),
+            style = MaterialTheme.typography.labelMedium,
+            color = contentColor.copy(alpha = 0.78f)
+        )
+        OutlinedButton(
+            onClick = { onRetryDownload(message.messageId) },
+            shape = MaterialTheme.shapes.small,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("chat_retry_download_${message.messageId}")
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Download,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = stringResource(R.string.download_again_btn),
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                softWrap = false
+            )
         }
     }
 }
@@ -893,6 +1119,7 @@ fun FloatingTransfersOverlay(
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
     onCollapse: () -> Unit,
+    onCancelTransfer: (messageId: String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
@@ -969,7 +1196,7 @@ fun FloatingTransfersOverlay(
                     tonalElevation = 4.dp,
                     modifier = Modifier
                         .padding(top = 6.dp)
-                        .widthIn(min = 220.dp, max = 280.dp)
+                        .widthIn(min = 240.dp, max = 300.dp)
                 ) {
                     Column(
                         modifier = Modifier.padding(12.dp),
@@ -1014,13 +1241,26 @@ fun FloatingTransfersOverlay(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f)
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = "${tr.progress}%",
                                         fontFamily = JetBrainsMonoFontFamily,
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary
                                     )
+                                    IconButton(
+                                        onClick = { onCancelTransfer(tr.messageId) },
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .testTag("overlay_cancel_transfer_${tr.messageId}")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.Close,
+                                            contentDescription = stringResource(R.string.cancel_transfer_cd),
+                                            tint = DangerCoral,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
                                 Text(
                                     text = "${

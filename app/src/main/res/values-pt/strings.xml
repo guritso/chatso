@@ -190,4 +190,12 @@
     <string name="safety_peer_verified_you">Este contato verificou você. Confirme o código para concluir.</string>
     <string name="video_playback_error_title">Não foi possível reproduzir o vídeo</string>
     <string name="video_playback_error_body">Codec incompatível ou arquivo corrompido (%1$s). Tente abrir em um player externo.</string>
+    <string name="cancel_transfer_cd">Cancelar transferência</string>
+    <string name="transfer_cancelled">Transferência cancelada</string>
+    <string name="download_again_btn">Baixar novamente</string>
+    <string name="msg_file_unavailable">Arquivo não está mais disponível no dispositivo do contato.</string>
+    <string name="notif_action_mark_read">Marcar como lida</string>
+    <string name="notif_action_reply">Responder</string>
+    <string name="notif_reply_hint">Mensagem…</string>
+    <string name="sticker_label">Figurinha</string>
 </resources>

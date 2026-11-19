@@ -178,4 +178,12 @@
     <string name="safety_peer_verified_you">Ce contact vous a vérifié. Confirmez son code pour terminer.</string>
     <string name="video_playback_error_title">Impossible de lire la vidéo</string>
     <string name="video_playback_error_body">Codec non pris en charge ou fichier endommagé (%1$s). Essayez de l\'ouvrir avec un lecteur externe.</string>
+    <string name="cancel_transfer_cd">Annuler le transfert</string>
+    <string name="transfer_cancelled">Transfert annulé</string>
+    <string name="download_again_btn">Télécharger à nouveau</string>
+    <string name="msg_file_unavailable">Le fichier n\'est plus disponible sur l\'appareil du contact.</string>
+    <string name="notif_action_mark_read">Marquer comme lu</string>
+    <string name="notif_action_reply">Répondre</string>
+    <string name="notif_reply_hint">Message…</string>
+    <string name="sticker_label">Autocollant</string>
 </resources>

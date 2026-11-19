@@ -50,6 +50,10 @@
             android:exported="false"
             android:foregroundServiceType="remoteMessaging" />
 
+        <receiver
+            android:name=".network.ChatsoNotificationActionReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

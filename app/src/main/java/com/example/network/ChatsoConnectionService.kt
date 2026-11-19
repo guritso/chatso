@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -22,14 +23,19 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
+import androidx.core.app.RemoteInput
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.LocusIdCompat
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.example.ChatsoApplication
 import com.example.MainActivity
 import com.example.R
 import com.example.data.LocaleHelper
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,7 +51,29 @@ object ChatsoNotificationHelper {
     const val CHANNEL_MESSAGES = "chatso_incoming_messages"
     const val NOTIFICATION_ID_SERVICE = 1001
     const val EXTRA_PEER_ID = "extra_peer_id"
+    const val EXTRA_NOTIFICATION_ID = "extra_notification_id"
+    const val ACTION_MARK_READ = "com.example.action.NOTIF_MARK_READ"
+    const val ACTION_REPLY = "com.example.action.NOTIF_REPLY"
+    const val ACTION_DISMISS = "com.example.action.NOTIF_DISMISS"
+    const val KEY_TEXT_REPLY = "key_text_reply"
     private const val BRAND_TEAL = 0xFF0F766E.toInt()
+    private const val MAX_CACHED_MESSAGES = 8
+
+    private data class CachedBubbleLine(
+        val text: CharSequence,
+        val timestamp: Long,
+        val isFromLocalUser: Boolean
+    )
+
+    private data class ConversationNotificationCache(
+        val peerId: String,
+        val senderName: String,
+        val avatarPath: String?,
+        val localUsername: String,
+        val lines: MutableList<CachedBubbleLine> = mutableListOf()
+    )
+
+    private val conversationCaches = ConcurrentHashMap<Int, ConversationNotificationCache>()
 
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -123,46 +151,75 @@ object ChatsoNotificationHelper {
         ) {
             return
         }
-        ensureChannels(context)
-        val openIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(EXTRA_PEER_ID, peerId)
-        }
-        val pi = PendingIntent.getActivity(
-            context,
-            notificationId,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val cache = conversationCaches.compute(notificationId) { _, existing ->
+            val current = existing?.takeIf { it.peerId == peerId } ?: ConversationNotificationCache(
+                peerId = peerId,
+                senderName = senderName,
+                avatarPath = avatarPath,
+                localUsername = localUsername
+            )
+            current.lines.add(
+                CachedBubbleLine(
+                    text = preview,
+                    timestamp = System.currentTimeMillis(),
+                    isFromLocalUser = false
+                )
+            )
+            while (current.lines.size > MAX_CACHED_MESSAGES) {
+                current.lines.removeAt(0)
+            }
+            current.copy(
+                senderName = senderName,
+                avatarPath = avatarPath ?: current.avatarPath,
+                localUsername = localUsername
+            )
+        } ?: return
+
+        postConversationNotification(
+            context = context,
+            cache = cache,
+            notificationId = notificationId,
+            onlyAlertOnce = false
         )
+    }
 
-        val avatarBitmap = buildNotificationAvatarBitmap(context, senderName, avatarPath)
-        val localUserPerson = Person.Builder()
-            .setName(localUsername.ifBlank { "You" })
-            .setKey("chatso_local_user")
-            .build()
-        val senderPerson = Person.Builder()
-            .setName(senderName)
-            .setKey(peerId)
-            .setIcon(IconCompat.createWithBitmap(avatarBitmap))
-            .build()
-        val style = NotificationCompat.MessagingStyle(localUserPerson)
-            .addMessage(preview, System.currentTimeMillis(), senderPerson)
+    fun appendLocalReplyToNotification(
+        context: Context,
+        peerId: String,
+        replyText: String,
+        notificationId: Int = peerId.hashCode()
+    ) {
+        val existing = conversationCaches[notificationId]?.takeIf { it.peerId == peerId } ?: return
+        existing.lines.add(
+            CachedBubbleLine(
+                text = replyText,
+                timestamp = System.currentTimeMillis(),
+                isFromLocalUser = true
+            )
+        )
+        while (existing.lines.size > MAX_CACHED_MESSAGES) {
+            existing.lines.removeAt(0)
+        }
+        postConversationNotification(
+            context = context,
+            cache = existing,
+            notificationId = notificationId,
+            onlyAlertOnce = true
+        )
+    }
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
-            .setSmallIcon(R.drawable.ic_notification_chatso)
-            .setColor(BRAND_TEAL)
-            .setLargeIcon(avatarBitmap)
-            .setContentTitle(senderName)
-            .setContentText(preview)
-            .setStyle(style)
-            .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-            .setContentIntent(pi)
-            .build()
-
+    fun cancelPeerNotification(
+        context: Context,
+        peerId: String,
+        notificationId: Int = peerId.hashCode()
+    ) {
+        conversationCaches.remove(notificationId)
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-        nm?.notify(notificationId, notification)
+        nm?.cancel(notificationId)
+    }
+
+    internal fun clearCachedNotificationOnly(notificationId: Int) {
+        conversationCaches.remove(notificationId)
     }
 
     fun showIncomingReactionNotification(
@@ -188,12 +245,168 @@ object ChatsoNotificationHelper {
         )
     }
 
+    private fun postConversationNotification(
+        context: Context,
+        cache: ConversationNotificationCache,
+        notificationId: Int,
+        onlyAlertOnce: Boolean
+    ) {
+        ensureChannels(context)
+        val localized = LocaleHelper.wrapContext(context)
+        val peerId = cache.peerId
+        val shortcutId = "conv_$peerId"
+
+        val openIntent = Intent(context, MainActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_PEER_ID, peerId)
+        }
+        val contentPi = PendingIntent.getActivity(
+            context,
+            notificationId,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val isAndroid11Plus = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+        val cleanAvatarBitmap = buildNotificationAvatarBitmap(
+            context = context,
+            senderName = cache.senderName,
+            avatarPath = cache.avatarPath,
+            includeCornerBadge = !isAndroid11Plus
+        )
+        val personIcon = IconCompat.createWithBitmap(cleanAvatarBitmap)
+
+        val localUserPerson = Person.Builder()
+            .setName(cache.localUsername.ifBlank { "You" })
+            .setKey("chatso_local_user")
+            .build()
+
+        val senderPerson = Person.Builder()
+            .setName(cache.senderName)
+            .setKey(peerId)
+            .setIcon(personIcon)
+            .build()
+
+        // Publish a long-lived conversation shortcut so SystemUI (Android 11+) renders the
+        // WhatsApp-style conversation header (large contact avatar + mini Chatso corner icon,
+        // without the redundant top "Chatso" app title row).
+        runCatching {
+            val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
+                .setShortLabel(cache.senderName.ifBlank { "Chatso" })
+                .setLongLived(true)
+                .setPerson(senderPerson)
+                .setCategories(setOf("android.shortcut.conversation"))
+                .setIcon(personIcon)
+                .setIntent(openIntent)
+                .build()
+            ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
+        }
+
+        val style = NotificationCompat.MessagingStyle(localUserPerson)
+        cache.lines.forEach { line ->
+            style.addMessage(
+                line.text,
+                line.timestamp,
+                if (line.isFromLocalUser) null else senderPerson
+            )
+        }
+
+        val markReadIntent = Intent(context, ChatsoNotificationActionReceiver::class.java).apply {
+            action = ACTION_MARK_READ
+            putExtra(EXTRA_PEER_ID, peerId)
+            putExtra(EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val markReadPi = PendingIntent.getBroadcast(
+            context,
+            notificationId * 31 + 1,
+            markReadIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val replyIntent = Intent(context, ChatsoNotificationActionReceiver::class.java).apply {
+            action = ACTION_REPLY
+            putExtra(EXTRA_PEER_ID, peerId)
+            putExtra(EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val replyFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
+        val replyPi = PendingIntent.getBroadcast(
+            context,
+            notificationId * 31 + 2,
+            replyIntent,
+            replyFlags
+        )
+
+        val dismissIntent = Intent(context, ChatsoNotificationActionReceiver::class.java).apply {
+            action = ACTION_DISMISS
+            putExtra(EXTRA_PEER_ID, peerId)
+            putExtra(EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val dismissPi = PendingIntent.getBroadcast(
+            context,
+            notificationId * 31 + 3,
+            dismissIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val remoteInput = RemoteInput.Builder(KEY_TEXT_REPLY)
+            .setLabel(localized.getString(R.string.notif_reply_hint))
+            .build()
+
+        val replyAction = NotificationCompat.Action.Builder(
+            0,
+            localized.getString(R.string.notif_action_reply),
+            replyPi
+        )
+            .addRemoteInput(remoteInput)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .setShowsUserInterface(false)
+            .setAllowGeneratedReplies(true)
+            .build()
+
+        val markReadAction = NotificationCompat.Action.Builder(
+            0,
+            localized.getString(R.string.notif_action_mark_read),
+            markReadPi
+        )
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_MARK_AS_READ)
+            .setShowsUserInterface(false)
+            .build()
+
+        val latestLine = cache.lines.lastOrNull()?.text ?: ""
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(R.drawable.ic_notification_chatso)
+            .setColor(BRAND_TEAL)
+            .setLargeIcon(cleanAvatarBitmap)
+            .setContentTitle(cache.senderName)
+            .setContentText(latestLine)
+            .setStyle(style)
+            .setShortcutId(shortcutId)
+            .setLocusId(LocusIdCompat(shortcutId))
+            .addPerson(senderPerson)
+            .setShowWhen(true)
+            .setOnlyAlertOnce(onlyAlertOnce)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setContentIntent(contentPi)
+            .setDeleteIntent(dismissPi)
+            .addAction(markReadAction)
+            .addAction(replyAction)
+            .build()
+
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        nm?.notify(notificationId, notification)
+    }
+
     private fun buildNotificationAvatarBitmap(
         context: Context,
         senderName: String,
-        avatarPath: String?
+        avatarPath: String?,
+        includeCornerBadge: Boolean
     ): Bitmap {
-        val sizePx = 144
+        val sizePx = 256
         val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
 
@@ -238,7 +451,7 @@ object ChatsoNotificationHelper {
 
             val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = android.graphics.Color.WHITE
-                textSize = 52f
+                textSize = 94f
                 typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                 textAlign = Paint.Align.CENTER
             }
@@ -247,41 +460,103 @@ object ChatsoNotificationHelper {
             canvas.drawText(initials, sizePx / 2f, baseline, textPaint)
         }
 
-        // Draw small circular Chatso icon badge on bottom-right corner
-        val badgeRadius = sizePx * 0.19f
-        val cx = sizePx - badgeRadius - 3f
-        val cy = sizePx - badgeRadius - 3f
-        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.WHITE
-        }
-        val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = BRAND_TEAL
-        }
-        canvas.drawCircle(cx, cy, badgeRadius + 3.5f, borderPaint)
-        canvas.drawCircle(cx, cy, badgeRadius, badgeBgPaint)
-
-        val badgeDrawable = runCatching {
-            ContextCompat.getDrawable(context, R.drawable.img_launcher_icon_1794975444462)
-                ?: ContextCompat.getDrawable(context, R.drawable.ic_notification_chatso)
-        }.getOrNull()
-        if (badgeDrawable != null) {
-            val inset = (badgeRadius * 0.14f).toInt()
-            val clipPath = android.graphics.Path().apply {
-                addCircle(cx, cy, badgeRadius, android.graphics.Path.Direction.CW)
+        if (includeCornerBadge) {
+            // Draw small circular Chatso icon badge on bottom-right corner on pre-Android 11 devices
+            val badgeRadius = sizePx * 0.19f
+            val cx = sizePx - badgeRadius - 4f
+            val cy = sizePx - badgeRadius - 4f
+            val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.WHITE
             }
-            canvas.save()
-            canvas.clipPath(clipPath)
-            badgeDrawable.setBounds(
-                (cx - badgeRadius).toInt() + inset,
-                (cy - badgeRadius).toInt() + inset,
-                (cx + badgeRadius).toInt() - inset,
-                (cy + badgeRadius).toInt() - inset
-            )
-            badgeDrawable.draw(canvas)
-            canvas.restore()
+            val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = BRAND_TEAL
+            }
+            canvas.drawCircle(cx, cy, badgeRadius + 5f, borderPaint)
+            canvas.drawCircle(cx, cy, badgeRadius, badgeBgPaint)
+
+            val badgeDrawable = runCatching {
+                ContextCompat.getDrawable(context, R.drawable.img_launcher_icon_1794975444462)
+                    ?: ContextCompat.getDrawable(context, R.drawable.ic_notification_chatso)
+            }.getOrNull()
+            if (badgeDrawable != null) {
+                val inset = (badgeRadius * 0.14f).toInt()
+                val clipPath = android.graphics.Path().apply {
+                    addCircle(cx, cy, badgeRadius, android.graphics.Path.Direction.CW)
+                }
+                canvas.save()
+                canvas.clipPath(clipPath)
+                badgeDrawable.setBounds(
+                    (cx - badgeRadius).toInt() + inset,
+                    (cy - badgeRadius).toInt() + inset,
+                    (cx + badgeRadius).toInt() - inset,
+                    (cy + badgeRadius).toInt() - inset
+                )
+                badgeDrawable.draw(canvas)
+                canvas.restore()
+            }
         }
 
         return output
+    }
+}
+
+class ChatsoNotificationActionReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val peerId = intent.getStringExtra(ChatsoNotificationHelper.EXTRA_PEER_ID) ?: return
+        val defaultId = peerId.hashCode()
+        val notificationId = intent.getIntExtra(ChatsoNotificationHelper.EXTRA_NOTIFICATION_ID, defaultId)
+
+        when (intent.action) {
+            ChatsoNotificationHelper.ACTION_DISMISS -> {
+                ChatsoNotificationHelper.clearCachedNotificationOnly(notificationId)
+            }
+            ChatsoNotificationHelper.ACTION_MARK_READ -> {
+                val pendingResult = goAsync()
+                val app = context.applicationContext as? ChatsoApplication
+                if (app == null) {
+                    ChatsoNotificationHelper.cancelPeerNotification(context, peerId, notificationId)
+                    pendingResult.finish()
+                    return
+                }
+                app.container.appScope.launch {
+                    try {
+                        app.container.repository.markConversationRead(peerId, fromNotification = true)
+                        ChatsoNotificationHelper.cancelPeerNotification(context, peerId, notificationId)
+                    } finally {
+                        pendingResult.finish()
+                    }
+                }
+            }
+            ChatsoNotificationHelper.ACTION_REPLY -> {
+                val replyText = RemoteInput.getResultsFromIntent(intent)
+                    ?.getCharSequence(ChatsoNotificationHelper.KEY_TEXT_REPLY)
+                    ?.toString()
+                    ?.trim()
+                if (replyText.isNullOrBlank()) return
+
+                val pendingResult = goAsync()
+                val app = context.applicationContext as? ChatsoApplication
+                if (app == null) {
+                    pendingResult.finish()
+                    return
+                }
+                app.container.appScope.launch {
+                    try {
+                        val repo = app.container.repository
+                        repo.markConversationRead(peerId, fromNotification = true)
+                        repo.sendText(peerId, replyText)
+                        ChatsoNotificationHelper.appendLocalReplyToNotification(
+                            context = context,
+                            peerId = peerId,
+                            replyText = replyText,
+                            notificationId = notificationId
+                        )
+                    } finally {
+                        pendingResult.finish()
+                    }
+                }
+            }
+        }
     }
 }
 

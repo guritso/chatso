@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,6 +17,11 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalOverscrollConfiguration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.content.MediaType
+import androidx.compose.foundation.content.ReceiveContentListener
+import androidx.compose.foundation.content.consume
+import androidx.compose.foundation.content.contentReceiver
+import androidx.compose.foundation.content.hasMediaType
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +47,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.clearText
+import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -78,6 +87,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -122,6 +132,7 @@ import com.example.ui.theme.DangerCoral
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OnlineEmerald
 import com.example.ui.theme.WarningAmber
+import java.io.InputStream
 import kotlin.math.abs
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -166,11 +177,14 @@ fun ChatDetailScreen(
     onSendPhotoUri: (Uri, MessageEntity?) -> Unit,
     onSendVideoUri: (Uri, MessageEntity?) -> Unit,
     onSendDocumentUri: (Uri, MessageEntity?) -> Unit,
+    onSendStickerStream: (InputStream, String, String?, MessageEntity?) -> Unit,
     onStartVoiceRecording: () -> Unit,
     onCancelVoiceRecording: () -> Unit,
     onSendVoiceRecording: (MessageEntity?) -> Unit,
     onToggleVoicePlayback: (messageId: String, localPath: String) -> Unit,
     onOpenAttachment: (localPath: String, mimeType: String?) -> Unit,
+    onCancelTransfer: (messageId: String) -> Unit,
+    onRetryDownload: (messageId: String) -> Unit,
     onSetSelfDestruct: (Int) -> Unit,
     onVerifyPeerKey: (Boolean) -> Unit,
     onReconnect: () -> Unit,
@@ -186,10 +200,46 @@ fun ChatDetailScreen(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
 
-    var draftText by rememberSaveable(peer.peerId) { mutableStateOf("") }
+    val textFieldState = key(peer.peerId) { rememberTextFieldState() }
+    val draftText = textFieldState.text.toString()
+    LaunchedEffect(peer.peerId, draftText) {
+        onTypingChanged(draftText.isNotBlank())
+    }
     var replyingToId by rememberSaveable(peer.peerId) { mutableStateOf<String?>(null) }
     val replyingToMessage = remember(replyingToId, messages) {
         replyingToId?.let { id -> messages.firstOrNull { it.messageId == id } }
+    }
+    val latestReplyingTo by rememberUpdatedState(replyingToMessage)
+    val latestSendSticker by rememberUpdatedState(onSendStickerStream)
+    val receiveContentListener = remember(peer.peerId, context) {
+        ReceiveContentListener { transferableContent ->
+            if (!transferableContent.hasMediaType(MediaType.Image)) {
+                return@ReceiveContentListener transferableContent
+            }
+            transferableContent.consume { item ->
+                val uri = item.uri ?: return@consume false
+                val cr = context.contentResolver
+                val stream = runCatching { cr.openInputStream(uri) }.getOrNull()
+                    ?: return@consume false
+                val mimeType = cr.getType(uri)
+                    ?: transferableContent.clipMetadata.clipDescription.let { desc ->
+                        (0 until desc.mimeTypeCount)
+                            .map { desc.getMimeType(it) }
+                            .firstOrNull { it.startsWith("image/") }
+                    }
+                    ?: "image/webp"
+                val fileName = runCatching {
+                    cr.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                        val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+                    }
+                }.getOrNull()
+                val replyTarget = latestReplyingTo
+                replyingToId = null
+                latestSendSticker(stream, mimeType, fileName, replyTarget)
+                true
+            }
+        }
     }
 
     var showAttachMenu by remember { mutableStateOf(false) }
@@ -578,6 +628,8 @@ fun ChatDetailScreen(
                                 viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.VIDEO, path, fileName)
                             },
                             onOpenAttachment = onOpenAttachment,
+                            onCancelTransfer = onCancelTransfer,
+                            onRetryDownload = onRetryDownload,
                             onSwipeReply = { target -> replyingToId = target.messageId },
                             onLongPressMessage = { target -> actionDialogMessage = target },
                             onReactionChipClick = { msgId, emoji -> onToggleReaction(msgId, emoji) },
@@ -598,6 +650,7 @@ fun ChatDetailScreen(
                 expanded = transfersExpanded,
                 onToggleExpanded = { transfersExpanded = !transfersExpanded },
                 onCollapse = { transfersExpanded = false },
+                onCancelTransfer = onCancelTransfer,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(top = 10.dp, end = 12.dp)
@@ -711,6 +764,7 @@ fun ChatDetailScreen(
                                     val replySnippet = when (replyingToMessage.type) {
                                         MessageType.IMAGE.name -> "Photo"
                                         MessageType.VIDEO.name -> stringResource(R.string.video_label)
+                                        MessageType.STICKER.name -> stringResource(R.string.sticker_label)
                                         MessageType.VOICE.name -> stringResource(R.string.voice_message_label)
                                         MessageType.FILE.name -> replyingToMessage.fileName ?: "File"
                                         else -> replyingToMessage.textContent
@@ -824,21 +878,18 @@ fun ChatDetailScreen(
                                     }
 
                                     BasicTextField(
-                                        value = draftText,
-                                        onValueChange = { next ->
-                                            draftText = next
-                                            onTypingChanged(next.isNotBlank())
-                                        },
-                                        maxLines = 4,
+                                        state = textFieldState,
+                                        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 4),
                                         textStyle = MaterialTheme.typography.bodyLarge.copy(
                                             color = MaterialTheme.colorScheme.onSurface
                                         ),
                                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                                         modifier = Modifier
                                             .weight(1f)
+                                            .contentReceiver(receiveContentListener)
                                             .padding(vertical = 8.dp, horizontal = 4.dp)
                                             .testTag("chat_message_input"),
-                                        decorationBox = { innerTextField ->
+                                        decorator = { innerTextField ->
                                             Box(contentAlignment = Alignment.CenterStart) {
                                                 if (draftText.isEmpty()) {
                                                     Text(
@@ -863,7 +914,7 @@ fun ChatDetailScreen(
                                 onClick = {
                                     val toSend = draftText
                                     val replyTarget = replyingToMessage
-                                    draftText = ""
+                                    textFieldState.clearText()
                                     replyingToId = null
                                     onSendText(toSend, replyTarget)
                                 },

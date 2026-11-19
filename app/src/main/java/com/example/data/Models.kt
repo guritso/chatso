@@ -28,6 +28,7 @@ enum class MessageType {
     VIDEO,
     VOICE,
     FILE,
+    STICKER,
     SYSTEM
 }
 
@@ -36,7 +37,8 @@ enum class DeliveryStatus {
     SENT,
     DELIVERED,
     READ,
-    FAILED
+    FAILED,
+    CANCELLED
 }
 
 enum class PeerPresence {

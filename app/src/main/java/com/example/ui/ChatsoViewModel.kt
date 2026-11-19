@@ -26,6 +26,7 @@ import com.example.network.NetworkUtils
 import com.example.network.QrCodeHelper
 import com.example.network.UpdateCheckResult
 import com.example.network.UpdateChecker
+import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -127,6 +128,11 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         refreshEndpoints()
+        viewModelScope.launch {
+            repository.transferAlertResIds.collect { resId ->
+                _snackbarMessage.value = str(resId)
+            }
+        }
         viewModelScope.launch {
             while (isActive) {
                 _nowClockMs.value = System.currentTimeMillis()
@@ -466,6 +472,43 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
             }
+        }
+    }
+
+    fun sendStickerStream(
+        inputStream: InputStream,
+        mimeType: String,
+        fileNameHint: String? = null,
+        replyTo: MessageEntity? = null
+    ) {
+        val peerId = _activePeerId.value
+        if (peerId == null) {
+            runCatching { inputStream.close() }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = repository.sendStickerStream(
+                peerId = peerId,
+                inputStream = inputStream,
+                mimeType = mimeType,
+                fileNameHint = fileNameHint,
+                replyTo = replyTo
+            )
+            if (!ok) {
+                _snackbarMessage.value = str(R.string.msg_peer_offline)
+            }
+        }
+    }
+
+    fun cancelTransfer(messageId: String) {
+        viewModelScope.launch {
+            repository.cancelTransfer(messageId)
+        }
+    }
+
+    fun retryDownload(messageId: String) {
+        viewModelScope.launch {
+            repository.retryIncomingDownload(messageId)
         }
     }
 
