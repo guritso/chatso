@@ -70,6 +70,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.data.LocaleHelper
 import com.example.data.PeerPresence
 import com.example.data.ThemeMode
+import com.example.data.ThemePalette
 import com.example.network.ChatsoConnectionService
 import com.example.network.ChatsoNotificationHelper
 import com.example.network.NetworkUtils
@@ -81,6 +82,7 @@ import com.example.ui.screens.ChatsListScreen
 import com.example.ui.screens.ConnectScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.ProfileSettingsScreen
+import com.example.ui.theme.AppIconManager
 import com.example.ui.theme.ChatsoTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -186,7 +188,20 @@ fun ChatsoRootApp(
         }
     }
 
-    ChatsoTheme(darkTheme = isDarkTheme) {
+    val activePalette = identity?.themePalette ?: ThemePalette.PURPLE
+    val themeAdvanced = identity?.themeAdvanced ?: false
+
+    LaunchedEffect(identity?.isInitialized, activePalette) {
+        if (identity?.isInitialized == true) {
+            AppIconManager.applyPaletteIcon(context, activePalette)
+        }
+    }
+
+    ChatsoTheme(
+        darkTheme = isDarkTheme,
+        palette = activePalette,
+        advanced = themeAdvanced
+    ) {
         val snackbarHostState = remember { SnackbarHostState() }
         val snackbarMsg by viewModel.snackbarMessage.collectAsStateWithLifecycle()
 
@@ -548,6 +563,8 @@ private fun ChatsoAuthenticatedShell(
                                 onToggleBackgroundConnection = viewModel::toggleBackgroundConnection,
                                 onUpdateListenPort = viewModel::updateListenPort,
                                 onChangeTheme = viewModel::setThemeMode,
+                                onChangePalette = viewModel::setThemePalette,
+                                onToggleThemeAdvanced = viewModel::setThemeAdvanced,
                                 onChangeLanguage = onChangeLanguage,
                                 onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
                                 isCheckingUpdates = updateUiState is UpdateUiState.Checking,
@@ -727,6 +744,8 @@ private fun ChatsoAuthenticatedShell(
                                 onToggleBackgroundConnection = viewModel::toggleBackgroundConnection,
                                 onUpdateListenPort = viewModel::updateListenPort,
                                 onChangeTheme = viewModel::setThemeMode,
+                                onChangePalette = viewModel::setThemePalette,
+                                onToggleThemeAdvanced = viewModel::setThemeAdvanced,
                                 onChangeLanguage = onChangeLanguage,
                                 onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
                                 isCheckingUpdates = updateUiState is UpdateUiState.Checking,

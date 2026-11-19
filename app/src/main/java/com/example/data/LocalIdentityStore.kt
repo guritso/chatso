@@ -32,6 +32,8 @@ class LocalIdentityStore(private val context: Context) {
         val BLOCK_UNKNOWN_PEERS = booleanPreferencesKey("block_unknown_peers")
         val QR_INVITE_TOKEN = stringPreferencesKey("qr_invite_token")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val THEME_PALETTE = stringPreferencesKey("theme_palette")
+        val THEME_ADVANCED = booleanPreferencesKey("theme_advanced")
         val LANGUAGE = stringPreferencesKey("app_language")
         val BACKGROUND_CONN_ENABLED = booleanPreferencesKey("background_connection_enabled")
         val BATTERY_PROMPT_DISMISSED = booleanPreferencesKey("battery_prompt_dismissed")
@@ -40,6 +42,7 @@ class LocalIdentityStore(private val context: Context) {
     val identityFlow: Flow<LocalIdentity> = context.identityDataStore.data.map { prefs ->
         val themeStr = prefs[Keys.THEME_MODE] ?: ThemeMode.SYSTEM.name
         val theme = ThemeMode.entries.firstOrNull { it.name == themeStr } ?: ThemeMode.SYSTEM
+        val palette = ThemePalette.fromName(prefs[Keys.THEME_PALETTE])
         val lang = AppLanguage.fromCode(prefs[Keys.LANGUAGE])
         LocalIdentity(
             isInitialized = prefs[Keys.INITIALIZED] ?: false,
@@ -54,6 +57,8 @@ class LocalIdentityStore(private val context: Context) {
             blockUnknownPeers = prefs[Keys.BLOCK_UNKNOWN_PEERS] ?: false,
             qrInviteToken = prefs[Keys.QR_INVITE_TOKEN] ?: generateInviteToken(),
             themeMode = theme,
+            themePalette = palette,
+            themeAdvanced = prefs[Keys.THEME_ADVANCED] ?: false,
             language = lang,
             backgroundConnectionEnabled = prefs[Keys.BACKGROUND_CONN_ENABLED] ?: true,
             batteryPromptDismissed = prefs[Keys.BATTERY_PROMPT_DISMISSED] ?: false
@@ -137,6 +142,18 @@ class LocalIdentityStore(private val context: Context) {
     suspend fun setThemeMode(mode: ThemeMode) {
         context.identityDataStore.edit { prefs ->
             prefs[Keys.THEME_MODE] = mode.name
+        }
+    }
+
+    suspend fun setThemePalette(palette: ThemePalette) {
+        context.identityDataStore.edit { prefs ->
+            prefs[Keys.THEME_PALETTE] = palette.name
+        }
+    }
+
+    suspend fun setThemeAdvanced(enabled: Boolean) {
+        context.identityDataStore.edit { prefs ->
+            prefs[Keys.THEME_ADVANCED] = enabled
         }
     }
 

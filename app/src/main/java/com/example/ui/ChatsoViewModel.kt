@@ -17,6 +17,7 @@ import com.example.data.MessageEntity
 import com.example.data.NetworkEndpointInfo
 import com.example.data.PeerEntity
 import com.example.data.ThemeMode
+import com.example.data.ThemePalette
 import com.example.media.VoicePlaybackState
 import com.example.media.VoicePlayerController
 import com.example.media.VoiceRecorderController
@@ -26,6 +27,7 @@ import com.example.network.NetworkUtils
 import com.example.network.QrCodeHelper
 import com.example.network.UpdateCheckResult
 import com.example.network.UpdateChecker
+import com.example.ui.theme.AppIconManager
 import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -280,6 +282,19 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch {
             identityStore.setThemeMode(mode)
+        }
+    }
+
+    fun setThemePalette(palette: ThemePalette) {
+        viewModelScope.launch {
+            identityStore.setThemePalette(palette)
+            AppIconManager.applyPaletteIcon(getApplication(), palette)
+        }
+    }
+
+    fun setThemeAdvanced(enabled: Boolean) {
+        viewModelScope.launch {
+            identityStore.setThemeAdvanced(enabled)
         }
     }
 

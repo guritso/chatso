@@ -16,6 +16,10 @@ import com.example.data.MessageEntity
 import com.example.data.MessageType
 import com.example.data.ReactionCodec
 import com.example.data.ReplySenderTags
+import com.example.data.ThemePalette
+import com.example.ui.theme.AppIconManager
+import com.example.ui.theme.buildChatsoColorScheme
+import com.example.ui.theme.spec
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
@@ -845,5 +849,49 @@ class ExampleRobolectricTest {
             dao.deletePeer(peerReceiverId)
             scope.cancel()
         }
+    }
+
+    @Test
+    fun `theme palette defaults to purple persists selection advanced mode and switches app icon`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val store = LocalIdentityStore(context)
+
+        assertEquals(ThemePalette.PURPLE, store.getSnapshot().themePalette)
+        assertFalse(store.getSnapshot().themeAdvanced)
+        assertEquals(12, ThemePalette.entries.size)
+        assertEquals("1.1.5", BuildConfig.VERSION_NAME)
+        assertEquals(7, BuildConfig.VERSION_CODE)
+
+        val lightPrimaries = ThemePalette.entries.map { palette ->
+            store.setThemePalette(palette)
+            assertEquals(palette, store.getSnapshot().themePalette)
+            val scheme = buildChatsoColorScheme(darkTheme = false, palette = palette, advanced = false)
+            assertEquals(palette.spec().light.primary, scheme.primary)
+            scheme.primary
+        }.toSet()
+
+        assertEquals(ThemePalette.entries.size, lightPrimaries.size)
+
+        val darkPrimaries = ThemePalette.entries.map { palette ->
+            val scheme = buildChatsoColorScheme(darkTheme = true, palette = palette, advanced = false)
+            // Verify dark background is elevated charcoal rather than harsh near-black
+            assertTrue(scheme.background.red >= 0.09f)
+            scheme.primary
+        }.toSet()
+        assertEquals(ThemePalette.entries.size, darkPrimaries.size)
+
+        // Verify advanced mode tints backgrounds, surfaces, and secondary colors
+        store.setThemeAdvanced(true)
+        assertTrue(store.getSnapshot().themeAdvanced)
+        val basicDark = buildChatsoColorScheme(darkTheme = true, palette = ThemePalette.ORANGE, advanced = false)
+        val advDark = buildChatsoColorScheme(darkTheme = true, palette = ThemePalette.ORANGE, advanced = true)
+        assertTrue(basicDark.background != advDark.background)
+        assertTrue(basicDark.surface != advDark.surface)
+        assertTrue(basicDark.secondaryContainer != advDark.secondaryContainer)
+
+        // Verify dynamic launcher icon switching via activity-alias
+        AppIconManager.applyPaletteIcon(context, ThemePalette.ORANGE)
+        assertTrue(AppIconManager.isPaletteIconActive(context, ThemePalette.ORANGE))
+        assertFalse(AppIconManager.isPaletteIconActive(context, ThemePalette.PURPLE))
     }
 }

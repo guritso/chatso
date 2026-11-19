@@ -8,6 +8,26 @@ enum class ThemeMode {
     DARK
 }
 
+enum class ThemePalette(val aliasClassName: String) {
+    PURPLE("com.example.MainActivityAliasPurple"),
+    LILAC("com.example.MainActivityAliasLilac"),
+    INDIGO("com.example.MainActivityAliasIndigo"),
+    BLUE("com.example.MainActivityAliasBlue"),
+    CYAN("com.example.MainActivityAliasCyan"),
+    TEAL("com.example.MainActivityAliasTeal"),
+    EMERALD("com.example.MainActivityAliasEmerald"),
+    LIME("com.example.MainActivityAliasLime"),
+    AMBER("com.example.MainActivityAliasAmber"),
+    ORANGE("com.example.MainActivityAliasOrange"),
+    CORAL("com.example.MainActivityAliasCoral"),
+    ROSE("com.example.MainActivityAliasRose");
+
+    companion object {
+        fun fromName(name: String?): ThemePalette =
+            entries.firstOrNull { it.name == name } ?: PURPLE
+    }
+}
+
 enum class AppLanguage(val code: String, val nativeName: String) {
     SYSTEM("system", "System"),
     PT("pt", "Português"),
@@ -143,6 +163,8 @@ data class LocalIdentity(
     val blockUnknownPeers: Boolean = false,
     val qrInviteToken: String = "",
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val themePalette: ThemePalette = ThemePalette.PURPLE,
+    val themeAdvanced: Boolean = false,
     val language: AppLanguage = AppLanguage.SYSTEM,
     val backgroundConnectionEnabled: Boolean = true,
     val batteryPromptDismissed: Boolean = false
