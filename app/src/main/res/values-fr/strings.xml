@@ -176,4 +176,6 @@
     <string name="safety_mutual_verified">Vérification mutuelle terminée (les deux ont confirmé).</string>
     <string name="safety_waiting_peer">Vous avez vérifié ce contact. En attente de sa confirmation.</string>
     <string name="safety_peer_verified_you">Ce contact vous a vérifié. Confirmez son code pour terminer.</string>
+    <string name="video_playback_error_title">Impossible de lire la vidéo</string>
+    <string name="video_playback_error_body">Codec non pris en charge ou fichier endommagé (%1$s). Essayez de l\'ouvrir avec un lecteur externe.</string>
 </resources>

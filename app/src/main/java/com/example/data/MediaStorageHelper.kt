@@ -168,6 +168,11 @@ class MediaStorageHelper(private val context: Context) {
         return File(mediaDir, "${messageId}_$safeName")
     }
 
+    fun createCompressedVideoFile(originalName: String): File {
+        val base = sanitizeFileName(originalName.substringBeforeLast('.')).ifBlank { "video" }
+        return File(mediaDir, "${UUID.randomUUID()}_${base}.mp4")
+    }
+
     fun createNewVoiceRecordingFile(): File {
         return File(mediaDir, "voice_${System.currentTimeMillis()}.m4a")
     }

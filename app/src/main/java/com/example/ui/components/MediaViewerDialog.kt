@@ -1,6 +1,8 @@
 package com.example.ui.components
 
 import android.net.Uri
+import android.view.View
+import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -13,19 +15,28 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,12 +61,17 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
@@ -144,6 +160,7 @@ fun FullScreenImageViewerDialog(
     }
 }
 
+@OptIn(UnstableApi::class)
 @Composable
 fun FullScreenVideoPlayerDialog(
     videoPath: String,
@@ -152,8 +169,12 @@ fun FullScreenVideoPlayerDialog(
     onOpenExternal: () -> Unit
 ) {
     val context = LocalContext.current
+    var playbackError by remember(videoPath) { mutableStateOf<PlaybackException?>(null) }
+    var showTopBar by remember(videoPath) { mutableStateOf(true) }
+
     val exoPlayer = remember(videoPath) {
-        ExoPlayer.Builder(context).build().apply {
+        val renderersFactory = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
+        ExoPlayer.Builder(context, renderersFactory).build().apply {
             setMediaItem(MediaItem.fromUri(Uri.fromFile(File(videoPath))))
             prepare()
             playWhenReady = true
@@ -161,7 +182,21 @@ fun FullScreenVideoPlayerDialog(
     }
 
     DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                playbackError = error
+                showTopBar = true
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) {
+                    playbackError = null
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
         onDispose {
+            exoPlayer.removeListener(listener)
             exoPlayer.release()
         }
     }
@@ -179,11 +214,27 @@ fun FullScreenVideoPlayerDialog(
                 .background(Color.Black)
         ) {
             AndroidView(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(
+                        WindowInsets.navigationBars.union(
+                            WindowInsets.displayCutout.only(
+                                WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal
+                            )
+                        )
+                    ),
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         useController = true
+                        keepScreenOn = true
+                        controllerShowTimeoutMs = 3000
+                        setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                         setBackgroundColor(android.graphics.Color.BLACK)
+                        setControllerVisibilityListener(
+                            PlayerView.ControllerVisibilityListener { visibility ->
+                                showTopBar = visibility == View.VISIBLE
+                            }
+                        )
                         player = exoPlayer
                     }
                 },
@@ -194,12 +245,71 @@ fun FullScreenVideoPlayerDialog(
                 }
             )
 
-            ViewerTopBar(
-                title = fileName ?: File(videoPath).name,
-                onOpenExternal = onOpenExternal,
-                onDismiss = onDismiss,
+            playbackError?.let { error ->
+                Surface(
+                    color = Color(0xE6181A1F),
+                    shape = MaterialTheme.shapes.large,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp)
+                        .widthIn(max = 360.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ErrorOutline,
+                            contentDescription = null,
+                            tint = Color(0xFFFCA5A5),
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.video_playback_error_title),
+                            color = Color.White,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = stringResource(R.string.video_playback_error_body, error.errorCodeName),
+                            color = Color.White.copy(alpha = 0.8f),
+                            style = MaterialTheme.typography.bodySmall,
+                            textAlign = TextAlign.Center
+                        )
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            TextButton(onClick = onDismiss) {
+                                Text(stringResource(R.string.close_btn), color = Color.White)
+                            }
+                            Button(onClick = onOpenExternal) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.open_external_btn))
+                            }
+                        }
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = showTopBar || playbackError != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
                 modifier = Modifier.align(Alignment.TopCenter)
-            )
+            ) {
+                ViewerTopBar(
+                    title = fileName ?: File(videoPath).name,
+                    onOpenExternal = onOpenExternal,
+                    onDismiss = onDismiss
+                )
+            }
         }
     }
 }
@@ -237,7 +347,7 @@ private fun ViewerTopBar(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onOpenExternal) {
                     Icon(
-                        imageVector = Icons.Filled.OpenInNew,
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                         contentDescription = stringResource(R.string.open_external_btn),
                         tint = Color.White
                     )

@@ -176,4 +176,6 @@
     <string name="safety_mutual_verified">Gegenseitig verifiziert (beide bestätigt).</string>
     <string name="safety_waiting_peer">Du hast diesen Kontakt verifiziert. Warte auf Gegenbestätigung.</string>
     <string name="safety_peer_verified_you">Dieser Kontakt hat dich verifiziert. Bestätige seinen Code zum Abschließen.</string>
+    <string name="video_playback_error_title">Video konnte nicht abgespielt werden</string>
+    <string name="video_playback_error_body">Nicht unterstützter Codec oder beschädigte Datei (%1$s). Versuche, es extern zu öffnen.</string>
 </resources>

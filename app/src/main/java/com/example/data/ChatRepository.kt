@@ -3,6 +3,7 @@ package com.example.data
 import android.content.Context
 import android.net.Uri
 import com.example.crypto.CryptoEngine
+import com.example.media.VideoCompressor
 import com.example.network.DiscoveryManager
 import com.example.network.NetworkUtils
 import com.example.network.P2PEventListener
@@ -31,7 +32,8 @@ class ChatRepository(
     private val isAppInForegroundProvider: () -> Boolean = { true }
 ) : P2PEventListener {
 
-    val discoveryManager = DiscoveryManager(context.applicationContext, scope)
+    private val appContext = context.applicationContext
+    val discoveryManager = DiscoveryManager(appContext, scope)
     val nodeManager = P2PNodeManager(scope, discoveryManager, this)
 
     val allPeersFlow: Flow<List<PeerEntity>> = chatDao.observeAllPeers()
@@ -307,7 +309,7 @@ class ChatRepository(
         val wireAuthorType = combinedTag?.substringAfter('|')
         val totalBytes = file.length()
 
-        val entity = MessageEntity(
+        var activeEntity = MessageEntity(
             messageId = msgId,
             peerId = peerId,
             isOutgoing = true,
@@ -326,7 +328,7 @@ class ChatRepository(
             replyToSenderTag = localSenderTag,
             replyToPreview = replyPreview
         )
-        chatDao.upsertMessage(entity)
+        chatDao.upsertMessage(activeEntity)
         chatDao.upsertPeer(
             peer.copy(
                 lastMessagePreview = preview,
@@ -348,32 +350,105 @@ class ChatRepository(
         }
 
         val ok = try {
+            var fileToSend = file
+            var sendFileName = fileName
+            var sendMimeType = mimeType
+            var sendDurationMs = audioDurationMs
+            var sendTotalBytes = totalBytes
+            var compressedUsed = false
+
+            if (messageType == MessageType.VIDEO) {
+                val compressedCandidate = mediaStorage.createCompressedVideoFile(fileName)
+                val didCompress = VideoCompressor.compressIfNeeded(
+                    context = appContext,
+                    inputFile = file,
+                    outputFile = compressedCandidate,
+                    onProgress = { pct ->
+                        val mapped = (1 + (pct * 34) / 100).coerceIn(1, 35)
+                        scope.launch(Dispatchers.IO) {
+                            chatDao.updateTransferProgress(msgId, mapped, DeliveryStatus.SENDING.name)
+                            if (transfersMap.containsKey(msgId)) {
+                                updateTransferEntry(
+                                    ActiveTransferInfo(
+                                        messageId = msgId,
+                                        peerId = peerId,
+                                        fileName = sendFileName,
+                                        progress = mapped,
+                                        isOutgoing = true,
+                                        totalBytes = sendTotalBytes
+                                    )
+                                )
+                            }
+                        }
+                    }
+                )
+                if (didCompress) {
+                    compressedUsed = true
+                    mediaStorage.deleteMediaFile(file.absolutePath)
+                    fileToSend = compressedCandidate
+                    val baseName = fileName.substringBeforeLast('.').ifBlank { "video" }
+                    sendFileName = "$baseName.mp4"
+                    sendMimeType = "video/mp4"
+                    sendTotalBytes = compressedCandidate.length()
+                    if (sendDurationMs <= 0L) {
+                        sendDurationMs = mediaStorage.readAudioDurationMs(compressedCandidate)
+                    }
+                    val updatedPreview = "Video: $sendFileName"
+                    activeEntity = activeEntity.copy(
+                        textContent = updatedPreview,
+                        mediaLocalPath = fileToSend.absolutePath,
+                        fileName = sendFileName,
+                        mimeType = sendMimeType,
+                        fileSizeBytes = sendTotalBytes,
+                        audioDurationMs = sendDurationMs,
+                        transferProgress = 35
+                    )
+                    chatDao.upsertMessage(activeEntity)
+                    chatDao.updatePeerLastPreview(peerId, updatedPreview, now)
+                    updateTransferEntry(
+                        ActiveTransferInfo(
+                            messageId = msgId,
+                            peerId = peerId,
+                            fileName = sendFileName,
+                            progress = 35,
+                            isOutgoing = true,
+                            totalBytes = sendTotalBytes
+                        )
+                    )
+                }
+            }
+
             val connected = ensurePeerConnected(peerId)
             if (connected) {
                 nodeManager.sendMediaOrFile(
                     peerId = peerId,
                     messageId = msgId,
                     messageType = messageType,
-                    file = file,
-                    fileName = fileName,
-                    mimeType = mimeType,
-                    audioDurationMs = audioDurationMs,
+                    file = fileToSend,
+                    fileName = sendFileName,
+                    mimeType = sendMimeType,
+                    audioDurationMs = sendDurationMs,
                     selfDestructSec = sdSec,
                     createdAt = now,
                     replyToMessageId = replyId,
                     replyToAuthorType = wireAuthorType,
                     replyToPreview = replyPreview,
                     onProgress = { pct ->
-                        chatDao.updateTransferProgress(msgId, pct, DeliveryStatus.SENDING.name)
-                        if (pct in 1..99 && transfersMap.containsKey(msgId)) {
+                        val mappedPct = if (compressedUsed && pct < 100) {
+                            (35 + (pct * 64) / 100).coerceIn(35, 99)
+                        } else {
+                            pct
+                        }
+                        chatDao.updateTransferProgress(msgId, mappedPct, DeliveryStatus.SENDING.name)
+                        if (mappedPct in 1..99 && transfersMap.containsKey(msgId)) {
                             updateTransferEntry(
                                 ActiveTransferInfo(
                                     messageId = msgId,
                                     peerId = peerId,
-                                    fileName = fileName,
-                                    progress = pct,
+                                    fileName = sendFileName,
+                                    progress = mappedPct,
                                     isOutgoing = true,
-                                    totalBytes = totalBytes
+                                    totalBytes = sendTotalBytes
                                 )
                             )
                         }

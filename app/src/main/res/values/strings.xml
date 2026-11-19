@@ -176,4 +176,6 @@
     <string name="safety_mutual_verified">Mutually verified (both devices confirmed).</string>
     <string name="safety_waiting_peer">You verified this contact. Waiting for them to verify you.</string>
     <string name="safety_peer_verified_you">This contact verified you. Confirm their code to finish mutual verification.</string>
+    <string name="video_playback_error_title">Could not play video</string>
+    <string name="video_playback_error_body">Unsupported codec or damaged file (%1$s). Try opening it in an external player.</string>
 </resources>
