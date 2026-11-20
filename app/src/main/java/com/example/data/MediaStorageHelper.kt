@@ -12,11 +12,28 @@ import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+enum class SavedMediaKind {
+    PHOTOS,
+    VIDEOS,
+    DOCUMENTS
+}
+
+data class LocalSavedMediaItem(
+    val file: File,
+    val fileName: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val lastModified: Long,
+    val durationMs: Long = 0L
+)
 
 data class CopiedMediaInfo(
     val localFile: File,
@@ -28,6 +45,9 @@ data class CopiedMediaInfo(
 class MediaStorageHelper(private val context: Context) {
     private val mediaDir: File
         get() = File(context.filesDir, "media").apply { if (!exists()) mkdirs() }
+
+    private val favoriteStickersDir: File
+        get() = File(context.filesDir, "favorite_stickers").apply { if (!exists()) mkdirs() }
 
     private val avatarsDir: File
         get() = File(context.filesDir, "avatars").apply { if (!exists()) mkdirs() }
@@ -241,6 +261,129 @@ class MediaStorageHelper(private val context: Context) {
         } finally {
             runCatching { retriever.release() }
         }
+    }
+
+    suspend fun computeFileSha256(file: File): String? = withContext(Dispatchers.IO) {
+        if (!file.exists() || !file.isFile) return@withContext null
+        try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(32 * 1024)
+            FileInputStream(file).use { input ->
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    digest.update(buffer, 0, read)
+                }
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun saveFavoriteStickerCopy(
+        sourceFile: File,
+        mimeType: String,
+        sha256: String
+    ): File? = withContext(Dispatchers.IO) {
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) return@withContext null
+        try {
+            val cleanMime = mimeType.substringBefore(';').trim().ifBlank { "image/webp" }
+            val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(cleanMime)
+                ?: sourceFile.extension.takeIf { it.isNotBlank() }
+                ?: "webp"
+            val destFile = File(favoriteStickersDir, "fav_${sha256.take(24)}.$ext")
+            FileInputStream(sourceFile).use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output, bufferSize = 32 * 1024)
+                }
+            }
+            if (destFile.length() <= 0L) {
+                runCatching { destFile.delete() }
+                return@withContext null
+            }
+            destFile
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun duplicateFileToPrivateMedia(
+        sourceFile: File,
+        prefix: String,
+        extHint: String? = null
+    ): File? = withContext(Dispatchers.IO) {
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) return@withContext null
+        try {
+            val ext = (extHint?.takeIf { it.isNotBlank() } ?: sourceFile.extension.ifBlank { "bin" })
+                .lowercase()
+                .replace(Regex("[^a-z0-9]"), "")
+                .ifBlank { "bin" }
+            val safeBase = sanitizeFileName(
+                sourceFile.nameWithoutExtension.ifBlank { prefix }
+            ).take(48)
+            val taggedBase = if (safeBase.contains(prefix, ignoreCase = true)) {
+                safeBase
+            } else {
+                "${prefix}_${safeBase}"
+            }
+            val destFile = File(mediaDir, "${UUID.randomUUID()}_${taggedBase}.$ext")
+            FileInputStream(sourceFile).use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output, bufferSize = 32 * 1024)
+                }
+            }
+            if (destFile.length() <= 0L) {
+                runCatching { destFile.delete() }
+                return@withContext null
+            }
+            destFile
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun listSavedMediaItems(
+        kind: SavedMediaKind,
+        limit: Int = 60
+    ): List<LocalSavedMediaItem> = withContext(Dispatchers.IO) {
+        val imageExts = setOf("jpg", "jpeg", "png", "webp", "gif", "heic", "heif", "bmp")
+        val videoExts = setOf("mp4", "mkv", "webm", "mov", "3gp", "m4v")
+        val files = mediaDir.listFiles()?.toList().orEmpty()
+        files.asSequence()
+            .filter { it.isFile && it.length() > 0L }
+            .filter { file ->
+                val name = file.name.lowercase()
+                if (name.startsWith("voice_") && name.endsWith(".m4a")) return@filter false
+                val ext = file.extension.lowercase()
+                when (kind) {
+                    SavedMediaKind.PHOTOS -> ext in imageExts && !name.contains("sticker")
+                    SavedMediaKind.VIDEOS -> ext in videoExts
+                    SavedMediaKind.DOCUMENTS -> ext !in imageExts && ext !in videoExts && !name.contains("sticker")
+                }
+            }
+            .sortedByDescending { it.lastModified() }
+            .take(limit)
+            .map { file ->
+                val ext = file.extension.lowercase()
+                val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+                    ?: when (kind) {
+                        SavedMediaKind.PHOTOS -> "image/jpeg"
+                        SavedMediaKind.VIDEOS -> "video/mp4"
+                        SavedMediaKind.DOCUMENTS -> "application/octet-stream"
+                    }
+                val cleanDisplayName = file.name.substringAfter('_', file.name).ifBlank { file.name }
+                val dur = if (kind == SavedMediaKind.VIDEOS) readAudioDurationMs(file) else 0L
+                LocalSavedMediaItem(
+                    file = file,
+                    fileName = cleanDisplayName,
+                    mimeType = mime,
+                    sizeBytes = file.length(),
+                    lastModified = file.lastModified(),
+                    durationMs = dur
+                )
+            }
+            .toList()
     }
 
     suspend fun deleteMediaFile(localPath: String?) = withContext(Dispatchers.IO) {

@@ -11,11 +11,15 @@ import com.example.crypto.CryptoEngine
 import com.example.data.ActiveTransferInfo
 import com.example.data.AppLanguage
 import com.example.data.DiscoveredPeer
+import com.example.data.FavoriteStickerEntity
 import com.example.data.LocalIdentity
+import com.example.data.LocalSavedMediaItem
 import com.example.data.LocaleHelper
 import com.example.data.MessageEntity
+import com.example.data.MessageType
 import com.example.data.NetworkEndpointInfo
 import com.example.data.PeerEntity
+import com.example.data.SavedMediaKind
 import com.example.data.ThemeMode
 import com.example.data.ThemePalette
 import com.example.media.VoicePlaybackState
@@ -28,6 +32,7 @@ import com.example.network.QrCodeHelper
 import com.example.network.UpdateCheckResult
 import com.example.network.UpdateChecker
 import com.example.ui.theme.AppIconManager
+import java.io.File
 import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -123,6 +128,9 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     val voiceRecordingState: StateFlow<VoiceRecordingState> = voiceRecorder.state
     val voicePlaybackState: StateFlow<VoicePlaybackState> = voicePlayer.state
+
+    val favoriteStickers: StateFlow<List<FavoriteStickerEntity>> = repository.observeFavoriteStickers()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val onboardingPreviewMaterial: CryptoEngine.IdentityKeyMaterial by lazy {
         CryptoEngine.createIdentityMaterial()
@@ -448,6 +456,64 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
                 _snackbarMessage.value = str(R.string.msg_peer_offline)
             }
         }
+    }
+
+    suspend fun isMessageStickerFavorited(message: MessageEntity): Boolean {
+        return repository.isMessageStickerFavorited(message)
+    }
+
+    fun toggleFavoriteSticker(message: MessageEntity) {
+        viewModelScope.launch {
+            when (repository.toggleFavoriteSticker(message)) {
+                true -> _snackbarMessage.value = str(R.string.msg_sticker_favorited)
+                false -> _snackbarMessage.value = str(R.string.msg_sticker_unfavorited)
+                null -> Unit
+            }
+        }
+    }
+
+    fun removeFavoriteSticker(stickerId: String) {
+        viewModelScope.launch {
+            repository.removeFavoriteSticker(stickerId)
+            _snackbarMessage.value = str(R.string.msg_sticker_unfavorited)
+        }
+    }
+
+    fun sendFavoriteSticker(sticker: FavoriteStickerEntity, replyTo: MessageEntity? = null) {
+        val peerId = _activePeerId.value ?: return
+        viewModelScope.launch {
+            val ok = repository.sendFavoriteSticker(peerId, sticker, replyTo)
+            if (!ok) {
+                _snackbarMessage.value = str(R.string.msg_peer_offline)
+            }
+        }
+    }
+
+    fun sendLocalSavedFile(
+        file: File,
+        messageType: MessageType,
+        mimeType: String,
+        displayName: String,
+        replyTo: MessageEntity? = null
+    ) {
+        val peerId = _activePeerId.value ?: return
+        viewModelScope.launch {
+            val ok = repository.sendLocalSavedFile(
+                peerId = peerId,
+                sourceFile = file,
+                messageType = messageType,
+                mimeType = mimeType,
+                displayName = displayName,
+                replyTo = replyTo
+            )
+            if (!ok) {
+                _snackbarMessage.value = str(R.string.msg_peer_offline)
+            }
+        }
+    }
+
+    suspend fun listSavedMediaItems(kind: SavedMediaKind): List<LocalSavedMediaItem> {
+        return mediaStorage.listSavedMediaItems(kind)
     }
 
     fun toggleReaction(messageId: String, emoji: String) {

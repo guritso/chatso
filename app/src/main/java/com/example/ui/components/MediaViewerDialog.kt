@@ -1,7 +1,14 @@
 package com.example.ui.components
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
+import android.os.Build
 import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -20,16 +27,14 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
@@ -59,14 +64,20 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -78,6 +89,54 @@ import coil.compose.AsyncImage
 import com.example.R
 import java.io.File
 
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+@Composable
+private fun ImmersiveFullscreenDialogWindow() {
+    val view = LocalView.current
+    val context = LocalContext.current
+    val dialogWindow = (view.parent as? DialogWindowProvider)?.window
+
+    DisposableEffect(dialogWindow, view) {
+        dialogWindow?.let { window ->
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            window.setBackgroundDrawable(ColorDrawable(android.graphics.Color.BLACK))
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val attrs = window.attributes
+                if (attrs.layoutInDisplayCutoutMode !=
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                ) {
+                    attrs.layoutInDisplayCutoutMode =
+                        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    window.attributes = attrs
+                }
+            }
+            WindowCompat.getInsetsController(window, view).apply {
+                systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        onDispose {
+            // Re-sync underlying Activity insets on dismiss so status/nav bars & IME never stay broken
+            dialogWindow?.let { w ->
+                WindowCompat.getInsetsController(w, view).show(WindowInsetsCompat.Type.systemBars())
+            }
+            context.findActivity()?.window?.let { activityWindow ->
+                WindowCompat.getInsetsController(activityWindow, activityWindow.decorView)
+                    .show(WindowInsetsCompat.Type.systemBars())
+                ViewCompat.requestApplyInsets(activityWindow.decorView)
+            }
+        }
+    }
+}
+
 @Composable
 fun FullScreenImageViewerDialog(
     imagePath: String,
@@ -87,7 +146,7 @@ fun FullScreenImageViewerDialog(
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
-    var showChrome by remember { mutableStateOf(true) }
+    var showControls by remember { mutableStateOf(true) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -96,13 +155,15 @@ fun FullScreenImageViewerDialog(
             decorFitsSystemWindows = false
         )
     ) {
+        ImmersiveFullscreenDialogWindow()
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
                 .pointerInput(Unit) {
                     detectTapGestures(
-                        onTap = { showChrome = !showChrome },
+                        onTap = { showControls = !showControls },
                         onDoubleTap = {
                             if (scale > 1.2f) {
                                 scale = 1f
@@ -145,13 +206,12 @@ fun FullScreenImageViewerDialog(
             )
 
             AnimatedVisibility(
-                visible = showChrome,
+                visible = showControls,
                 enter = fadeIn(),
                 exit = fadeOut(),
-                modifier = Modifier.align(Alignment.TopCenter)
+                modifier = Modifier.align(Alignment.TopEnd)
             ) {
-                ViewerTopBar(
-                    title = fileName ?: File(imagePath).name,
+                FloatingViewerActions(
                     onOpenExternal = onOpenExternal,
                     onDismiss = onDismiss
                 )
@@ -170,7 +230,7 @@ fun FullScreenVideoPlayerDialog(
 ) {
     val context = LocalContext.current
     var playbackError by remember(videoPath) { mutableStateOf<PlaybackException?>(null) }
-    var showTopBar by remember(videoPath) { mutableStateOf(true) }
+    var showControls by remember(videoPath) { mutableStateOf(true) }
 
     val exoPlayer = remember(videoPath) {
         val renderersFactory = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
@@ -185,7 +245,7 @@ fun FullScreenVideoPlayerDialog(
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
                 playbackError = error
-                showTopBar = true
+                showControls = true
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -208,21 +268,15 @@ fun FullScreenVideoPlayerDialog(
             decorFitsSystemWindows = false
         )
     ) {
+        ImmersiveFullscreenDialogWindow()
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
         ) {
             AndroidView(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .windowInsetsPadding(
-                        WindowInsets.navigationBars.union(
-                            WindowInsets.displayCutout.only(
-                                WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal
-                            )
-                        )
-                    ),
+                modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
                     PlayerView(ctx).apply {
                         useController = true
@@ -232,7 +286,7 @@ fun FullScreenVideoPlayerDialog(
                         setBackgroundColor(android.graphics.Color.BLACK)
                         setControllerVisibilityListener(
                             PlayerView.ControllerVisibilityListener { visibility ->
-                                showTopBar = visibility == View.VISIBLE
+                                showControls = visibility == View.VISIBLE
                             }
                         )
                         player = exoPlayer
@@ -299,13 +353,12 @@ fun FullScreenVideoPlayerDialog(
             }
 
             AnimatedVisibility(
-                visible = showTopBar || playbackError != null,
+                visible = showControls || playbackError != null,
                 enter = fadeIn(),
                 exit = fadeOut(),
-                modifier = Modifier.align(Alignment.TopCenter)
+                modifier = Modifier.align(Alignment.TopEnd)
             ) {
-                ViewerTopBar(
-                    title = fileName ?: File(videoPath).name,
+                FloatingViewerActions(
                     onOpenExternal = onOpenExternal,
                     onDismiss = onDismiss
                 )
@@ -315,48 +368,58 @@ fun FullScreenVideoPlayerDialog(
 }
 
 @Composable
-private fun ViewerTopBar(
-    title: String,
+private fun FloatingViewerActions(
     onOpenExternal: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(
-        color = Color.Black.copy(alpha = 0.55f),
-        modifier = modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(horizontal = 8.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                text = title,
-                color = Color.White,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(start = 8.dp)
+    Row(
+        modifier = modifier
+            .windowInsetsPadding(
+                WindowInsets.displayCutout.only(WindowInsetsSides.Top + WindowInsetsSides.End)
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onOpenExternal) {
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        IconButton(
+            onClick = onOpenExternal,
+            modifier = Modifier
+                .size(48.dp)
+                .testTag("viewer_open_external_button")
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.48f),
+                modifier = Modifier.size(40.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                         contentDescription = stringResource(R.string.open_external_btn),
-                        tint = Color.White
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
-                IconButton(onClick = onDismiss) {
+            }
+        }
+        IconButton(
+            onClick = onDismiss,
+            modifier = Modifier
+                .size(48.dp)
+                .testTag("viewer_close_button")
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.48f),
+                modifier = Modifier.size(40.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = Icons.Filled.Close,
                         contentDescription = stringResource(R.string.close_btn),
-                        tint = Color.White
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }

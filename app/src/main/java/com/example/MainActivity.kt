@@ -367,6 +367,7 @@ private fun ChatsoAuthenticatedShell(
     val updateUiState by viewModel.updateUiState.collectAsStateWithLifecycle()
     val voiceRecordingState by viewModel.voiceRecordingState.collectAsStateWithLifecycle()
     val voicePlaybackState by viewModel.voicePlaybackState.collectAsStateWithLifecycle()
+    val favoriteStickers by viewModel.favoriteStickers.collectAsStateWithLifecycle()
 
     val onChangeLanguage = { lang: com.example.data.AppLanguage ->
         viewModel.setLanguage(lang) {
@@ -496,6 +497,7 @@ private fun ChatsoAuthenticatedShell(
                                     presence = presence,
                                     isPeerTyping = typingPeerIds.contains(peer.peerId),
                                     activeTransfers = activeTransfers,
+                                    favoriteStickers = favoriteStickers,
                                     nowClockFlow = viewModel.nowClockMs,
                                     voiceRecordingState = voiceRecordingState,
                                     voicePlaybackState = voicePlaybackState,
@@ -509,6 +511,10 @@ private fun ChatsoAuthenticatedShell(
                                     onSendVideoUri = viewModel::sendVideoUri,
                                     onSendDocumentUri = viewModel::sendDocumentUri,
                                     onSendStickerStream = viewModel::sendStickerStream,
+                                    onCheckStickerFavorited = viewModel::isMessageStickerFavorited,
+                                    onToggleFavoriteSticker = viewModel::toggleFavoriteSticker,
+                                    onRemoveFavoriteSticker = viewModel::removeFavoriteSticker,
+                                    onSendFavoriteSticker = viewModel::sendFavoriteSticker,
                                     onStartVoiceRecording = viewModel::startVoiceRecording,
                                     onCancelVoiceRecording = viewModel::cancelVoiceRecording,
                                     onSendVoiceRecording = viewModel::finishAndSendVoiceRecording,
@@ -605,6 +611,7 @@ private fun ChatsoAuthenticatedShell(
                             presence = presence,
                             isPeerTyping = typingPeerIds.contains(currentOpenPeer.peerId),
                             activeTransfers = activeTransfers,
+                            favoriteStickers = favoriteStickers,
                             nowClockFlow = viewModel.nowClockMs,
                             voiceRecordingState = voiceRecordingState,
                             voicePlaybackState = voicePlaybackState,
@@ -618,6 +625,10 @@ private fun ChatsoAuthenticatedShell(
                             onSendVideoUri = viewModel::sendVideoUri,
                             onSendDocumentUri = viewModel::sendDocumentUri,
                             onSendStickerStream = viewModel::sendStickerStream,
+                            onCheckStickerFavorited = viewModel::isMessageStickerFavorited,
+                            onToggleFavoriteSticker = viewModel::toggleFavoriteSticker,
+                            onRemoveFavoriteSticker = viewModel::removeFavoriteSticker,
+                            onSendFavoriteSticker = viewModel::sendFavoriteSticker,
                             onStartVoiceRecording = viewModel::startVoiceRecording,
                             onCancelVoiceRecording = viewModel::cancelVoiceRecording,
                             onSendVoiceRecording = viewModel::finishAndSendVoiceRecording,

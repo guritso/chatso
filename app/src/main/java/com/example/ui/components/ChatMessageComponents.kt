@@ -1,6 +1,8 @@
 package com.example.ui.components
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -30,7 +32,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -51,8 +52,10 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -81,6 +84,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -301,12 +305,7 @@ fun ChatMessageBubbleItem(
                             if (mediaFileReady && message.mediaLocalPath != null) {
                                 Box(
                                     modifier = Modifier
-                                        .sizeIn(
-                                            minWidth = 96.dp,
-                                            minHeight = 96.dp,
-                                            maxWidth = 156.dp,
-                                            maxHeight = 156.dp
-                                        )
+                                        .size(144.dp)
                                         .clip(RoundedCornerShape(12.dp))
                                         .combinedClickable(
                                             onClick = {
@@ -319,12 +318,7 @@ fun ChatMessageBubbleItem(
                                         model = File(message.mediaLocalPath),
                                         contentDescription = stringResource(R.string.sticker_label),
                                         contentScale = ContentScale.Fit,
-                                        modifier = Modifier.sizeIn(
-                                            minWidth = 96.dp,
-                                            minHeight = 96.dp,
-                                            maxWidth = 156.dp,
-                                            maxHeight = 156.dp
-                                        )
+                                        modifier = Modifier.fillMaxSize()
                                     )
                                     MediaTimestampOverlayPill(
                                         message = message,
@@ -362,10 +356,15 @@ fun ChatMessageBubbleItem(
 
                         MessageType.IMAGE.name -> {
                             if (mediaFileReady && message.mediaLocalPath != null) {
+                                val aspectRatio by produceState(initialValue = 4f / 3f, message.mediaLocalPath) {
+                                    value = withContext(Dispatchers.IO) {
+                                        readImageAspectRatio(message.mediaLocalPath) ?: (4f / 3f)
+                                    }
+                                }
+                                val (mediaWidth, mediaHeight) = computeWhatsAppMediaSize(aspectRatio)
                                 Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(190.dp)
+                                        .size(width = mediaWidth, height = mediaHeight)
                                         .clip(RoundedCornerShape(14.dp))
                                         .combinedClickable(
                                             onClick = {
@@ -416,23 +415,50 @@ fun ChatMessageBubbleItem(
 
                         MessageType.VIDEO.name -> {
                             if (mediaFileReady && message.mediaLocalPath != null) {
-                                val thumb by produceState<Bitmap?>(null, message.mediaLocalPath) {
+                                val videoMeta by produceState(
+                                    initialValue = VideoBubbleMediaMeta(null, 4f / 3f),
+                                    message.mediaLocalPath
+                                ) {
                                     value = withContext(Dispatchers.IO) {
                                         val retriever = MediaMetadataRetriever()
                                         try {
                                             retriever.setDataSource(message.mediaLocalPath)
-                                            retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                            val rawW = retriever.extractMetadata(
+                                                MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH
+                                            )?.toIntOrNull() ?: 0
+                                            val rawH = retriever.extractMetadata(
+                                                MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT
+                                            )?.toIntOrNull() ?: 0
+                                            val rot = retriever.extractMetadata(
+                                                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
+                                            )?.toIntOrNull() ?: 0
+                                            val thumb = retriever.getFrameAtTime(
+                                                0L,
+                                                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                                            )
+                                            val ratio = if (rawW > 0 && rawH > 0) {
+                                                if (rot == 90 || rot == 270) {
+                                                    rawH.toFloat() / rawW.toFloat()
+                                                } else {
+                                                    rawW.toFloat() / rawH.toFloat()
+                                                }
+                                            } else if (thumb != null && thumb.width > 0 && thumb.height > 0) {
+                                                thumb.width.toFloat() / thumb.height.toFloat()
+                                            } else {
+                                                4f / 3f
+                                            }
+                                            VideoBubbleMediaMeta(thumb, ratio)
                                         } catch (_: Exception) {
-                                            null
+                                            VideoBubbleMediaMeta(null, 4f / 3f)
                                         } finally {
                                             runCatching { retriever.release() }
                                         }
                                     }
                                 }
+                                val (mediaWidth, mediaHeight) = computeWhatsAppMediaSize(videoMeta.aspectRatio)
                                 Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(190.dp)
+                                        .size(width = mediaWidth, height = mediaHeight)
                                         .clip(RoundedCornerShape(14.dp))
                                         .background(Color.Black.copy(alpha = 0.85f))
                                         .combinedClickable(
@@ -442,9 +468,9 @@ fun ChatMessageBubbleItem(
                                             onLongClick = { onLongPressMessage(message) }
                                         )
                                 ) {
-                                    if (thumb != null) {
+                                    if (videoMeta.thumbnail != null) {
                                         Image(
-                                            bitmap = thumb!!.asImageBitmap(),
+                                            bitmap = videoMeta.thumbnail!!.asImageBitmap(),
                                             contentDescription = message.fileName,
                                             contentScale = ContentScale.Crop,
                                             modifier = Modifier.fillMaxSize()
@@ -985,6 +1011,8 @@ private fun SelfDestructCountdownText(
 @Composable
 fun MessageActionsReactionDialog(
     message: MessageEntity,
+    isStickerFavorited: Boolean = false,
+    onToggleFavoriteSticker: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     onSelectEmoji: (String) -> Unit,
     onReply: () -> Unit,
@@ -1060,6 +1088,42 @@ fun MessageActionsReactionDialog(
                             maxLines = 1,
                             softWrap = false
                         )
+                    }
+
+                    if (message.type == MessageType.STICKER.name &&
+                        onToggleFavoriteSticker != null &&
+                        !message.mediaLocalPath.isNullOrBlank() &&
+                        File(message.mediaLocalPath).exists()
+                    ) {
+                        TextButton(
+                            onClick = {
+                                onDismiss()
+                                onToggleFavoriteSticker()
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("message_action_favorite_sticker")
+                        ) {
+                            Icon(
+                                imageVector = if (isStickerFavorited) {
+                                    Icons.Filled.Star
+                                } else {
+                                    Icons.Outlined.StarBorder
+                                },
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (isStickerFavorited) {
+                                    stringResource(R.string.unfavorite_sticker_action)
+                                } else {
+                                    stringResource(R.string.favorite_sticker_action)
+                                },
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
                     }
 
                     if (message.type == MessageType.TEXT.name && message.textContent.isNotBlank()) {
@@ -1286,3 +1350,43 @@ fun FloatingTransfersOverlay(
         }
     }
 }
+
+private data class VideoBubbleMediaMeta(
+    val thumbnail: Bitmap?,
+    val aspectRatio: Float
+)
+
+private fun readImageAspectRatio(path: String): Float? {
+    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, opts)
+    val rawW = opts.outWidth
+    val rawH = opts.outHeight
+    if (rawW <= 0 || rawH <= 0) return null
+    val orientation = runCatching {
+        ExifInterface(path).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.ORIENTATION_NORMAL
+        )
+    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+    val swap = orientation == ExifInterface.ORIENTATION_ROTATE_90 ||
+        orientation == ExifInterface.ORIENTATION_ROTATE_270 ||
+        orientation == ExifInterface.ORIENTATION_TRANSPOSE ||
+        orientation == ExifInterface.ORIENTATION_TRANSVERSE
+    val w = if (swap) rawH else rawW
+    val h = if (swap) rawW else rawH
+    return w.toFloat() / h.toFloat()
+}
+
+private fun computeWhatsAppMediaSize(aspectRatio: Float): Pair<Dp, Dp> {
+    val ratio = aspectRatio.coerceIn(0.55f, 2.1f)
+    return if (ratio >= 1f) {
+        val w = if (ratio <= 1.08f) 248.dp else 264.dp
+        val h = (w / ratio).coerceIn(124.dp, 248.dp)
+        w to h
+    } else {
+        val h = (224.dp / ratio).coerceIn(220.dp, 310.dp)
+        val w = (h * ratio).coerceIn(156.dp, 244.dp)
+        w to h
+    }
+}
+

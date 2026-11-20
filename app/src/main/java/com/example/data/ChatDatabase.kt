@@ -143,11 +143,41 @@ interface ChatDao {
 
     @Query("DELETE FROM messages WHERE peerId = :peerId")
     suspend fun deleteAllMessagesForPeer(peerId: String)
+
+    @Query("SELECT * FROM favorite_stickers ORDER BY createdAt DESC")
+    fun observeFavoriteStickers(): Flow<List<FavoriteStickerEntity>>
+
+    @Query("SELECT * FROM favorite_stickers")
+    suspend fun getAllFavoriteStickersOnce(): List<FavoriteStickerEntity>
+
+    @Query("SELECT * FROM favorite_stickers WHERE sha256 = :sha256 LIMIT 1")
+    suspend fun getFavoriteStickerByHash(sha256: String): FavoriteStickerEntity?
+
+    @Query("SELECT * FROM favorite_stickers WHERE stickerId = :stickerId LIMIT 1")
+    suspend fun getFavoriteStickerById(stickerId: String): FavoriteStickerEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertFavoriteSticker(sticker: FavoriteStickerEntity)
+
+    @Query("DELETE FROM favorite_stickers WHERE stickerId = :stickerId")
+    suspend fun deleteFavoriteSticker(stickerId: String)
 }
 
+@Entity(
+    tableName = "favorite_stickers",
+    indices = [Index(value = ["sha256"], unique = true)]
+)
+data class FavoriteStickerEntity(
+    @PrimaryKey val stickerId: String,
+    val localPath: String,
+    val mimeType: String,
+    val sha256: String,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 @Database(
-    entities = [PeerEntity::class, MessageEntity::class],
-    version = 3,
+    entities = [PeerEntity::class, MessageEntity::class, FavoriteStickerEntity::class],
+    version = 4,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {
@@ -169,6 +199,26 @@ abstract class ChatDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `favorite_stickers` (
+                        `stickerId` TEXT NOT NULL,
+                        `localPath` TEXT NOT NULL,
+                        `mimeType` TEXT NOT NULL,
+                        `sha256` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`stickerId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_favorite_stickers_sha256` ON `favorite_stickers` (`sha256`)"
+                )
+            }
+        }
+
         @Volatile
         private var INSTANCE: ChatDatabase? = null
 
@@ -179,7 +229,7 @@ abstract class ChatDatabase : RoomDatabase() {
                     ChatDatabase::class.java,
                     "chatso_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .fallbackToDestructiveMigration(true)
                     .build()
                     .also { INSTANCE = it }

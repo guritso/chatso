@@ -308,6 +308,111 @@ class ChatRepository(
         )
     }
 
+    fun observeFavoriteStickers(): Flow<List<FavoriteStickerEntity>> =
+        chatDao.observeFavoriteStickers()
+
+    suspend fun isMessageStickerFavorited(message: MessageEntity): Boolean {
+        if (message.type != MessageType.STICKER.name) return false
+        val path = message.mediaLocalPath ?: return false
+        val file = File(path)
+        if (!file.exists()) return false
+        val sha256 = mediaStorage.computeFileSha256(file) ?: return false
+        return chatDao.getFavoriteStickerByHash(sha256) != null
+    }
+
+    suspend fun toggleFavoriteSticker(message: MessageEntity): Boolean? {
+        if (message.type != MessageType.STICKER.name) return null
+        val path = message.mediaLocalPath ?: return null
+        val sourceFile = File(path)
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) return null
+        val sha256 = mediaStorage.computeFileSha256(sourceFile) ?: return null
+        val existing = chatDao.getFavoriteStickerByHash(sha256)
+        return if (existing != null) {
+            chatDao.deleteFavoriteSticker(existing.stickerId)
+            mediaStorage.deleteMediaFile(existing.localPath)
+            false
+        } else {
+            val mime = message.mimeType?.takeIf { it.isNotBlank() } ?: "image/webp"
+            val savedFile = mediaStorage.saveFavoriteStickerCopy(sourceFile, mime, sha256)
+                ?: return null
+            chatDao.upsertFavoriteSticker(
+                FavoriteStickerEntity(
+                    stickerId = UUID.randomUUID().toString(),
+                    localPath = savedFile.absolutePath,
+                    mimeType = mime,
+                    sha256 = sha256,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            true
+        }
+    }
+
+    suspend fun removeFavoriteSticker(stickerId: String) {
+        val existing = chatDao.getFavoriteStickerById(stickerId) ?: return
+        chatDao.deleteFavoriteSticker(stickerId)
+        mediaStorage.deleteMediaFile(existing.localPath)
+    }
+
+    suspend fun sendFavoriteSticker(
+        peerId: String,
+        sticker: FavoriteStickerEntity,
+        replyTo: MessageEntity? = null
+    ): Boolean {
+        val sourceFile = File(sticker.localPath)
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) return false
+        val duplicated = mediaStorage.duplicateFileToPrivateMedia(
+            sourceFile = sourceFile,
+            prefix = "sticker",
+            extHint = sourceFile.extension.ifBlank { "webp" }
+        ) ?: return false
+        return sendPreparedFile(
+            peerId = peerId,
+            messageType = MessageType.STICKER,
+            file = duplicated,
+            fileName = duplicated.name,
+            mimeType = sticker.mimeType.ifBlank { "image/webp" },
+            audioDurationMs = 0L,
+            replyTo = replyTo
+        )
+    }
+
+    suspend fun sendLocalSavedFile(
+        peerId: String,
+        sourceFile: File,
+        messageType: MessageType,
+        mimeType: String,
+        displayName: String,
+        replyTo: MessageEntity? = null
+    ): Boolean {
+        if (!sourceFile.exists() || sourceFile.length() <= 0L) return false
+        val prefix = when (messageType) {
+            MessageType.IMAGE -> "photo"
+            MessageType.VIDEO -> "video"
+            MessageType.STICKER -> "sticker"
+            else -> "file"
+        }
+        val duplicated = mediaStorage.duplicateFileToPrivateMedia(
+            sourceFile = sourceFile,
+            prefix = prefix,
+            extHint = sourceFile.extension.ifBlank { null }
+        ) ?: return false
+        val durMs = if (messageType == MessageType.VIDEO) {
+            mediaStorage.readAudioDurationMs(duplicated)
+        } else {
+            0L
+        }
+        return sendPreparedFile(
+            peerId = peerId,
+            messageType = messageType,
+            file = duplicated,
+            fileName = displayName.ifBlank { duplicated.name },
+            mimeType = mimeType.ifBlank { "application/octet-stream" },
+            audioDurationMs = durMs,
+            replyTo = replyTo
+        )
+    }
+
     suspend fun sendVoiceRecording(
         peerId: String,
         audioFile: File,

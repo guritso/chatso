@@ -12,8 +12,8 @@ android {
     applicationId = "com.aistudio.chatso.vxpqmr"
     minSdk = 24
     targetSdk = 36
-    versionCode = 8
-    versionName = "1.1.6"
+    versionCode = 9
+    versionName = "1.1.7"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -89,6 +89,7 @@ dependencies {
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.transformer)
   implementation(libs.androidx.media3.ui)
+  // implementation(libs.androidx.photopicker.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)

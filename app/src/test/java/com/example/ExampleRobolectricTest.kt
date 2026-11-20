@@ -859,8 +859,8 @@ class ExampleRobolectricTest {
         assertEquals(ThemePalette.PURPLE, store.getSnapshot().themePalette)
         assertFalse(store.getSnapshot().themeAdvanced)
         assertEquals(12, ThemePalette.entries.size)
-        assertEquals("1.1.6", BuildConfig.VERSION_NAME)
-        assertEquals(8, BuildConfig.VERSION_CODE)
+        assertEquals("1.1.7", BuildConfig.VERSION_NAME)
+        assertEquals(9, BuildConfig.VERSION_CODE)
 
         val lightPrimaries = ThemePalette.entries.map { palette ->
             store.setThemePalette(palette)
@@ -936,5 +936,151 @@ class ExampleRobolectricTest {
         AppIconManager.flushPendingIconIfNeeded(context)
         assertTrue(AppIconManager.isDefaultIconActive(context))
         assertFalse(AppIconManager.isPaletteIconActive(context, ThemePalette.PURPLE))
+    }
+
+    @Test
+    fun `favorite stickers persist across message deletion deduplicate by sha256 and send natively`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        val mediaStorage = MediaStorageHelper(context)
+        val peerId = "peer_fav_sticker_test"
+        dao.deleteAllMessagesForPeer(peerId)
+        dao.deletePeer(peerId)
+        dao.getAllFavoriteStickersOnce().forEach {
+            dao.deleteFavoriteSticker(it.stickerId)
+            File(it.localPath).delete()
+        }
+
+        val repo = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = LocalIdentityStore(context),
+            mediaStorage = mediaStorage,
+            isAppInForegroundProvider = { true }
+        )
+
+        val srcDir = File(context.cacheDir, "test_stickers").apply { if (!exists()) mkdirs() }
+        val file1 = File(srcDir, "sticker_a.webp").apply {
+            writeBytes(byteArrayOf(0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 5))
+        }
+        val file2DuplicateBytes = File(srcDir, "sticker_b_copy.webp").apply {
+            writeBytes(byteArrayOf(0x52, 0x49, 0x46, 0x46, 1, 2, 3, 4, 5))
+        }
+
+        try {
+            val mat = CryptoEngine.createIdentityMaterial()
+            repo.onPeerHandshaked(
+                peerId = peerId,
+                publicKeyBase64 = mat.publicKeyBase64,
+                remoteIp = "127.0.0.1",
+                remoteListenPort = 43995,
+                username = "StickerPeer",
+                avatarBase64 = null
+            )
+
+            val msg1 = MessageEntity(
+                messageId = "stk_msg_1",
+                peerId = peerId,
+                isOutgoing = false,
+                type = MessageType.STICKER.name,
+                mediaLocalPath = file1.absolutePath,
+                fileName = "sticker_a.webp",
+                mimeType = "image/webp",
+                transferProgress = 100
+            )
+            val msg2SameContent = MessageEntity(
+                messageId = "stk_msg_2",
+                peerId = peerId,
+                isOutgoing = true,
+                type = MessageType.STICKER.name,
+                mediaLocalPath = file2DuplicateBytes.absolutePath,
+                fileName = "sticker_b_copy.webp",
+                mimeType = "image/webp",
+                transferProgress = 100
+            )
+            dao.upsertMessage(msg1)
+            dao.upsertMessage(msg2SameContent)
+
+            // Favorite first sticker
+            assertFalse(repo.isMessageStickerFavorited(msg1))
+            assertEquals(true, repo.toggleFavoriteSticker(msg1))
+            assertTrue(repo.isMessageStickerFavorited(msg1))
+            // Second message with identical bytes resolves as already favorited via SHA-256
+            assertTrue(repo.isMessageStickerFavorited(msg2SameContent))
+
+            val savedList = dao.getAllFavoriteStickersOnce()
+            assertEquals(1, savedList.size)
+            val savedFav = savedList.first()
+            val favFile = File(savedFav.localPath)
+            assertTrue(favFile.exists())
+            assertTrue(favFile.absolutePath.contains("favorite_stickers"))
+
+            // Delete original chat message -> favorite sticker file must stay intact
+            repo.deleteSingleMessage(peerId, "stk_msg_1")
+            assertNull(dao.getMessageById("stk_msg_1"))
+            assertFalse(file1.exists())
+            assertTrue(favFile.exists())
+
+            // Native send duplicates favorite into media/ (offline peer marks FAILED, message still recorded)
+            assertFalse(repo.sendFavoriteSticker(peerId, savedFav))
+            val sentMsg = dao.getLatestMessageForPeer(peerId)
+            assertNotNull(sentMsg)
+            assertEquals(MessageType.STICKER.name, sentMsg!!.type)
+            assertNotNull(sentMsg.mediaLocalPath)
+            assertTrue(sentMsg.mediaLocalPath != savedFav.localPath)
+            assertTrue(File(sentMsg.mediaLocalPath!!).exists())
+
+            // Sent sticker should NOT pollute in-app saved Photos grid
+            val savedPhotos = mediaStorage.listSavedMediaItems(com.example.data.SavedMediaKind.PHOTOS)
+            assertFalse(savedPhotos.any { it.file.absolutePath == sentMsg.mediaLocalPath })
+
+            // Deleting the entire conversation leaves the favorite sticker intact
+            repo.deleteConversation(peerId)
+            assertTrue(favFile.exists())
+            assertEquals(1, dao.getAllFavoriteStickersOnce().size)
+
+            // Toggling favorite on matching bytes removes it cleanly
+            assertEquals(false, repo.toggleFavoriteSticker(msg2SameContent))
+            assertTrue(dao.getAllFavoriteStickersOnce().isEmpty())
+            assertFalse(favFile.exists())
+        } finally {
+            repo.shutdown()
+            dao.deleteAllMessagesForPeer(peerId)
+            dao.deletePeer(peerId)
+            srcDir.deleteRecursively()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `migration 3 to 4 creates favorite_stickers table and unique hash index`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val dbName = "migration_3_4_test.db"
+        context.deleteDatabase(dbName)
+        val sqliteHelper = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(
+            androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(3) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS peers (peerId TEXT NOT NULL PRIMARY KEY)")
+                        db.execSQL("CREATE TABLE IF NOT EXISTS messages (messageId TEXT NOT NULL PRIMARY KEY)")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+                })
+                .build()
+        )
+        val writable = sqliteHelper.writableDatabase
+        ChatDatabase.MIGRATION_3_4.migrate(writable)
+        writable.query("SELECT name FROM sqlite_master WHERE type='table' AND name='favorite_stickers'").use { c ->
+            assertTrue(c.moveToFirst())
+        }
+        writable.query("SELECT name FROM sqlite_master WHERE type='index' AND name='index_favorite_stickers_sha256'").use { c ->
+            assertTrue(c.moveToFirst())
+        }
+        sqliteHelper.close()
+        context.deleteDatabase(dbName)
     }
 }
