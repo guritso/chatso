@@ -78,7 +78,8 @@ fun ChatsListScreen(
     onToggleDiscoverable: (Boolean) -> Unit,
     onOpenPeer: (String) -> Unit,
     onGoToConnect: () -> Unit,
-    onQuickTestLocalhost: () -> Unit
+    onQuickTestLocalhost: () -> Unit,
+    onOpenProfile: () -> Unit = {}
 ) {
     var searchQuery by rememberSaveable { mutableStateOf("") }
     val filteredPeers = if (searchQuery.isBlank()) {
@@ -130,7 +131,10 @@ fun ChatsListScreen(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable(onClick = onOpenProfile)
                         ) {
                             ChatsoAvatar(
                                 name = identity.username,

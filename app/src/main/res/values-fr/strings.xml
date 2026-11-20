@@ -240,4 +240,59 @@
     <string name="recent_in_app_files">Fichiers récents dans les chats (appuyer pour envoyer)</string>
     <string name="no_saved_media_hint">Appuyez ci-dessus pour sélectionner des médias et les envoyer.</string>
     <string name="no_recent_files_hint">Appuyez ci-dessus pour ouvrir les fichiers récents du système et envoyer.</string>
+
+    <string name="tab_settings">Réglages</string>
+    <string name="profile_only_title">Profil</string>
+    <string name="settings_title">Paramètres</string>
+    <string name="peer_id_label">Peer ID</string>
+    <string name="copy_peer_id_btn">Copier ID</string>
+
+    <string name="updates_only_section">Mises à jour</string>
+    <string name="about_section">À propos</string>
+    <string name="about_app_desc">Messagerie P2P sans serveur et chiffrée de bout en bout via Wi-Fi, VPN ou localhost.</string>
+    <string name="about_version_label">Version %1$s (build %2$d)</string>
+    <string name="licenses_section">Licences</string>
+
+    <string name="unread_messages_single">1 nouveau message</string>
+    <string name="unread_messages_plural">%1$d nouveaux messages</string>
+
+    <string name="dev_mode_section">Mode Développeur</string>
+    <string name="dev_mode_title">Activer le Mode Développeur</string>
+    <string name="dev_mode_desc">Simulez de faux contacts, des messages en arrière-plan et inspectez les diagnostics.</string>
+    <string name="dev_mode_open_tools">Outils Développeur</string>
+    <string name="dev_mode_open_tools_desc">Faux utilisateurs, messages différés en arrière-plan, événements et diagnostic</string>
+    <string name="dev_tools_title">Mode Développeur</string>
+    <string name="dev_fake_peer_section">Faux Contacts</string>
+    <string name="dev_fake_name_label">Nom du faux contact</string>
+    <string name="dev_fake_name_hint">Laissez vide pour aléatoire</string>
+    <string name="dev_create_fake_peer_btn">Créer un faux contact</string>
+    <string name="dev_target_peer_label">Contact cible</string>
+    <string name="dev_no_peers_hint">Créez un faux contact ci-dessus ou connectez-vous d\'abord.</string>
+    <string name="dev_incoming_sim_section">Simulateur de Messages Reçus</string>
+    <string name="dev_fake_msg_label">Texte du message reçu</string>
+    <string name="dev_fake_msg_default">Salut ! Test d\'un message entrant sur chatso.</string>
+    <string name="dev_send_now_btn">Recevoir maintenant</string>
+    <string name="dev_send_delayed_btn">Recevoir dans 5s (arrière-plan)</string>
+    <string name="dev_scheduled_countdown">Arrivée dans %1$ds… Minimisez l\'app !</string>
+    <string name="dev_unread_burst_btn">Recevoir 5 messages non lus</string>
+    <string name="dev_events_section">Événements et Médias Simulés</string>
+    <string name="dev_sim_photo_btn">Simuler photo</string>
+    <string name="dev_sim_sticker_btn">Simuler autocollant</string>
+    <string name="dev_sim_typing_btn">Écrit (4s)</string>
+    <string name="dev_sim_reaction_btn">Réagir ❤️</string>
+    <string name="dev_sim_online_toggle">Simuler présence en ligne</string>
+    <string name="dev_auto_reply_toggle">Réponse auto du faux contact</string>
+    <string name="dev_auto_reply_desc">Répond 1,5s après votre message au faux contact</string>
+    <string name="dev_key_warning_btn">Alerte changement de clé</string>
+    <string name="dev_diagnostics_section">Diagnostics en Temps Réel</string>
+    <string name="dev_diag_peer_id">Peer ID Local</string>
+    <string name="dev_diag_server_port">Serveur TCP</string>
+    <string name="dev_diag_peers_count">Contacts / Faux</string>
+    <string name="dev_diag_messages_count">Total des messages</string>
+    <string name="dev_clear_fakes_btn">Supprimer tous les faux contacts</string>
+    <string name="dev_msg_fake_created">Faux contact créé : %1$s</string>
+    <string name="dev_msg_fake_delivered">Message simulé remis.</string>
+    <string name="dev_msg_fakes_cleared">Faux contacts supprimés.</string>
+    <string name="dev_msg_key_warning">Alerte de clé simulée pour %1$s.</string>
+    <string name="dev_msg_no_message_for_reaction">Envoyez ou simulez d\'abord un message pour réagir.</string>
 </resources>

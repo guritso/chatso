@@ -167,13 +167,20 @@ data class LocalIdentity(
     val themeAdvanced: Boolean = false,
     val language: AppLanguage = AppLanguage.SYSTEM,
     val backgroundConnectionEnabled: Boolean = true,
-    val batteryPromptDismissed: Boolean = false
+    val batteryPromptDismissed: Boolean = false,
+    val devModeEnabled: Boolean = false
 ) {
     companion object {
         const val DEFAULT_TCP_PORT = 42850
         const val DISCOVERY_UDP_PORT = 42851
     }
 }
+
+data class UnreadDividerInfo(
+    val peerId: String,
+    val anchorMessageId: String,
+    val unreadCount: Int
+)
 
 data class NetworkEndpointInfo(
     val interfaceName: String,

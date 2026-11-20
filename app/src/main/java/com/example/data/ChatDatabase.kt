@@ -89,6 +89,9 @@ interface ChatDao {
     @Query("UPDATE peers SET peerVerifiedMe = :verified WHERE peerId = :peerId")
     suspend fun setPeerVerifiedMe(peerId: String, verified: Boolean)
 
+    @Query("UPDATE peers SET keyChangedWarning = :warning WHERE peerId = :peerId")
+    suspend fun setPeerKeyChangedWarning(peerId: String, warning: Boolean)
+
     @Query("UPDATE peers SET lastMessagePreview = :preview, lastActivityAt = :lastActivityAt WHERE peerId = :peerId")
     suspend fun updatePeerLastPreview(peerId: String, preview: String, lastActivityAt: Long)
 
@@ -100,6 +103,9 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE peerId = :peerId ORDER BY createdAt DESC, messageId DESC LIMIT :limit")
     fun observeMessagesForPeer(peerId: String, limit: Int): Flow<List<MessageEntity>>
+
+    @Query("SELECT COUNT(*) FROM messages")
+    fun observeTotalMessageCount(): Flow<Int>
 
     @Query("SELECT * FROM messages WHERE peerId = :peerId ORDER BY createdAt DESC, messageId DESC LIMIT 1")
     suspend fun getLatestMessageForPeer(peerId: String): MessageEntity?
@@ -134,6 +140,9 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 0 AND status != 'READ'")
     suspend fun getUnreadIncomingMessages(peerId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 0 AND status != 'READ' ORDER BY createdAt ASC, messageId ASC")
+    suspend fun getUnreadIncomingMessagesChronological(peerId: String): List<MessageEntity>
 
     @Query("SELECT * FROM messages WHERE expiresAt IS NOT NULL AND expiresAt <= :now")
     suspend fun getExpiredMessages(now: Long): List<MessageEntity>

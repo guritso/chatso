@@ -30,10 +30,12 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Lan
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -80,8 +82,10 @@ import com.example.ui.UpdateUiState
 import com.example.ui.screens.ChatDetailScreen
 import com.example.ui.screens.ChatsListScreen
 import com.example.ui.screens.ConnectScreen
+import com.example.ui.screens.DevModeScreen
 import com.example.ui.screens.OnboardingScreen
-import com.example.ui.screens.ProfileSettingsScreen
+import com.example.ui.screens.ProfileScreen
+import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.AppIconManager
 import com.example.ui.theme.ChatsoTheme
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -368,6 +372,20 @@ private fun ChatsoAuthenticatedShell(
     val voiceRecordingState by viewModel.voiceRecordingState.collectAsStateWithLifecycle()
     val voicePlaybackState by viewModel.voicePlaybackState.collectAsStateWithLifecycle()
     val favoriteStickers by viewModel.favoriteStickers.collectAsStateWithLifecycle()
+    val unreadDivider by viewModel.unreadDivider.collectAsStateWithLifecycle()
+    val serverRunning by viewModel.serverRunning.collectAsStateWithLifecycle()
+    val totalMessageCount by viewModel.totalMessageCount.collectAsStateWithLifecycle()
+    val devOnlineFakePeers by viewModel.devOnlineFakePeers.collectAsStateWithLifecycle()
+    val devAutoReplyEnabled by viewModel.devAutoReplyEnabled.collectAsStateWithLifecycle()
+    val scheduledFakeDelay by viewModel.scheduledFakeDelayRemainingSec.collectAsStateWithLifecycle()
+
+    var showDevTools by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(selectedTab, identity.devModeEnabled) {
+        if (selectedTab != HomeTab.SETTINGS || !identity.devModeEnabled) {
+            showDevTools = false
+        }
+    }
 
     val onChangeLanguage = { lang: com.example.data.AppLanguage ->
         viewModel.setLanguage(lang) {
@@ -381,7 +399,10 @@ private fun ChatsoAuthenticatedShell(
         BackHandler(enabled = !isExpanded && activePeerId != null) {
             viewModel.closeConversation()
         }
-        BackHandler(enabled = activePeerId == null && selectedTab != HomeTab.CHATS) {
+        BackHandler(enabled = activePeerId == null && selectedTab == HomeTab.SETTINGS && showDevTools) {
+            showDevTools = false
+        }
+        BackHandler(enabled = activePeerId == null && !(selectedTab == HomeTab.SETTINGS && showDevTools) && selectedTab != HomeTab.CHATS) {
             viewModel.selectTab(HomeTab.CHATS)
         }
 
@@ -455,6 +476,25 @@ private fun ChatsoAuthenticatedShell(
                             },
                             modifier = Modifier.testTag("nav_tab_profile")
                         )
+                        NavigationRailItem(
+                            selected = selectedTab == HomeTab.SETTINGS,
+                            onClick = { viewModel.selectTab(HomeTab.SETTINGS) },
+                            icon = {
+                                Icon(
+                                    if (selectedTab == HomeTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                    contentDescription = stringResource(R.string.tab_settings)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = stringResource(R.string.tab_settings),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            modifier = Modifier.testTag("nav_tab_settings")
+                        )
                     }
 
                     VerticalDivider()
@@ -477,7 +517,8 @@ private fun ChatsoAuthenticatedShell(
                                 onGoToConnect = { viewModel.selectTab(HomeTab.CONNECT) },
                                 onQuickTestLocalhost = {
                                     viewModel.connectByManualIp("127.0.0.1", boundPort.toString())
-                                }
+                                },
+                                onOpenProfile = { viewModel.selectTab(HomeTab.PROFILE) }
                             )
                         }
                         VerticalDivider()
@@ -501,6 +542,8 @@ private fun ChatsoAuthenticatedShell(
                                     nowClockFlow = viewModel.nowClockMs,
                                     voiceRecordingState = voiceRecordingState,
                                     voicePlaybackState = voicePlaybackState,
+                                    unreadDividerAnchorId = unreadDivider?.takeIf { it.peerId == peer.peerId }?.anchorMessageId,
+                                    unreadDividerCount = unreadDivider?.takeIf { it.peerId == peer.peerId }?.unreadCount ?: 0,
                                     showBackButton = false,
                                     onBack = viewModel::closeConversation,
                                     onLoadMoreMessages = viewModel::loadMoreMessages,
@@ -561,25 +604,64 @@ private fun ChatsoAuthenticatedShell(
                                 onNotify = viewModel::postMessage
                             )
                         }
-                    } else {
+                    } else if (selectedTab == HomeTab.PROFILE) {
                         Box(modifier = Modifier.weight(1f)) {
-                            ProfileSettingsScreen(
+                            ProfileScreen(
                                 identity = identity,
-                                endpoints = endpoints,
-                                boundPort = boundPort,
                                 onSaveProfile = viewModel::updateProfile,
-                                onToggleDiscoverable = viewModel::toggleDiscoverable,
-                                onToggleBlockUnknown = viewModel::toggleBlockUnknownPeers,
-                                onToggleBackgroundConnection = viewModel::toggleBackgroundConnection,
-                                onUpdateListenPort = viewModel::updateListenPort,
-                                onChangeTheme = viewModel::setThemeMode,
-                                onChangePalette = viewModel::setThemePalette,
-                                onToggleThemeAdvanced = viewModel::setThemeAdvanced,
-                                onChangeLanguage = onChangeLanguage,
-                                onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
-                                isCheckingUpdates = updateUiState is UpdateUiState.Checking,
                                 onNotify = viewModel::postMessage
                             )
+                        }
+                    } else {
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (showDevTools && identity.devModeEnabled) {
+                                DevModeScreen(
+                                    identity = identity,
+                                    peers = peers,
+                                    endpoints = endpoints,
+                                    boundPort = boundPort,
+                                    serverRunning = serverRunning,
+                                    totalMessageCount = totalMessageCount,
+                                    devOnlineFakePeers = devOnlineFakePeers,
+                                    devAutoReplyEnabled = devAutoReplyEnabled,
+                                    scheduledDelayRemainingSec = scheduledFakeDelay,
+                                    onBack = { showDevTools = false },
+                                    onCreateFakePeer = viewModel::devCreateFakePeer,
+                                    onSendFakeIncomingText = viewModel::devSendFakeIncomingMessage,
+                                    onSendFakeUnreadBurst = viewModel::devSendFakeUnreadBurst,
+                                    onSendFakeMedia = viewModel::devSendFakeIncomingMedia,
+                                    onSimulateTyping = viewModel::devSimulateTyping,
+                                    onSimulateReaction = { peerId -> viewModel.devSimulateReaction(peerId) },
+                                    onTriggerKeyWarning = viewModel::devTriggerKeyChangeWarning,
+                                    onTogglePeerSimulatedOnline = viewModel::devSetPeerSimulatedOnline,
+                                    onToggleAutoReply = viewModel::devSetAutoReplyEnabled,
+                                    onOpenPeerChat = { peerId ->
+                                        showDevTools = false
+                                        viewModel.selectTab(HomeTab.CHATS)
+                                        viewModel.openConversation(peerId)
+                                    },
+                                    onClearFakePeers = viewModel::devClearFakePeers,
+                                    onNotify = viewModel::postMessage
+                                )
+                            } else {
+                                SettingsScreen(
+                                    identity = identity,
+                                    endpoints = endpoints,
+                                    boundPort = boundPort,
+                                    onToggleDiscoverable = viewModel::toggleDiscoverable,
+                                    onToggleBlockUnknown = viewModel::toggleBlockUnknownPeers,
+                                    onToggleBackgroundConnection = viewModel::toggleBackgroundConnection,
+                                    onUpdateListenPort = viewModel::updateListenPort,
+                                    onChangeTheme = viewModel::setThemeMode,
+                                    onChangePalette = viewModel::setThemePalette,
+                                    onToggleThemeAdvanced = viewModel::setThemeAdvanced,
+                                    onChangeLanguage = onChangeLanguage,
+                                    onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
+                                    isCheckingUpdates = updateUiState is UpdateUiState.Checking,
+                                    onToggleDevMode = viewModel::setDevModeEnabled,
+                                    onOpenDevTools = { showDevTools = true }
+                                )
+                            }
                         }
                     }
                 }
@@ -615,6 +697,8 @@ private fun ChatsoAuthenticatedShell(
                             nowClockFlow = viewModel.nowClockMs,
                             voiceRecordingState = voiceRecordingState,
                             voicePlaybackState = voicePlaybackState,
+                            unreadDividerAnchorId = unreadDivider?.takeIf { it.peerId == currentOpenPeer.peerId }?.anchorMessageId,
+                            unreadDividerCount = unreadDivider?.takeIf { it.peerId == currentOpenPeer.peerId }?.unreadCount ?: 0,
                             showBackButton = true,
                             onBack = viewModel::closeConversation,
                             onLoadMoreMessages = viewModel::loadMoreMessages,
@@ -711,6 +795,25 @@ private fun ChatsoAuthenticatedShell(
                                 },
                                 modifier = Modifier.testTag("nav_tab_profile")
                             )
+                            NavigationBarItem(
+                                selected = selectedTab == HomeTab.SETTINGS,
+                                onClick = { viewModel.selectTab(HomeTab.SETTINGS) },
+                                icon = {
+                                    Icon(
+                                        if (selectedTab == HomeTab.SETTINGS) Icons.Filled.Settings else Icons.Outlined.Settings,
+                                        contentDescription = stringResource(R.string.tab_settings)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = stringResource(R.string.tab_settings),
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                modifier = Modifier.testTag("nav_tab_settings")
+                            )
                         }
                     }
                 ) { innerPadding ->
@@ -732,7 +835,8 @@ private fun ChatsoAuthenticatedShell(
                                 onGoToConnect = { viewModel.selectTab(HomeTab.CONNECT) },
                                 onQuickTestLocalhost = {
                                     viewModel.connectByManualIp("127.0.0.1", boundPort.toString())
-                                }
+                                },
+                                onOpenProfile = { viewModel.selectTab(HomeTab.PROFILE) }
                             )
                             HomeTab.CONNECT -> ConnectScreen(
                                 identity = identity,
@@ -750,23 +854,61 @@ private fun ChatsoAuthenticatedShell(
                                 onToggleDiscoverable = viewModel::toggleDiscoverable,
                                 onNotify = viewModel::postMessage
                             )
-                            HomeTab.PROFILE -> ProfileSettingsScreen(
+                            HomeTab.PROFILE -> ProfileScreen(
                                 identity = identity,
-                                endpoints = endpoints,
-                                boundPort = boundPort,
                                 onSaveProfile = viewModel::updateProfile,
-                                onToggleDiscoverable = viewModel::toggleDiscoverable,
-                                onToggleBlockUnknown = viewModel::toggleBlockUnknownPeers,
-                                onToggleBackgroundConnection = viewModel::toggleBackgroundConnection,
-                                onUpdateListenPort = viewModel::updateListenPort,
-                                onChangeTheme = viewModel::setThemeMode,
-                                onChangePalette = viewModel::setThemePalette,
-                                onToggleThemeAdvanced = viewModel::setThemeAdvanced,
-                                onChangeLanguage = onChangeLanguage,
-                                onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
-                                isCheckingUpdates = updateUiState is UpdateUiState.Checking,
                                 onNotify = viewModel::postMessage
                             )
+                            HomeTab.SETTINGS -> {
+                                if (showDevTools && identity.devModeEnabled) {
+                                    DevModeScreen(
+                                        identity = identity,
+                                        peers = peers,
+                                        endpoints = endpoints,
+                                        boundPort = boundPort,
+                                        serverRunning = serverRunning,
+                                        totalMessageCount = totalMessageCount,
+                                        devOnlineFakePeers = devOnlineFakePeers,
+                                        devAutoReplyEnabled = devAutoReplyEnabled,
+                                        scheduledDelayRemainingSec = scheduledFakeDelay,
+                                        onBack = { showDevTools = false },
+                                        onCreateFakePeer = viewModel::devCreateFakePeer,
+                                        onSendFakeIncomingText = viewModel::devSendFakeIncomingMessage,
+                                        onSendFakeUnreadBurst = viewModel::devSendFakeUnreadBurst,
+                                        onSendFakeMedia = viewModel::devSendFakeIncomingMedia,
+                                        onSimulateTyping = viewModel::devSimulateTyping,
+                                        onSimulateReaction = { peerId -> viewModel.devSimulateReaction(peerId) },
+                                        onTriggerKeyWarning = viewModel::devTriggerKeyChangeWarning,
+                                        onTogglePeerSimulatedOnline = viewModel::devSetPeerSimulatedOnline,
+                                        onToggleAutoReply = viewModel::devSetAutoReplyEnabled,
+                                        onOpenPeerChat = { peerId ->
+                                            showDevTools = false
+                                            viewModel.selectTab(HomeTab.CHATS)
+                                            viewModel.openConversation(peerId)
+                                        },
+                                        onClearFakePeers = viewModel::devClearFakePeers,
+                                        onNotify = viewModel::postMessage
+                                    )
+                                } else {
+                                    SettingsScreen(
+                                        identity = identity,
+                                        endpoints = endpoints,
+                                        boundPort = boundPort,
+                                        onToggleDiscoverable = viewModel::toggleDiscoverable,
+                                        onToggleBlockUnknown = viewModel::toggleBlockUnknownPeers,
+                                        onToggleBackgroundConnection = viewModel::toggleBackgroundConnection,
+                                        onUpdateListenPort = viewModel::updateListenPort,
+                                        onChangeTheme = viewModel::setThemeMode,
+                                        onChangePalette = viewModel::setThemePalette,
+                                        onToggleThemeAdvanced = viewModel::setThemeAdvanced,
+                                        onChangeLanguage = onChangeLanguage,
+                                        onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
+                                        isCheckingUpdates = updateUiState is UpdateUiState.Checking,
+                                        onToggleDevMode = viewModel::setDevModeEnabled,
+                                        onOpenDevTools = { showDevTools = true }
+                                    )
+                                }
+                            }
                         }
                     }
                 }

@@ -240,4 +240,59 @@
     <string name="recent_in_app_files">Recent files in chats (tap to send)</string>
     <string name="no_saved_media_hint">Tap above to select items from your device and send.</string>
     <string name="no_recent_files_hint">Tap above to open system Recents and send any file.</string>
+
+    <string name="tab_settings">Settings</string>
+    <string name="profile_only_title">Profile</string>
+    <string name="settings_title">Settings</string>
+    <string name="peer_id_label">Peer ID</string>
+    <string name="copy_peer_id_btn">Copy ID</string>
+
+    <string name="updates_only_section">Updates</string>
+    <string name="about_section">About</string>
+    <string name="about_app_desc">Serverless end-to-end encrypted P2P messenger over Wi-Fi, VPN, or localhost.</string>
+    <string name="about_version_label">Version %1$s (build %2$d)</string>
+    <string name="licenses_section">Licenses</string>
+
+    <string name="unread_messages_single">1 new message</string>
+    <string name="unread_messages_plural">%1$d new messages</string>
+
+    <string name="dev_mode_section">Developer Mode</string>
+    <string name="dev_mode_title">Enable Developer Mode</string>
+    <string name="dev_mode_desc">Simulate fake contacts, incoming messages, background notifications, and inspect runtime state.</string>
+    <string name="dev_mode_open_tools">Open Developer Tools</string>
+    <string name="dev_mode_open_tools_desc">Fake users, delayed background messages, events, and diagnostics</string>
+    <string name="dev_tools_title">Developer Tools</string>
+    <string name="dev_fake_peer_section">Fake Contacts</string>
+    <string name="dev_fake_name_label">Fake contact name</string>
+    <string name="dev_fake_name_hint">Leave blank for random</string>
+    <string name="dev_create_fake_peer_btn">Create fake contact</string>
+    <string name="dev_target_peer_label">Target contact</string>
+    <string name="dev_no_peers_hint">Create a fake contact above or connect to a peer first.</string>
+    <string name="dev_incoming_sim_section">Incoming Message Simulator</string>
+    <string name="dev_fake_msg_label">Incoming message text</string>
+    <string name="dev_fake_msg_default">Hey! Testing incoming message in chatso.</string>
+    <string name="dev_send_now_btn">Receive now</string>
+    <string name="dev_send_delayed_btn">Receive in 5s (background)</string>
+    <string name="dev_scheduled_countdown">Arriving in %1$ds… Minimize the app now!</string>
+    <string name="dev_unread_burst_btn">Send 5 unread messages</string>
+    <string name="dev_events_section">Events &amp; Media Simulation</string>
+    <string name="dev_sim_photo_btn">Simulate photo</string>
+    <string name="dev_sim_sticker_btn">Simulate sticker</string>
+    <string name="dev_sim_typing_btn">Typing (4s)</string>
+    <string name="dev_sim_reaction_btn">React ❤️</string>
+    <string name="dev_sim_online_toggle">Simulate online presence</string>
+    <string name="dev_auto_reply_toggle">Auto-reply from fake peer</string>
+    <string name="dev_auto_reply_desc">Replies 1.5s after you message a fake contact</string>
+    <string name="dev_key_warning_btn">Key change warning</string>
+    <string name="dev_diagnostics_section">Runtime Diagnostics</string>
+    <string name="dev_diag_peer_id">Local Peer ID</string>
+    <string name="dev_diag_server_port">TCP Server</string>
+    <string name="dev_diag_peers_count">Contacts / Fake</string>
+    <string name="dev_diag_messages_count">Total messages</string>
+    <string name="dev_clear_fakes_btn">Delete all fake contacts</string>
+    <string name="dev_msg_fake_created">Fake contact created: %1$s</string>
+    <string name="dev_msg_fake_delivered">Simulated message delivered.</string>
+    <string name="dev_msg_fakes_cleared">All fake contacts removed.</string>
+    <string name="dev_msg_key_warning">Simulated key change warning for %1$s.</string>
+    <string name="dev_msg_no_message_for_reaction">Send or simulate a message first to react.</string>
 </resources>

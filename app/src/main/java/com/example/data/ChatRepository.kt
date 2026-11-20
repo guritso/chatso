@@ -46,8 +46,23 @@ class ChatRepository(
 
     val allPeersFlow: Flow<List<PeerEntity>> = chatDao.observeAllPeers()
 
+    companion object {
+        const val DEV_FAKE_PEER_PREFIX = "dev_fake_"
+    }
+
     private val _typingPeers = MutableStateFlow<Set<String>>(emptySet())
     val typingPeers: StateFlow<Set<String>> = _typingPeers.asStateFlow()
+
+    private val _devOnlineFakePeers = MutableStateFlow<Set<String>>(emptySet())
+    val devOnlineFakePeers: StateFlow<Set<String>> = _devOnlineFakePeers.asStateFlow()
+
+    private val _devAutoReplyEnabled = MutableStateFlow(true)
+    val devAutoReplyEnabled: StateFlow<Boolean> = _devAutoReplyEnabled.asStateFlow()
+
+    private val _unreadDivider = MutableStateFlow<UnreadDividerInfo?>(null)
+    val unreadDivider: StateFlow<UnreadDividerInfo?> = _unreadDivider.asStateFlow()
+
+    val totalMessageCountFlow: Flow<Int> = chatDao.observeTotalMessageCount()
 
     private val transfersMap = ConcurrentHashMap<String, ActiveTransferInfo>()
     private val _activeTransfers = MutableStateFlow<List<ActiveTransferInfo>>(emptyList())
@@ -122,9 +137,49 @@ class ChatRepository(
         if (inForeground) {
             val openPeer = currentlyOpenPeerId ?: return
             scope.launch(Dispatchers.IO) {
-                markConversationRead(openPeer)
+                captureUnreadDividerAndMarkRead(openPeer, preserveExistingAnchor = true)
             }
         }
+    }
+
+    suspend fun captureUnreadDividerAndMarkRead(
+        peerId: String,
+        preserveExistingAnchor: Boolean = false
+    ) {
+        if (isAppInForegroundProvider()) {
+            val unread = chatDao.getUnreadIncomingMessagesChronological(peerId)
+                .filter { it.transferProgress >= 100 }
+            if (unread.isNotEmpty()) {
+                val current = _unreadDivider.value
+                if (preserveExistingAnchor && current != null && current.peerId == peerId) {
+                    val anchorStillExists = chatDao.getMessageById(current.anchorMessageId) != null
+                    if (anchorStillExists) {
+                        _unreadDivider.value = current.copy(
+                            unreadCount = current.unreadCount + unread.size
+                        )
+                    } else {
+                        _unreadDivider.value = UnreadDividerInfo(
+                            peerId = peerId,
+                            anchorMessageId = unread.first().messageId,
+                            unreadCount = unread.size
+                        )
+                    }
+                } else {
+                    _unreadDivider.value = UnreadDividerInfo(
+                        peerId = peerId,
+                        anchorMessageId = unread.first().messageId,
+                        unreadCount = unread.size
+                    )
+                }
+            } else if (!preserveExistingAnchor) {
+                _unreadDivider.value = null
+            }
+        }
+        markConversationRead(peerId)
+    }
+
+    fun clearUnreadDivider() {
+        _unreadDivider.value = null
     }
 
     suspend fun connectDirect(
@@ -136,7 +191,11 @@ class ChatRepository(
         return nodeManager.connectToPeer(ip, port, expectedPubKeyBase64, inviteToken)
     }
 
+    fun isDevSimulatedOnline(peerId: String): Boolean =
+        peerId.startsWith(DEV_FAKE_PEER_PREFIX) && _devOnlineFakePeers.value.contains(peerId)
+
     suspend fun ensurePeerConnected(peerId: String): Boolean {
+        if (isDevSimulatedOnline(peerId)) return true
         if (nodeManager.connectedPeers.value.contains(peerId)) return true
         val peer = chatDao.getPeerById(peerId) ?: return false
         if (peer.lastIp.isBlank()) return false
@@ -198,6 +257,21 @@ class ChatRepository(
                 lastActivityAt = now
             )
         )
+
+        if (isDevSimulatedOnline(peerId)) {
+            chatDao.updateMessageStatus(msgId, DeliveryStatus.DELIVERED.name)
+            scope.launch(Dispatchers.IO) {
+                delay(450L)
+                onDeliveryReceipt(peerId, msgId, DeliveryStatus.READ)
+                if (_devAutoReplyEnabled.value) {
+                    _typingPeers.update { it + peerId }
+                    delay(1100L)
+                    val replyMsg = "[Auto-reply] $text"
+                    devSimulateIncomingText(peerId, replyMsg)
+                }
+            }
+            return true
+        }
 
         var connected = ensurePeerConnected(peerId)
         var ok = if (connected) {
@@ -578,6 +652,9 @@ class ChatRepository(
 
             if (cancelledTransferIds.contains(msgId)) {
                 false
+            } else if (isDevSimulatedOnline(peerId)) {
+                chatDao.updateTransferProgress(msgId, 100, DeliveryStatus.DELIVERED.name)
+                true
             } else {
                 val connected = ensurePeerConnected(peerId)
                 if (connected && !cancelledTransferIds.contains(msgId)) {
@@ -754,6 +831,9 @@ class ChatRepository(
     }
 
     suspend fun deleteConversation(peerId: String) {
+        if (_unreadDivider.value?.peerId == peerId) {
+            _unreadDivider.value = null
+        }
         chatDao.deleteAllMessagesForPeer(peerId)
         chatDao.deletePeer(peerId)
     }
@@ -1137,6 +1217,193 @@ class ChatRepository(
             mediaStorage.deleteMediaFile(msg.mediaLocalPath)
             chatDao.deleteMessageById(msg.messageId)
         }
+    }
+
+    // --- Developer Mode Simulation Helpers ---
+
+    suspend fun devCreateFakePeer(
+        usernameInput: String,
+        selfDestructSeconds: Int = 0
+    ): PeerEntity {
+        val sampleNames = listOf(
+            "Alice Dev",
+            "Bob Local",
+            "Clara Test",
+            "Diego P2P",
+            "Elena Sandbox",
+            "Rafael QA"
+        )
+        val existingCount = chatDao.getAllPeersOnce().count { it.peerId.startsWith(DEV_FAKE_PEER_PREFIX) }
+        val resolvedName = usernameInput.trim().ifBlank {
+            val base = sampleNames[existingCount % sampleNames.size]
+            if (existingCount >= sampleNames.size) "$base #${existingCount + 1}" else base
+        }
+        val mat = CryptoEngine.createIdentityMaterial()
+        val fakePeerId = "$DEV_FAKE_PEER_PREFIX${mat.peerId}"
+        onPeerHandshaked(
+            peerId = fakePeerId,
+            publicKeyBase64 = mat.publicKeyBase64,
+            remoteIp = "127.0.0.1",
+            remoteListenPort = LocalIdentity.DEFAULT_TCP_PORT + 10 + (existingCount % 50),
+            username = resolvedName,
+            avatarBase64 = null
+        )
+        if (selfDestructSeconds > 0) {
+            chatDao.updatePeerSelfDestruct(fakePeerId, selfDestructSeconds)
+        }
+        _devOnlineFakePeers.update { it + fakePeerId }
+        return chatDao.getPeerById(fakePeerId)!!
+    }
+
+    suspend fun devSimulateIncomingText(
+        peerId: String,
+        rawText: String,
+        createdAt: Long = System.currentTimeMillis()
+    ): Boolean {
+        if (chatDao.getPeerById(peerId) == null) return false
+        val text = rawText.trim().ifBlank { "Simulated P2P test message" }
+        val peer = chatDao.getPeerById(peerId) ?: return false
+        val msgId = "sim_${UUID.randomUUID()}"
+        onIncomingTextMessage(
+            peerId = peerId,
+            messageId = msgId,
+            text = text,
+            selfDestructSec = peer.selfDestructSeconds,
+            createdAt = createdAt,
+            replyToMessageId = null,
+            replyToSenderTag = null,
+            replyToPreview = null
+        )
+        return true
+    }
+
+    suspend fun devSimulateIncomingMedia(peerId: String, asSticker: Boolean): Boolean {
+        val peer = chatDao.getPeerById(peerId) ?: return false
+        val msgId = "sim_media_${UUID.randomUUID()}"
+        val now = System.currentTimeMillis()
+        val ext = if (asSticker) "png" else "jpg"
+        val fileName = if (asSticker) "dev_sticker_${now % 10000}.$ext" else "dev_photo_${now % 10000}.$ext"
+        val mime = if (asSticker) "image/png" else "image/jpeg"
+        val messageType = if (asSticker) MessageType.STICKER else MessageType.IMAGE
+
+        val tempFile = File(appContext.cacheDir, fileName)
+        val bmp = if (asSticker) {
+            android.graphics.Bitmap.createBitmap(256, 256, android.graphics.Bitmap.Config.ARGB_8888).apply {
+                val canvas = android.graphics.Canvas(this)
+                val bgPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xFF7C3AED.toInt()
+                }
+                canvas.drawCircle(128f, 128f, 112f, bgPaint)
+                val eyePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.WHITE
+                }
+                canvas.drawCircle(90f, 100f, 14f, eyePaint)
+                canvas.drawCircle(166f, 100f, 14f, eyePaint)
+                val smilePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.WHITE
+                    style = android.graphics.Paint.Style.STROKE
+                    strokeWidth = 14f
+                    strokeCap = android.graphics.Paint.Cap.ROUND
+                }
+                canvas.drawArc(76f, 92f, 180f, 184f, 20f, 140f, false, smilePaint)
+            }
+        } else {
+            android.graphics.Bitmap.createBitmap(640, 420, android.graphics.Bitmap.Config.ARGB_8888).apply {
+                val canvas = android.graphics.Canvas(this)
+                val bgPaint = android.graphics.Paint().apply { color = 0xFF1E293B.toInt() }
+                canvas.drawRect(0f, 0f, 640f, 420f, bgPaint)
+                val accentPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xFF0F766E.toInt()
+                }
+                canvas.drawCircle(520f, 110f, 130f, accentPaint)
+                val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                    color = android.graphics.Color.WHITE
+                    textSize = 36f
+                    isFakeBoldText = true
+                }
+                canvas.drawText("CHATSO DEV PHOTO", 44f, 200f, textPaint)
+                textPaint.textSize = 24f
+                textPaint.isFakeBoldText = false
+                textPaint.color = 0xFF94A3B8.toInt()
+                canvas.drawText(NetworkUtils.formatTimestamp(now), 44f, 248f, textPaint)
+            }
+        }
+
+        try {
+            tempFile.outputStream().use { out ->
+                val format = if (asSticker) {
+                    android.graphics.Bitmap.CompressFormat.PNG
+                } else {
+                    android.graphics.Bitmap.CompressFormat.JPEG
+                }
+                bmp.compress(format, 92, out)
+            }
+        } finally {
+            bmp.recycle()
+        }
+
+        val targetFile = onIncomingFileStart(
+            peerId = peerId,
+            messageId = msgId,
+            messageType = messageType,
+            fileName = fileName,
+            mimeType = mime,
+            totalBytes = tempFile.length(),
+            audioDurationMs = 0L,
+            selfDestructSec = peer.selfDestructSeconds,
+            createdAt = now,
+            replyToMessageId = null,
+            replyToSenderTag = null,
+            replyToPreview = null
+        )
+        tempFile.inputStream().use { input ->
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        tempFile.delete()
+        onIncomingFileComplete(peerId, msgId, targetFile)
+        return true
+    }
+
+    suspend fun devSimulateTyping(peerId: String, durationMs: Long = 4000L) {
+        onTypingChanged(peerId, true)
+        scope.launch(Dispatchers.IO) {
+            delay(durationMs)
+            onTypingChanged(peerId, false)
+        }
+    }
+
+    suspend fun devSimulateIncomingReaction(peerId: String, emoji: String): Boolean {
+        val latest = chatDao.getLatestMessageForPeer(peerId) ?: return false
+        onIncomingReaction(peerId, latest.messageId, emoji)
+        return true
+    }
+
+    suspend fun devTriggerKeyChangeWarning(peerId: String) {
+        chatDao.setPeerKeyChangedWarning(peerId, true)
+    }
+
+    fun devSetPeerSimulatedOnline(peerId: String, online: Boolean) {
+        _devOnlineFakePeers.update { current ->
+            if (online) current + peerId else current - peerId
+        }
+    }
+
+    fun devSetAutoReplyEnabled(enabled: Boolean) {
+        _devAutoReplyEnabled.value = enabled
+    }
+
+    suspend fun devClearFakePeers(): Int {
+        val allPeers = chatDao.getAllPeersOnce()
+        val fakes = allPeers.filter { it.peerId.startsWith(DEV_FAKE_PEER_PREFIX) }
+        for (peer in fakes) {
+            onClearPeerNotification?.invoke(peer.peerId)
+            deleteConversation(peer.peerId)
+            _devOnlineFakePeers.update { it - peer.peerId }
+            _typingPeers.update { it - peer.peerId }
+        }
+        return fakes.size
     }
 
     fun shutdown() {

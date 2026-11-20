@@ -141,6 +141,7 @@ import com.example.ui.components.FullScreenImageViewerDialog
 import com.example.ui.components.FullScreenVideoPlayerDialog
 import com.example.ui.components.MessageActionsReactionDialog
 import com.example.ui.components.StickersTrayContent
+import com.example.ui.components.UnreadMessagesDivider
 import com.example.ui.theme.DangerCoral
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OnlineEmerald
@@ -183,6 +184,8 @@ fun ChatDetailScreen(
     nowClockFlow: StateFlow<Long>,
     voiceRecordingState: VoiceRecordingState,
     voicePlaybackState: VoicePlaybackState,
+    unreadDividerAnchorId: String? = null,
+    unreadDividerCount: Int = 0,
     showBackButton: Boolean,
     onBack: () -> Unit,
     onLoadMoreMessages: () -> Unit,
@@ -298,8 +301,23 @@ fun ChatDetailScreen(
     val listState = key(peer.peerId) { rememberLazyListState() }
 
     val newestMessageId = messages.firstOrNull()?.messageId
+    var prevNewestMessageId by remember(peer.peerId) { mutableStateOf<String?>(null) }
+    var lastAutoScrolledAnchor by remember(peer.peerId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(peer.peerId, unreadDividerAnchorId, messages.size) {
+        if (unreadDividerAnchorId != null && lastAutoScrolledAnchor != unreadDividerAnchorId) {
+            val idx = messages.indexOfFirst { it.messageId == unreadDividerAnchorId }
+            if (idx >= 0) {
+                lastAutoScrolledAnchor = unreadDividerAnchorId
+                if (idx > 2) {
+                    listState.scrollToItem(idx)
+                }
+            }
+        }
+    }
     LaunchedEffect(newestMessageId) {
-        if (newestMessageId != null && listState.firstVisibleItemIndex <= 2) {
+        val previous = prevNewestMessageId
+        prevNewestMessageId = newestMessageId
+        if (newestMessageId != null && previous != null && previous != newestMessageId && listState.firstVisibleItemIndex <= 2) {
             listState.animateScrollToItem(0)
         }
     }
@@ -750,31 +768,42 @@ fun ChatDetailScreen(
                         key = { it.messageId },
                         contentType = { it.type }
                     ) { message ->
-                        ChatMessageBubbleItem(
-                            message = message,
-                            peerUsername = peer.username,
-                            nowClockFlow = nowClockFlow,
-                            voicePlaybackState = voicePlaybackState,
-                            onToggleVoice = onToggleVoicePlayback,
-                            onOpenImageFullscreen = { path, fileName ->
-                                viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.IMAGE, path, fileName)
-                            },
-                            onOpenVideoFullscreen = { path, fileName ->
-                                viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.VIDEO, path, fileName)
-                            },
-                            onOpenAttachment = onOpenAttachment,
-                            onCancelTransfer = onCancelTransfer,
-                            onRetryDownload = onRetryDownload,
-                            onSwipeReply = { target -> replyingToId = target.messageId },
-                            onLongPressMessage = { target -> actionDialogMessage = target },
-                            onReactionChipClick = { msgId, emoji -> onToggleReaction(msgId, emoji) },
-                            onQuoteClick = { targetId ->
-                                val idx = messages.indexOfFirst { it.messageId == targetId }
-                                if (idx >= 0) {
-                                    scope.launch { listState.animateScrollToItem(idx) }
+                        val renderBubble: @Composable () -> Unit = {
+                            ChatMessageBubbleItem(
+                                message = message,
+                                peerUsername = peer.username,
+                                nowClockFlow = nowClockFlow,
+                                voicePlaybackState = voicePlaybackState,
+                                onToggleVoice = onToggleVoicePlayback,
+                                onOpenImageFullscreen = { path, fileName ->
+                                    viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.IMAGE, path, fileName)
+                                },
+                                onOpenVideoFullscreen = { path, fileName ->
+                                    viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.VIDEO, path, fileName)
+                                },
+                                onOpenAttachment = onOpenAttachment,
+                                onCancelTransfer = onCancelTransfer,
+                                onRetryDownload = onRetryDownload,
+                                onSwipeReply = { target -> replyingToId = target.messageId },
+                                onLongPressMessage = { target -> actionDialogMessage = target },
+                                onReactionChipClick = { msgId, emoji -> onToggleReaction(msgId, emoji) },
+                                onQuoteClick = { targetId ->
+                                    val idx = messages.indexOfFirst { it.messageId == targetId }
+                                    if (idx >= 0) {
+                                        scope.launch { listState.animateScrollToItem(idx) }
+                                    }
                                 }
+                            )
+                        }
+                        if (unreadDividerAnchorId != null && message.messageId == unreadDividerAnchorId) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                UnreadMessagesDivider(unreadCount = unreadDividerCount)
+                                Spacer(modifier = Modifier.height(6.dp))
+                                renderBubble()
                             }
-                        )
+                        } else {
+                            renderBubble()
+                        }
                     }
                 }
             }

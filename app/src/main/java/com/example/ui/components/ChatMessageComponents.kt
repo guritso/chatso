@@ -1390,3 +1390,46 @@ private fun computeWhatsAppMediaSize(aspectRatio: Float): Pair<Dp, Dp> {
     }
 }
 
+@Composable
+fun UnreadMessagesDivider(
+    unreadCount: Int,
+    modifier: Modifier = Modifier
+) {
+    val label = if (unreadCount <= 1) {
+        stringResource(R.string.unread_messages_single)
+    } else {
+        stringResource(R.string.unread_messages_plural, unreadCount)
+    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .testTag("unread_messages_divider"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        HorizontalDivider(
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+        )
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+            tonalElevation = 1.dp
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+        }
+        HorizontalDivider(
+            modifier = Modifier.weight(1f),
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)
+        )
+    }
+}
+
+

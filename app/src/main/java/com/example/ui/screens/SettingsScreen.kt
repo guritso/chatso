@@ -1,12 +1,5 @@
 package com.example.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
@@ -36,14 +29,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddAPhoto
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LightMode
@@ -100,9 +93,7 @@ import com.example.data.NetworkEndpointInfo
 import com.example.data.ThemeMode
 import com.example.data.ThemePalette
 import com.example.network.NetworkUtils
-import com.example.ui.components.ChatsoAvatar
 import com.example.ui.components.OpenSourceLicensesDialog
-import com.example.ui.components.ProfileImageCropperDialog
 import com.example.ui.theme.AppIconManager
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OnlineEmerald
@@ -111,11 +102,10 @@ import com.example.ui.theme.spec
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ProfileSettingsScreen(
+fun SettingsScreen(
     identity: LocalIdentity,
     endpoints: List<NetworkEndpointInfo>,
     boundPort: Int,
-    onSaveProfile: (username: String, newAvatarUri: Uri?, keepExisting: Boolean) -> Unit,
     onToggleDiscoverable: (Boolean) -> Unit,
     onToggleBlockUnknown: (Boolean) -> Unit,
     onToggleBackgroundConnection: (Boolean) -> Unit,
@@ -126,12 +116,10 @@ fun ProfileSettingsScreen(
     onChangeLanguage: (AppLanguage) -> Unit,
     onCheckUpdates: () -> Unit,
     isCheckingUpdates: Boolean,
-    onNotify: (String) -> Unit
+    onToggleDevMode: (Boolean) -> Unit,
+    onOpenDevTools: () -> Unit
 ) {
     val context = LocalContext.current
-    var editedUsername by rememberSaveable(identity.username) { mutableStateOf(identity.username) }
-    var pickedAvatarUriString by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingCropUriString by rememberSaveable { mutableStateOf<String?>(null) }
     var showLicensesDialog by remember { mutableStateOf(false) }
     var portInput by rememberSaveable(identity.listenPort) {
         mutableStateOf(identity.listenPort.toString())
@@ -144,140 +132,26 @@ fun ProfileSettingsScreen(
         isIgnoringBattery = NetworkUtils.isIgnoringBatteryOptimizations(context)
     }
 
-    val pickedUri = pickedAvatarUriString?.let { Uri.parse(it) }
-    val pendingCropUri = pendingCropUriString?.let { Uri.parse(it) }
-    val photoPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        if (uri != null) {
-            pendingCropUriString = uri.toString()
-        }
-    }
-
-    if (pendingCropUri != null) {
-        ProfileImageCropperDialog(
-            sourceUri = pendingCropUri,
-            onDismiss = { pendingCropUriString = null },
-            onCropped = { croppedUri ->
-                pickedAvatarUriString = croppedUri.toString()
-                pendingCropUriString = null
-            }
-        )
-    }
-
     if (showLicensesDialog) {
         OpenSourceLicensesDialog(onDismiss = { showLicensesDialog = false })
     }
-
-    val clipboard = remember(context) {
-        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    }
-    val copiedMsg = stringResource(R.string.msg_copied)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 12.dp)
+            .testTag("settings_screen"),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = stringResource(R.string.profile_title),
+            text = stringResource(R.string.settings_title),
             style = MaterialTheme.typography.headlineSmall,
             color = MaterialTheme.colorScheme.onBackground,
             modifier = Modifier.padding(horizontal = 4.dp)
         )
 
-        // 1. Local Profile Card
-        Card(
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    ChatsoAvatar(
-                        name = editedUsername,
-                        avatarModel = pickedUri ?: identity.avatarPath,
-                        size = 56.dp,
-                        modifier = Modifier
-                            .clickable {
-                                AppIconManager.suppressNextFlush()
-                                photoPicker.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            }
-                            .testTag("profile_avatar_button")
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    OutlinedTextField(
-                        value = editedUsername,
-                        onValueChange = { editedUsername = it.take(36) },
-                        label = { Text(stringResource(R.string.username_label)) },
-                        singleLine = true,
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("profile_username_input")
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            AppIconManager.suppressNextFlush()
-                            photoPicker.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        },
-                        shape = MaterialTheme.shapes.medium,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.AddAPhoto,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = stringResource(R.string.change_photo),
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    Button(
-                        onClick = {
-                            onSaveProfile(editedUsername, pickedUri, pickedUri == null)
-                            pickedAvatarUriString = null
-                        },
-                        shape = MaterialTheme.shapes.medium,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("profile_save_button")
-                    ) {
-                        Text(
-                            text = stringResource(R.string.save_btn),
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        }
-
-        // 2. Privacy & Invisible Mode Card
+        // 1. Privacy Card
         Card(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -324,7 +198,7 @@ fun ProfileSettingsScreen(
                     Switch(
                         checked = identity.isDiscoverable,
                         onCheckedChange = onToggleDiscoverable,
-                        modifier = Modifier.testTag("profile_discoverable_switch")
+                        modifier = Modifier.testTag("settings_discoverable_switch")
                     )
                 }
 
@@ -351,13 +225,13 @@ fun ProfileSettingsScreen(
                     Switch(
                         checked = identity.blockUnknownPeers,
                         onCheckedChange = onToggleBlockUnknown,
-                        modifier = Modifier.testTag("profile_block_unknown_switch")
+                        modifier = Modifier.testTag("settings_block_unknown_switch")
                     )
                 }
             }
         }
 
-        // 2B. Background Connection & Battery Optimization Card
+        // 2. Background Connection & Battery Optimization Card
         Card(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -400,7 +274,7 @@ fun ProfileSettingsScreen(
                     Switch(
                         checked = identity.backgroundConnectionEnabled,
                         onCheckedChange = onToggleBackgroundConnection,
-                        modifier = Modifier.testTag("profile_bg_connection_switch")
+                        modifier = Modifier.testTag("settings_bg_connection_switch")
                     )
                 }
 
@@ -434,7 +308,7 @@ fun ProfileSettingsScreen(
                             },
                             shape = MaterialTheme.shapes.small,
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.testTag("profile_battery_disable_button")
+                            modifier = Modifier.testTag("settings_battery_disable_button")
                         ) {
                             Text(
                                 text = stringResource(R.string.battery_opt_disable_btn),
@@ -447,7 +321,7 @@ fun ProfileSettingsScreen(
             }
         }
 
-        // 3. Appearance & Night Mode Card — SingleChoiceSegmentedButtonRow prevents wrapping
+        // 3. Appearance & Palette Card
         Card(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -487,7 +361,7 @@ fun ProfileSettingsScreen(
                                 index = idx,
                                 count = themeEntries.size
                             ),
-                            modifier = Modifier.testTag("profile_theme_${mode.name.lowercase()}")
+                            modifier = Modifier.testTag("settings_theme_${mode.name.lowercase()}")
                         ) {
                             Text(
                                 text = label,
@@ -579,7 +453,7 @@ fun ProfileSettingsScreen(
                                     onChangePalette(palette)
                                 }
                                 .padding(horizontal = 4.dp, vertical = 4.dp)
-                                .testTag("profile_palette_${palette.name.lowercase()}")
+                                .testTag("settings_palette_${palette.name.lowercase()}")
                         ) {
                             Box(
                                 contentAlignment = Alignment.Center,
@@ -653,7 +527,7 @@ fun ProfileSettingsScreen(
                         .clip(MaterialTheme.shapes.small)
                         .clickable { onToggleThemeAdvanced(!identity.themeAdvanced) }
                         .padding(vertical = 4.dp)
-                        .testTag("profile_theme_advanced_row"),
+                        .testTag("settings_theme_advanced_row"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
@@ -671,13 +545,12 @@ fun ProfileSettingsScreen(
                     Switch(
                         checked = identity.themeAdvanced,
                         onCheckedChange = onToggleThemeAdvanced,
-                        modifier = Modifier.testTag("profile_theme_advanced_switch")
+                        modifier = Modifier.testTag("settings_theme_advanced_switch")
                     )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Live mini chat preview reacting immediately to palette + advanced mode
                 Surface(
                     shape = MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.background,
@@ -733,7 +606,7 @@ fun ProfileSettingsScreen(
             }
         }
 
-        // 4. Multi-Language Selector Card
+        // 4. Language Card
         Card(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -776,76 +649,14 @@ fun ProfileSettingsScreen(
                                     softWrap = false
                                 )
                             },
-                            modifier = Modifier.testTag("profile_lang_${lang.code}")
+                            modifier = Modifier.testTag("settings_lang_${lang.code}")
                         )
                     }
                 }
             }
         }
 
-        // 5. Public Key Fingerprint (Compact)
-        Card(
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Filled.Key,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.public_key_section),
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                    }
-
-                    OutlinedButton(
-                        onClick = {
-                            clipboard.setPrimaryClip(
-                                ClipData.newPlainText("Chatso Public Key", identity.publicKeyBase64)
-                            )
-                            onNotify(copiedMsg)
-                        },
-                        shape = MaterialTheme.shapes.small,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.testTag("profile_copy_pubkey_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.ContentCopy,
-                            contentDescription = null,
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = stringResource(R.string.copy_key_btn),
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = identity.fingerprint,
-                    fontFamily = JetBrainsMonoFontFamily,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-        }
-
-        // 6. Network Interfaces & TCP Port
+        // 5. Network Interfaces & TCP Port Card
         Card(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -905,7 +716,7 @@ fun ProfileSettingsScreen(
                         shape = MaterialTheme.shapes.medium,
                         modifier = Modifier
                             .weight(1f)
-                            .testTag("profile_port_input")
+                            .testTag("settings_port_input")
                     )
                     Button(
                         onClick = { onUpdateListenPort(portInput) },
@@ -914,7 +725,7 @@ fun ProfileSettingsScreen(
                         modifier = Modifier
                             .defaultMinSize(minWidth = 88.dp)
                             .height(52.dp)
-                            .testTag("profile_apply_port_button")
+                            .testTag("settings_apply_port_button")
                     ) {
                         Text(
                             text = stringResource(R.string.apply_btn),
@@ -926,10 +737,11 @@ fun ProfileSettingsScreen(
             }
         }
 
-        // 7. Updates & Open Source Licenses
+        // 6. Updates Card (Standalone)
         Card(
             shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.testTag("settings_updates_card")
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -941,7 +753,7 @@ fun ProfileSettingsScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = stringResource(R.string.updates_section),
+                        text = stringResource(R.string.updates_only_section),
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -954,12 +766,8 @@ fun ProfileSettingsScreen(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = stringResource(R.string.app_name),
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
                             text = stringResource(R.string.current_version_label, BuildConfig.VERSION_NAME),
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -969,7 +777,7 @@ fun ProfileSettingsScreen(
                         enabled = !isCheckingUpdates,
                         shape = MaterialTheme.shapes.small,
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        modifier = Modifier.testTag("profile_check_updates_button")
+                        modifier = Modifier.testTag("settings_check_updates_button")
                     ) {
                         if (isCheckingUpdates) {
                             CircularProgressIndicator(
@@ -991,33 +799,171 @@ fun ProfileSettingsScreen(
                         }
                     }
                 }
+            }
+        }
 
-                HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+        // 7. About Card (Standalone)
+        Card(
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.testTag("settings_about_card")
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.about_section),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = stringResource(
+                        R.string.about_version_label,
+                        BuildConfig.VERSION_NAME,
+                        BuildConfig.VERSION_CODE
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontFamily = JetBrainsMonoFontFamily
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.about_app_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // 8. Open Source Licenses Card (Standalone)
+        Card(
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier
+                .clip(MaterialTheme.shapes.large)
+                .clickable { showLicensesDialog = true }
+                .testTag("settings_licenses_card")
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Description,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.licenses_section),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = stringResource(R.string.open_source_licenses_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        // 9. Developer Mode Card (Standalone)
+        Card(
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.testTag("settings_dev_mode_card")
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Filled.Build,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.dev_mode_section),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { showLicensesDialog = true }
-                        .padding(vertical = 4.dp)
-                        .testTag("profile_open_licenses_row"),
+                        .clickable { onToggleDevMode(!identity.devModeEnabled) },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = stringResource(R.string.open_source_licenses),
+                            text = stringResource(R.string.dev_mode_title),
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            text = stringResource(R.string.open_source_licenses_desc),
+                            text = stringResource(R.string.dev_mode_desc),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = identity.devModeEnabled,
+                        onCheckedChange = onToggleDevMode,
+                        modifier = Modifier.testTag("settings_dev_mode_switch")
+                    )
+                }
+
+                if (identity.devModeEnabled) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(MaterialTheme.shapes.medium)
+                            .clickable(onClick = onOpenDevTools)
+                            .padding(vertical = 6.dp)
+                            .testTag("settings_open_dev_tools"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = stringResource(R.string.dev_mode_open_tools),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = stringResource(R.string.dev_mode_open_tools_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }

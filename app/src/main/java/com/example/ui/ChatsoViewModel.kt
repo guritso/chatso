@@ -22,6 +22,7 @@ import com.example.data.PeerEntity
 import com.example.data.SavedMediaKind
 import com.example.data.ThemeMode
 import com.example.data.ThemePalette
+import com.example.data.UnreadDividerInfo
 import com.example.media.VoicePlaybackState
 import com.example.media.VoicePlayerController
 import com.example.media.VoiceRecorderController
@@ -36,6 +37,7 @@ import java.io.File
 import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -53,7 +55,8 @@ import kotlinx.coroutines.withContext
 enum class HomeTab {
     CHATS,
     CONNECT,
-    PROFILE
+    PROFILE,
+    SETTINGS
 }
 
 sealed class UpdateUiState {
@@ -79,12 +82,31 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     val peersState: StateFlow<List<PeerEntity>> = repository.allPeersFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val connectedPeerIds: StateFlow<Set<String>> = repository.nodeManager.connectedPeers
-    val foregroundPeerIds: StateFlow<Set<String>> = repository.nodeManager.foregroundPeers
+    val connectedPeerIds: StateFlow<Set<String>> = combine(
+        repository.nodeManager.connectedPeers,
+        repository.devOnlineFakePeers
+    ) { real, dev -> real + dev }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    val foregroundPeerIds: StateFlow<Set<String>> = combine(
+        repository.nodeManager.foregroundPeers,
+        repository.devOnlineFakePeers
+    ) { real, dev -> real + dev }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
     val boundPort: StateFlow<Int> = repository.nodeManager.boundPort
     val serverRunning: StateFlow<Boolean> = repository.nodeManager.serverRunning
     val typingPeers: StateFlow<Set<String>> = repository.typingPeers
     val activeTransfers: StateFlow<List<ActiveTransferInfo>> = repository.activeTransfers
+    val unreadDivider: StateFlow<UnreadDividerInfo?> = repository.unreadDivider
+    val devOnlineFakePeers: StateFlow<Set<String>> = repository.devOnlineFakePeers
+    val devAutoReplyEnabled: StateFlow<Boolean> = repository.devAutoReplyEnabled
+    val totalMessageCount: StateFlow<Int> = repository.totalMessageCountFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    private val _scheduledFakeDelayRemainingSec = MutableStateFlow<Int?>(null)
+    val scheduledFakeDelayRemainingSec: StateFlow<Int?> = _scheduledFakeDelayRemainingSec.asStateFlow()
+    private var scheduledFakeJob: Job? = null
 
     val discoveredPeers: StateFlow<List<DiscoveredPeer>> = repository.discoveryManager.discoveredPeers
         .map { it.values.sortedByDescending { p -> p.lastSeenAt } }
@@ -172,7 +194,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     fun selectTab(tab: HomeTab) {
         _selectedTab.value = tab
-        if (tab == HomeTab.CONNECT || tab == HomeTab.PROFILE) {
+        if (tab == HomeTab.CONNECT || tab == HomeTab.SETTINGS) {
             refreshEndpoints()
         }
     }
@@ -185,7 +207,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         _activePeerId.value = peerId
         repository.currentlyOpenPeerId = peerId
         viewModelScope.launch {
-            repository.markConversationRead(peerId)
+            repository.captureUnreadDividerAndMarkRead(peerId, preserveExistingAnchor = false)
             repository.ensurePeerConnected(peerId)
         }
     }
@@ -201,6 +223,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         val prev = _activePeerId.value
         _activePeerId.value = null
         repository.currentlyOpenPeerId = null
+        repository.clearUnreadDivider()
         lastTypingPeerId = null
         lastTypingState = false
         voiceRecorder.stopAndDiscard()
@@ -336,6 +359,109 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     fun dismissBatteryPrompt() {
         viewModelScope.launch {
             identityStore.setBatteryPromptDismissed(true)
+        }
+    }
+
+    fun setDevModeEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            identityStore.setDevModeEnabled(enabled)
+        }
+    }
+
+    fun devCreateFakePeer(username: String, onCreated: (PeerEntity) -> Unit = {}) {
+        viewModelScope.launch {
+            val peer = repository.devCreateFakePeer(username)
+            _snackbarMessage.value = str(R.string.dev_msg_fake_created, peer.username)
+            onCreated(peer)
+        }
+    }
+
+    fun devSendFakeIncomingMessage(peerId: String, text: String, delaySeconds: Int = 0) {
+        if (delaySeconds <= 0) {
+            container.appScope.launch {
+                if (repository.devSimulateIncomingText(peerId, text)) {
+                    _snackbarMessage.value = str(R.string.dev_msg_fake_delivered)
+                }
+            }
+            return
+        }
+        scheduledFakeJob?.cancel()
+        // Launch on container.appScope so countdown completes even when MainActivity is in background
+        scheduledFakeJob = container.appScope.launch {
+            try {
+                for (rem in delaySeconds downTo 1) {
+                    _scheduledFakeDelayRemainingSec.value = rem
+                    delay(1000L)
+                }
+                _scheduledFakeDelayRemainingSec.value = null
+                repository.devSimulateIncomingText(peerId, text)
+            } finally {
+                _scheduledFakeDelayRemainingSec.value = null
+            }
+        }
+    }
+
+    fun devSendFakeUnreadBurst(peerId: String, baseText: String, count: Int = 5) {
+        container.appScope.launch {
+            val baseTime = System.currentTimeMillis() - (count * 600L)
+            val prefix = baseText.trim().ifBlank { "Test message" }
+            for (i in 1..count) {
+                repository.devSimulateIncomingText(
+                    peerId = peerId,
+                    rawText = "$prefix #$i",
+                    createdAt = baseTime + (i * 600L)
+                )
+            }
+            _snackbarMessage.value = str(R.string.dev_msg_fake_delivered)
+        }
+    }
+
+    fun devSendFakeIncomingMedia(peerId: String, asSticker: Boolean) {
+        container.appScope.launch {
+            if (repository.devSimulateIncomingMedia(peerId, asSticker)) {
+                _snackbarMessage.value = str(R.string.dev_msg_fake_delivered)
+            }
+        }
+    }
+
+    fun devSimulateTyping(peerId: String) {
+        viewModelScope.launch {
+            repository.devSimulateTyping(peerId, 4000L)
+        }
+    }
+
+    fun devSimulateReaction(peerId: String, emoji: String = "❤️") {
+        viewModelScope.launch {
+            val ok = repository.devSimulateIncomingReaction(peerId, emoji)
+            if (!ok) {
+                _snackbarMessage.value = str(R.string.dev_msg_no_message_for_reaction)
+            }
+        }
+    }
+
+    fun devTriggerKeyChangeWarning(peer: PeerEntity) {
+        viewModelScope.launch {
+            repository.devTriggerKeyChangeWarning(peer.peerId)
+            _snackbarMessage.value = str(R.string.dev_msg_key_warning, peer.username)
+        }
+    }
+
+    fun devSetPeerSimulatedOnline(peerId: String, online: Boolean) {
+        repository.devSetPeerSimulatedOnline(peerId, online)
+    }
+
+    fun devSetAutoReplyEnabled(enabled: Boolean) {
+        repository.devSetAutoReplyEnabled(enabled)
+    }
+
+    fun devClearFakePeers() {
+        viewModelScope.launch {
+            val active = _activePeerId.value
+            if (active != null && active.startsWith(com.example.data.ChatRepository.DEV_FAKE_PEER_PREFIX)) {
+                closeConversation()
+            }
+            repository.devClearFakePeers()
+            _snackbarMessage.value = str(R.string.dev_msg_fakes_cleared)
         }
     }
 

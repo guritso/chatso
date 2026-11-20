@@ -37,6 +37,7 @@ class LocalIdentityStore(private val context: Context) {
         val LANGUAGE = stringPreferencesKey("app_language")
         val BACKGROUND_CONN_ENABLED = booleanPreferencesKey("background_connection_enabled")
         val BATTERY_PROMPT_DISMISSED = booleanPreferencesKey("battery_prompt_dismissed")
+        val DEV_MODE_ENABLED = booleanPreferencesKey("dev_mode_enabled")
     }
 
     val identityFlow: Flow<LocalIdentity> = context.identityDataStore.data.map { prefs ->
@@ -61,7 +62,8 @@ class LocalIdentityStore(private val context: Context) {
             themeAdvanced = prefs[Keys.THEME_ADVANCED] ?: false,
             language = lang,
             backgroundConnectionEnabled = prefs[Keys.BACKGROUND_CONN_ENABLED] ?: true,
-            batteryPromptDismissed = prefs[Keys.BATTERY_PROMPT_DISMISSED] ?: false
+            batteryPromptDismissed = prefs[Keys.BATTERY_PROMPT_DISMISSED] ?: false,
+            devModeEnabled = prefs[Keys.DEV_MODE_ENABLED] ?: false
         )
     }
 
@@ -173,6 +175,12 @@ class LocalIdentityStore(private val context: Context) {
     suspend fun setBatteryPromptDismissed(dismissed: Boolean) {
         context.identityDataStore.edit { prefs ->
             prefs[Keys.BATTERY_PROMPT_DISMISSED] = dismissed
+        }
+    }
+
+    suspend fun setDevModeEnabled(enabled: Boolean) {
+        context.identityDataStore.edit { prefs ->
+            prefs[Keys.DEV_MODE_ENABLED] = enabled
         }
     }
 

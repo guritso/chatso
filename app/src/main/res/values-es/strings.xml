@@ -240,4 +240,59 @@
     <string name="recent_in_app_files">Archivos recientes en chats (toca para enviar)</string>
     <string name="no_saved_media_hint">Toca arriba para elegir elementos del dispositivo y enviarlos.</string>
     <string name="no_recent_files_hint">Toca arriba para abrir los archivos recientes del sistema y enviarlos.</string>
+
+    <string name="tab_settings">Ajustes</string>
+    <string name="profile_only_title">Perfil</string>
+    <string name="settings_title">Ajustes</string>
+    <string name="peer_id_label">Peer ID</string>
+    <string name="copy_peer_id_btn">Copiar ID</string>
+
+    <string name="updates_only_section">Actualizaciones</string>
+    <string name="about_section">Acerca de</string>
+    <string name="about_app_desc">Mensajero P2P sin servidores y cifrado de extremo a extremo por Wi-Fi, VPN o localhost.</string>
+    <string name="about_version_label">Versión %1$s (build %2$d)</string>
+    <string name="licenses_section">Licencias</string>
+
+    <string name="unread_messages_single">1 mensaje nuevo</string>
+    <string name="unread_messages_plural">%1$d mensajes nuevos</string>
+
+    <string name="dev_mode_section">Modo Desarrollador</string>
+    <string name="dev_mode_title">Activar Modo Desarrollador</string>
+    <string name="dev_mode_desc">Simula usuarios ficticios, mensajes entrantes en segundo plano e inspecciona diagnósticos.</string>
+    <string name="dev_mode_open_tools">Herramientas de Desarrollador</string>
+    <string name="dev_mode_open_tools_desc">Usuarios fake, mensajes programados en segundo plano, eventos y diagnóstico</string>
+    <string name="dev_tools_title">Modo Desarrollador</string>
+    <string name="dev_fake_peer_section">Usuarios Fake</string>
+    <string name="dev_fake_name_label">Nombre del usuario fake</string>
+    <string name="dev_fake_name_hint">Déjalo vacío para aleatorio</string>
+    <string name="dev_create_fake_peer_btn">Crear usuario fake</string>
+    <string name="dev_target_peer_label">Contacto destino</string>
+    <string name="dev_no_peers_hint">Crea un usuario fake arriba o conéctate a alguien primero.</string>
+    <string name="dev_incoming_sim_section">Simulador de Mensajes Entrantes</string>
+    <string name="dev_fake_msg_label">Texto del mensaje entrante</string>
+    <string name="dev_fake_msg_default">¡Hola! Probando mensaje entrante en chatso.</string>
+    <string name="dev_send_now_btn">Recibir ahora</string>
+    <string name="dev_send_delayed_btn">Recibir en 5s (2º plano)</string>
+    <string name="dev_scheduled_countdown">Llegando en %1$ds… ¡Minimiza la app ahora!</string>
+    <string name="dev_unread_burst_btn">Enviar 5 mensajes sin leer</string>
+    <string name="dev_events_section">Eventos y Multimedia Fake</string>
+    <string name="dev_sim_photo_btn">Simular foto</string>
+    <string name="dev_sim_sticker_btn">Simular sticker</string>
+    <string name="dev_sim_typing_btn">Escribiendo (4s)</string>
+    <string name="dev_sim_reaction_btn">Reaccionar ❤️</string>
+    <string name="dev_sim_online_toggle">Simular presencia en línea</string>
+    <string name="dev_auto_reply_toggle">Respuesta automática del usuario fake</string>
+    <string name="dev_auto_reply_desc">Responde 1,5s después de enviar algo al usuario fake</string>
+    <string name="dev_key_warning_btn">Aviso de cambio de clave</string>
+    <string name="dev_diagnostics_section">Diagnóstico en Tiempo Real</string>
+    <string name="dev_diag_peer_id">Peer ID Local</string>
+    <string name="dev_diag_server_port">Servidor TCP</string>
+    <string name="dev_diag_peers_count">Contactos / Fake</string>
+    <string name="dev_diag_messages_count">Total de mensajes</string>
+    <string name="dev_clear_fakes_btn">Eliminar todos los usuarios fake</string>
+    <string name="dev_msg_fake_created">Usuario fake creado: %1$s</string>
+    <string name="dev_msg_fake_delivered">Mensaje simulado entregado.</string>
+    <string name="dev_msg_fakes_cleared">Usuarios fake eliminados.</string>
+    <string name="dev_msg_key_warning">Aviso de cambio de clave simulado para %1$s.</string>
+    <string name="dev_msg_no_message_for_reaction">Envía o simula un mensaje primero para reaccionar.</string>
 </resources>
