@@ -475,11 +475,11 @@ object ChatsoNotificationHelper {
             canvas.drawCircle(cx, cy, badgeRadius, badgeBgPaint)
 
             val badgeDrawable = runCatching {
-                ContextCompat.getDrawable(context, R.drawable.ic_launcher_foreground)
-                    ?: ContextCompat.getDrawable(context, R.drawable.ic_notification_chatso)
+                ContextCompat.getDrawable(context, R.drawable.ic_notification_chatso)
+                    ?: ContextCompat.getDrawable(context, R.drawable.ic_launcher_foreground)
             }.getOrNull()
             if (badgeDrawable != null) {
-                val inset = (badgeRadius * 0.14f).toInt()
+                val inset = (badgeRadius * 0.16f).toInt()
                 val clipPath = android.graphics.Path().apply {
                     addCircle(cx, cy, badgeRadius, android.graphics.Path.Direction.CW)
                 }
