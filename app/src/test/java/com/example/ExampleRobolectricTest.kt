@@ -2245,4 +2245,128 @@ class ExampleRobolectricTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `deleted conversation closes session and does not reappear on profile sync or auto reconnect`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        dao.getAllPeersOnce().forEach {
+            dao.deleteAllMessagesForPeer(it.peerId)
+            dao.deletePeer(it.peerId)
+        }
+
+        val storeA = LocalIdentityStore(context)
+        storeA.createIdentity("AppOne", null, isDiscoverable = true)
+        val repoA = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = storeA,
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { true }
+        )
+
+        val discB = DiscoveryManager(context, scope)
+        val matB = CryptoEngine.createIdentityMaterial()
+        val listenerB = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
+            ): File = File.createTempFile("unused_del", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val nodeB = P2PNodeManager(scope, discB, listenerB)
+
+        try {
+            repeat(30) {
+                if (repoA.nodeManager.serverRunning.value) return@repeat
+                delay(50)
+            }
+            nodeB.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true, username = "AppTwo",
+                    publicKeyBase64 = matB.publicKeyBase64, wrappedPrivateKeyBase64 = matB.wrappedPrivateKeyBase64,
+                    peerId = matB.peerId, fingerprint = matB.fingerprint,
+                    listenPort = 43992, isDiscoverable = true
+                )
+            )
+            repeat(30) {
+                if (nodeB.serverRunning.value) return@repeat
+                delay(50)
+            }
+            val aIdentity = storeA.getSnapshot()
+            val aPort = repoA.nodeManager.boundPort.value
+
+            // 1. Both peers establish a live session and save the conversation
+            assertTrue(
+                nodeB.connectToPeer("127.0.0.1", aPort, aIdentity.publicKeyBase64).isSuccess
+            )
+            delay(200)
+            assertNotNull(dao.getPeerById(matB.peerId))
+            assertTrue(repoA.nodeManager.connectedPeers.value.contains(matB.peerId))
+
+            // 2. Delete the conversation in AppOne
+            repoA.deleteConversation(matB.peerId)
+            delay(150)
+
+            assertNull("Peer must be removed from Room DB", dao.getPeerById(matB.peerId))
+            assertFalse(
+                "Deleting conversation must close the live P2P session",
+                repoA.nodeManager.connectedPeers.value.contains(matB.peerId)
+            )
+
+            // 3. Switching to AppTwo triggers its auto-connect (isAutoReconnect = true) before AppTwo deletes;
+            //    AppOne must reject the auto-reconnect and keep the conversation deleted
+            val autoReconnectRes = nodeB.connectToPeer(
+                host = "127.0.0.1",
+                port = aPort,
+                expectedPubKeyBase64 = aIdentity.publicKeyBase64,
+                isAutoReconnect = true
+            )
+            assertTrue("Auto-reconnect to removed chat must be rejected", autoReconnectRes.isFailure)
+            delay(150)
+            assertNull("Auto-reconnect must not recreate deleted conversation", dao.getPeerById(matB.peerId))
+
+            // 4. Stale PROFILE_SYNC callback must never recreate a deleted peer
+            repoA.onPeerProfileUpdated(
+                peerId = matB.peerId,
+                publicKeyBase64 = matB.publicKeyBase64,
+                remoteIp = "127.0.0.1",
+                remoteListenPort = nodeB.boundPort.value,
+                username = "AppTwo",
+                avatarBase64 = null
+            )
+            assertNull("PROFILE_SYNC must not recreate deleted conversation", dao.getPeerById(matB.peerId))
+
+            // 5. Running AppOne autoConnectActiveChats must not reconnect or recreate anything
+            repoA.autoConnectActiveChats(force = true)
+            assertTrue(dao.getAllPeersOnce().isEmpty())
+            assertFalse(repoA.nodeManager.connectedPeers.value.contains(matB.peerId))
+        } finally {
+            nodeB.disconnectAll()
+            discB.shutdown()
+            repoA.shutdown()
+            dao.deleteAllMessagesForPeer(matB.peerId)
+            dao.deletePeer(matB.peerId)
+            scope.cancel()
+        }
+    }
 }

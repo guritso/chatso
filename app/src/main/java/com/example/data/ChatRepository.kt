@@ -13,6 +13,7 @@ import java.io.File
 import java.io.InputStream
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -80,6 +81,8 @@ class ChatRepository(
     private val transientTestPeerIds = ConcurrentHashMap.newKeySet<String>()
     private val connectMutexByPeer = ConcurrentHashMap<String, Mutex>()
     private val lastAutoConnectAttemptMs = ConcurrentHashMap<String, Long>()
+    private val deletingPeerIds = ConcurrentHashMap.newKeySet<String>()
+    private val deleteGenerationByPeer = ConcurrentHashMap<String, AtomicLong>()
     private var autoConnectJob: Job? = null
 
     private val _transferAlertResIds = MutableSharedFlow<Int>(extraBufferCapacity = 8)
@@ -310,14 +313,35 @@ class ChatRepository(
     fun isDevSimulatedOnline(peerId: String): Boolean =
         peerId.startsWith(DEV_FAKE_PEER_PREFIX) && _devOnlineFakePeers.value.contains(peerId)
 
-    suspend fun ensurePeerConnected(peerId: String): Boolean {
+    suspend fun ensurePeerConnected(peerId: String, isAutoReconnect: Boolean = false): Boolean {
+        if (deletingPeerIds.contains(peerId)) return false
         if (isDevSimulatedOnline(peerId)) return true
         if (nodeManager.connectedPeers.value.contains(peerId)) return true
         val mutex = connectMutexByPeer.computeIfAbsent(peerId) { Mutex() }
         return mutex.withLock {
+            if (deletingPeerIds.contains(peerId)) return@withLock false
             if (isDevSimulatedOnline(peerId)) return@withLock true
             if (nodeManager.connectedPeers.value.contains(peerId)) return@withLock true
+
+            val startGen = deleteGenerationByPeer[peerId]?.get() ?: 0L
             val peer = chatDao.getPeerById(peerId)
+            if (isAutoReconnect && peer == null) return@withLock false
+
+            suspend fun finalizeAttempt(connected: Boolean): Boolean {
+                if (!connected) return false
+                val endGen = deleteGenerationByPeer[peerId]?.get() ?: 0L
+                if (endGen != startGen ||
+                    deletingPeerIds.contains(peerId) ||
+                    (isAutoReconnect && chatDao.getPeerById(peerId) == null)
+                ) {
+                    nodeManager.disconnectPeer(peerId)
+                    chatDao.deleteAllMessagesForPeer(peerId)
+                    chatDao.deletePeer(peerId)
+                    return false
+                }
+                return true
+            }
+
             val discoveredDirect = discoveryManager.discoveredPeers.value[peerId]
                 ?.takeIf { it.viaBridgePeerId.isNullOrBlank() }
             val discoveredBridged = discoveryManager.discoveredPeers.value[peerId]
@@ -327,10 +351,11 @@ class ChatRepository(
                 if (nodeManager.connectToPeer(
                         host = discoveredDirect.ipAddress,
                         port = discoveredDirect.port,
-                        expectedPubKeyBase64 = discoveredDirect.publicKeyBase64.ifBlank { peer?.publicKeyBase64.orEmpty() }
+                        expectedPubKeyBase64 = discoveredDirect.publicKeyBase64.ifBlank { peer?.publicKeyBase64.orEmpty() },
+                        isAutoReconnect = isAutoReconnect
                     ).isSuccess
                 ) {
-                    return@withLock true
+                    return@withLock finalizeAttempt(true)
                 }
             }
 
@@ -341,20 +366,22 @@ class ChatRepository(
                 if (!sameAsDiscovered && nodeManager.connectToPeer(
                         host = peer.lastIp,
                         port = peer.lastPort,
-                        expectedPubKeyBase64 = peer.publicKeyBase64
+                        expectedPubKeyBase64 = peer.publicKeyBase64,
+                        isAutoReconnect = isAutoReconnect
                     ).isSuccess
                 ) {
-                    return@withLock true
+                    return@withLock finalizeAttempt(true)
                 }
                 if (!NetworkUtils.isLoopbackHost(peer.lastIp) &&
                     peer.publicKeyBase64.isNotBlank() &&
                     nodeManager.connectToPeer(
                         host = "127.0.0.1",
                         port = peer.lastPort,
-                        expectedPubKeyBase64 = peer.publicKeyBase64
+                        expectedPubKeyBase64 = peer.publicKeyBase64,
+                        isAutoReconnect = isAutoReconnect
                     ).isSuccess
                 ) {
-                    return@withLock true
+                    return@withLock finalizeAttempt(true)
                 }
             }
 
@@ -368,20 +395,34 @@ class ChatRepository(
                     val bridgePort = discoveredBridged?.bridgePort ?: bridgePeer?.lastPort ?: LocalIdentity.DEFAULT_TCP_PORT
                     val bridgePub = bridgePeer?.publicKeyBase64.orEmpty()
                     if (bridgeIp.isNotBlank() && bridgePort in 1..65535) {
-                        nodeManager.connectToPeer(bridgeIp, bridgePort, bridgePub)
+                        nodeManager.connectToPeer(
+                            host = bridgeIp,
+                            port = bridgePort,
+                            expectedPubKeyBase64 = bridgePub,
+                            isAutoReconnect = isAutoReconnect
+                        )
                     }
                 }
-                if (nodeManager.connectViaBridge(bridgeId, peerId, targetPub).isSuccess) {
-                    return@withLock true
+                if (nodeManager.connectViaBridge(
+                        bridgePeerId = bridgeId,
+                        targetPeerId = peerId,
+                        expectedPubKeyBase64 = targetPub,
+                        isAutoReconnect = isAutoReconnect
+                    ).isSuccess
+                ) {
+                    return@withLock finalizeAttempt(true)
                 }
             }
 
             if (peer != null && peer.lastIp.isNotBlank() && peer.lastPort in 1..65535 && peer.viaBridgePeerId.isNotBlank()) {
-                return@withLock nodeManager.connectToPeer(
-                    host = peer.lastIp,
-                    port = peer.lastPort,
-                    expectedPubKeyBase64 = peer.publicKeyBase64
-                ).isSuccess
+                return@withLock finalizeAttempt(
+                    nodeManager.connectToPeer(
+                        host = peer.lastIp,
+                        port = peer.lastPort,
+                        expectedPubKeyBase64 = peer.publicKeyBase64,
+                        isAutoReconnect = isAutoReconnect
+                    ).isSuccess
+                )
             }
             false
         }
@@ -393,6 +434,7 @@ class ChatRepository(
             .filter { peer ->
                 !peer.peerId.startsWith(DEV_FAKE_PEER_PREFIX) &&
                     !transientTestPeerIds.contains(peer.peerId) &&
+                    !deletingPeerIds.contains(peer.peerId) &&
                     peer.publicKeyBase64.isNotBlank()
             }
         if (savedPeers.isEmpty()) return
@@ -401,6 +443,7 @@ class ChatRepository(
         // First pass: direct saved active chats (including Bridge contacts); second pass: bridged saved chats
         val orderedPeers = savedPeers.sortedBy { if (it.viaBridgePeerId.isBlank()) 0 else 1 }
         for (peer in orderedPeers) {
+            if (deletingPeerIds.contains(peer.peerId)) continue
             if (nodeManager.connectedPeers.value.contains(peer.peerId)) continue
             val hasDirectEndpoint = peer.viaBridgePeerId.isBlank() && peer.lastIp.isNotBlank() && peer.lastPort in 1..65535
             val hasBridgeRoute = peer.viaBridgePeerId.isNotBlank() &&
@@ -410,12 +453,15 @@ class ChatRepository(
             val lastAttempt = lastAutoConnectAttemptMs[peer.peerId] ?: 0L
             if (!force && now - lastAttempt < 10_000L) continue
             lastAutoConnectAttemptMs[peer.peerId] = now
-            ensurePeerConnected(peer.peerId)
+            ensurePeerConnected(peer.peerId, isAutoReconnect = true)
         }
     }
 
-    override suspend fun ensureBridgeTargetConnected(targetPeerId: String): Boolean {
-        if (targetPeerId.startsWith(DEV_FAKE_PEER_PREFIX) || transientTestPeerIds.contains(targetPeerId)) {
+    override suspend fun ensureBridgeTargetConnected(targetPeerId: String, isAutoReconnect: Boolean): Boolean {
+        if (deletingPeerIds.contains(targetPeerId) ||
+            targetPeerId.startsWith(DEV_FAKE_PEER_PREFIX) ||
+            transientTestPeerIds.contains(targetPeerId)
+        ) {
             return false
         }
         if (nodeManager.connectedPeers.value.contains(targetPeerId)) return true
@@ -425,12 +471,22 @@ class ChatRepository(
         }
         val mutex = connectMutexByPeer.computeIfAbsent(targetPeerId) { Mutex() }
         return mutex.withLock {
+            if (deletingPeerIds.contains(targetPeerId)) return@withLock false
             if (nodeManager.connectedPeers.value.contains(targetPeerId)) return@withLock true
-            nodeManager.connectToPeer(
+            val startGen = deleteGenerationByPeer[targetPeerId]?.get() ?: 0L
+            val ok = nodeManager.connectToPeer(
                 host = peer.lastIp,
                 port = peer.lastPort,
-                expectedPubKeyBase64 = peer.publicKeyBase64
+                expectedPubKeyBase64 = peer.publicKeyBase64,
+                isAutoReconnect = isAutoReconnect
             ).isSuccess
+            if (!ok) return@withLock false
+            val endGen = deleteGenerationByPeer[targetPeerId]?.get() ?: 0L
+            if (endGen != startGen || deletingPeerIds.contains(targetPeerId) || chatDao.getPeerById(targetPeerId) == null) {
+                nodeManager.disconnectPeer(targetPeerId)
+                return@withLock false
+            }
+            true
         }
     }
 
@@ -1105,15 +1161,63 @@ class ChatRepository(
     }
 
     suspend fun deleteConversation(peerId: String) {
-        if (_unreadDivider.value?.peerId == peerId) {
-            _unreadDivider.value = null
+        deletingPeerIds.add(peerId)
+        deleteGenerationByPeer.computeIfAbsent(peerId) { AtomicLong(0L) }.incrementAndGet()
+        try {
+            if (_unreadDivider.value?.peerId == peerId) {
+                _unreadDivider.value = null
+            }
+            _typingPeers.update { it - peerId }
+            _devOnlineFakePeers.update { it - peerId }
+            lastAutoConnectAttemptMs.remove(peerId)
+            onClearPeerNotification?.invoke(peerId)
+
+            val activeTransferIds = transfersMap.values
+                .filter { it.peerId == peerId }
+                .map { it.messageId }
+            activeTransferIds.forEach { msgId ->
+                cancelledTransferIds.add(msgId)
+                outgoingTransferJobs.remove(msgId)?.cancel()
+                incomingTransferStartTimes.remove(msgId)
+                transfersMap.remove(msgId)
+            }
+            if (activeTransferIds.isNotEmpty()) {
+                publishTransfersSnapshot()
+            }
+
+            nodeManager.disconnectPeer(peerId)
+            chatDao.deleteAllMessagesForPeer(peerId)
+            chatDao.deletePeer(peerId)
+        } finally {
+            deletingPeerIds.remove(peerId)
         }
-        chatDao.deleteAllMessagesForPeer(peerId)
-        chatDao.deletePeer(peerId)
     }
 
     override suspend fun isKnownPeer(peerId: String): Boolean {
-        return transientTestPeerIds.contains(peerId) || chatDao.getPeerById(peerId) != null
+        return !deletingPeerIds.contains(peerId) &&
+            (transientTestPeerIds.contains(peerId) || chatDao.getPeerById(peerId) != null)
+    }
+
+    override suspend fun onPeerProfileUpdated(
+        peerId: String,
+        publicKeyBase64: String,
+        remoteIp: String,
+        remoteListenPort: Int,
+        username: String,
+        avatarBase64: String?,
+        viaBridgePeerId: String
+    ) {
+        if (deletingPeerIds.contains(peerId) || transientTestPeerIds.contains(peerId)) return
+        if (chatDao.getPeerById(peerId) == null) return
+        onPeerHandshaked(
+            peerId = peerId,
+            publicKeyBase64 = publicKeyBase64,
+            remoteIp = remoteIp,
+            remoteListenPort = remoteListenPort,
+            username = username,
+            avatarBase64 = avatarBase64,
+            viaBridgePeerId = viaBridgePeerId
+        )
     }
 
     override suspend fun onPeerHandshaked(
@@ -1125,7 +1229,7 @@ class ChatRepository(
         avatarBase64: String?,
         viaBridgePeerId: String
     ) {
-        if (transientTestPeerIds.contains(peerId)) return
+        if (deletingPeerIds.contains(peerId) || transientTestPeerIds.contains(peerId)) return
         val existing = chatDao.getPeerById(peerId)
         val avatarPath = if (!avatarBase64.isNullOrBlank()) {
             mediaStorage.savePeerAvatarBase64(peerId, avatarBase64) ?: existing?.avatarPath
@@ -1172,12 +1276,13 @@ class ChatRepository(
         if (availablePeerIds.isEmpty()) return
         scope.launch(Dispatchers.IO) {
             for (targetPeerId in availablePeerIds) {
+                if (deletingPeerIds.contains(targetPeerId)) continue
                 val peer = chatDao.getPeerById(targetPeerId) ?: continue
                 if (peer.viaBridgePeerId != bridgePeerId && !nodeManager.connectedPeers.value.contains(targetPeerId)) {
                     chatDao.upsertPeer(peer.copy(viaBridgePeerId = bridgePeerId))
                 }
                 if (!nodeManager.connectedPeers.value.contains(targetPeerId)) {
-                    if (ensurePeerConnected(targetPeerId)) {
+                    if (ensurePeerConnected(targetPeerId, isAutoReconnect = true)) {
                         flushPendingOutgoingMessages(targetPeerId)
                     }
                 }
@@ -1361,6 +1466,7 @@ class ChatRepository(
         replyToSenderTag: String?,
         replyToPreview: String?
     ) {
+        if (deletingPeerIds.contains(peerId)) return
         _typingPeers.update { it - peerId }
         val isChatOpenInFg = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
         val isActivelyViewed = isChatOpenInFg && isOpenChatAtBottom
@@ -1702,10 +1808,12 @@ class ChatRepository(
     }
 
     override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {
+        if (deletingPeerIds.contains(peerId)) return
         _typingPeers.update { if (isTyping) it + peerId else it - peerId }
     }
 
     override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {
+        if (deletingPeerIds.contains(peerId)) return
         chatDao.updatePeerSelfDestruct(peerId, seconds)
     }
 
