@@ -1395,10 +1395,17 @@ class ExampleRobolectricTest {
             assertNotNull("Alice should discover Charlie through BridgeB", discoveredC)
             // The test network puts all nodes on localhost, so Alice may discover Charlie
             // directly as well. Verify the bridge's own announcement includes Charlie.
-            val bridgeAnnouncement = String(
-                discB.buildDiscoveryReplyBytes(idB),
-                Charsets.UTF_8
-            )
+            val announcementDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            var bridgeAnnouncement = ""
+            while (!bridgeAnnouncement.contains(matC.publicKeyBase64) &&
+                System.nanoTime() < announcementDeadline
+            ) {
+                bridgeAnnouncement = String(
+                    discB.buildDiscoveryReplyBytes(idB),
+                    Charsets.UTF_8
+                )
+                if (!bridgeAnnouncement.contains(matC.publicKeyBase64)) delay(25)
+            }
             assertTrue(
                 "BridgeB's announcement should include Charlie in its bridged directory",
                 bridgeAnnouncement.contains(matC.publicKeyBase64)
