@@ -41,7 +41,28 @@ jobs:
           gradle-version: '9.3.1'
 
       - name: Run unit tests
-        run: gradle :app:testDebugUnitTest
+        run: |
+          if gradle :app:testDebugUnitTest; then
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import glob
+          import xml.etree.ElementTree as ET
+
+          reports = glob.glob("app/build/test-results/testDebugUnitTest/*.xml")
+          if not reports:
+              print("No unit-test XML reports were generated.")
+          for report in reports:
+              root = ET.parse(report).getroot()
+              for case in root.iter("testcase"):
+                  failure = case.find("failure")
+                  if failure is not None:
+                      print(f"FAILED: {case.get('classname')}::{case.get('name')}")
+                      print(failure.get("message", ""))
+                      print(failure.text or "")
+          PY
+          exit 1
 
       - name: Prepare signing and build APK
         id: build
