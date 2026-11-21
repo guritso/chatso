@@ -1,6 +1,7 @@
 package com.example.network
 
 import android.content.Context
+import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -16,11 +17,10 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,7 +36,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Handles LAN & VPN peer discovery while strictly honoring Invisible Mode (`isDiscoverable == false`).
+ * Handles multi-network peer discovery (Localhost, LAN/Wi-Fi, VPN, and Bridged)
+ * while strictly honoring Invisible Mode (`isDiscoverable == false`).
  * When `isDiscoverable` is false:
  * - Zero NSD/mDNS service announcements are registered.
  * - Zero UDP discovery beacons or replies are transmitted.
@@ -75,8 +76,19 @@ class DiscoveryManager(
     @Volatile
     private var bridgedPeersProvider: () -> List<BridgedPeerInfo> = { emptyList() }
 
+    @Volatile
+    private var activeBridgedPeersRefresher: (() -> Unit)? = null
+
     fun setBridgedPeersProvider(provider: () -> List<BridgedPeerInfo>) {
         bridgedPeersProvider = provider
+    }
+
+    fun setActiveBridgedPeersRefresher(refresher: () -> Unit) {
+        activeBridgedPeersRefresher = refresher
+    }
+
+    fun findAndroidNetworkForIp(hostIp: String): Network? {
+        return NetworkUtils.findAndroidNetworkForIp(context, hostIp)
     }
 
     private var udpResponderJob: Job? = null
@@ -152,7 +164,7 @@ class DiscoveryManager(
                     )
                     socket.send(replyPacket)
                 } else if (type == "ANNOUNCE") {
-                    handleIncomingBeacon(json, packet.address.hostAddress ?: "", "UDP LAN")
+                    handleIncomingBeacon(json, packet.address.hostAddress ?: "", EndpointKind.LAN.badge)
                 }
             }
         } catch (_: Exception) {
@@ -176,110 +188,245 @@ class DiscoveryManager(
 
         scope.launch(Dispatchers.IO) {
             try {
+                val scanTargets = NetworkUtils.getActiveNetworkScanTargets(context)
                 startNsdBrowse()
                 kotlinx.coroutines.withTimeoutOrNull(2500L) {
                     coroutineScope {
-                        // 1. Immediately probe known peers & localhost (<150ms)
-                        val localhostTargets = listOf(
-                            "127.0.0.1" to identity.listenPort,
-                            "127.0.0.1" to LocalIdentity.DEFAULT_TCP_PORT
-                        ).distinct()
+                        // 1. Always probe Localhost (including multi-port local/ADB-forwarded range & emulator host)
+                        // using unbound sockets so active VPNs never swallow loopback discovery.
+                        val loopbackPorts = (
+                            listOf(identity.listenPort, LocalIdentity.DEFAULT_TCP_PORT) +
+                                (LocalIdentity.DEFAULT_TCP_PORT..(LocalIdentity.DEFAULT_TCP_PORT + 10))
+                            ).distinct()
+                        val emulatorPorts = listOf(identity.listenPort, LocalIdentity.DEFAULT_TCP_PORT).distinct()
+
                         launch {
-                            localhostTargets.forEach { (ip, port) ->
-                                launch { probeSingleHost(ip, port, EndpointKind.LOCALHOST.badge, connectTimeoutMs = 400, readTimeoutMs = 500) }
+                            loopbackPorts.forEach { port ->
+                                probeSingleHost(
+                                    ip = "127.0.0.1",
+                                    port = port,
+                                    badge = EndpointKind.LOCALHOST.badge,
+                                    connectTimeoutMs = 200,
+                                    readTimeoutMs = 350,
+                                    androidNetwork = null
+                                )
+                            }
+                            emulatorPorts.forEach { port ->
+                                launch {
+                                    probeSingleHost(
+                                        ip = "10.0.2.2",
+                                        port = port,
+                                        badge = EndpointKind.LOCALHOST.badge,
+                                        connectTimeoutMs = 150,
+                                        readTimeoutMs = 300,
+                                        androidNetwork = null
+                                    )
+                                }
                             }
                         }
+
+                        // 2. Immediately probe known/saved peer endpoints on their matched interface (with unbound fallback)
                         if (knownTargets.isNotEmpty()) {
                             launch {
                                 knownTargets.distinct().forEach { (ip, port) ->
                                     if (ip.isNotBlank()) {
-                                        launch { probeSingleHost(ip, port, "Saved", connectTimeoutMs = 800, readTimeoutMs = 1000) }
+                                        launch {
+                                            val kindBadge = NetworkUtils.classifyIpKind(ip, scanTargets)?.badge ?: "Saved"
+                                            val matchedNetwork = NetworkUtils.findAndroidNetworkForIp(context, ip)
+                                            val ok = probeSingleHost(
+                                                ip = ip,
+                                                port = port,
+                                                badge = kindBadge,
+                                                connectTimeoutMs = 800,
+                                                readTimeoutMs = 1000,
+                                                androidNetwork = matchedNetwork
+                                            )
+                                            if (!ok && matchedNetwork != null) {
+                                                probeSingleHost(
+                                                    ip = ip,
+                                                    port = port,
+                                                    badge = kindBadge,
+                                                    connectTimeoutMs = 600,
+                                                    readTimeoutMs = 800,
+                                                    androidNetwork = null
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
-                        // 2. UDP LAN broadcast query
-                        launch { sendUdpQuery(identity) }
-                        // 3. Fast concurrent subnet probe
-                        launch { probeActiveSubnets(identity) }
+
+                        // 3. Per-interface UDP broadcast queries (each bound to its interface so VPN won't hijack LAN)
+                        launch { sendUdpQuery(identity, scanTargets) }
+
+                        // 4. Concurrent subnet TCP probe across ALL active LAN & VPN interfaces
+                        launch { probeActiveSubnets(identity, scanTargets) }
+
                         // Keep mDNS browse active briefly within the 2.5s window
                         launch { delay(1800L) }
                     }
                 }
             } finally {
                 stopNsdBrowse()
+                activeBridgedPeersRefresher?.invoke()
                 _isScanning.value = false
             }
         }
     }
 
-    private fun sendUdpQuery(identity: LocalIdentity) {
-        try {
-            DatagramSocket().use { sock ->
-                sock.broadcast = true
-                sock.soTimeout = 450
-                // When in Invisible Mode, do not include username or publicKey in query packet
-                val queryJson = JSONObject().apply {
-                    put("magic", UDP_MAGIC)
-                    put("type", "QUERY")
-                    put("peerId", if (identity.isDiscoverable) identity.peerId else "anon")
-                }.toString().toByteArray(Charsets.UTF_8)
+    private suspend fun sendUdpQuery(identity: LocalIdentity, scanTargets: List<NetworkScanTarget>) = coroutineScope {
+        val queryJson = JSONObject().apply {
+            put("magic", UDP_MAGIC)
+            put("type", "QUERY")
+            put("peerId", if (identity.isDiscoverable) identity.peerId else "anon")
+        }.toString().toByteArray(Charsets.UTF_8)
 
-                val targets = mutableSetOf("255.255.255.255")
-                NetworkUtils.getActiveEndpoints()
-                    .filter { it.kind != EndpointKind.LOCALHOST }
-                    .mapNotNull { NetworkUtils.subnetPrefix24(it.ipAddress) }
-                    .forEach { targets.add("$it.255") }
+        val nonLoopbackTargets = scanTargets.filter {
+            !it.isCellular && (it.kind == EndpointKind.LAN || it.kind == EndpointKind.VPN)
+        }
 
-                for (addrStr in targets) {
-                    try {
-                        val pkt = DatagramPacket(
-                            queryJson,
-                            queryJson.size,
-                            InetAddress.getByName(addrStr),
-                            LocalIdentity.DISCOVERY_UDP_PORT
-                        )
-                        sock.send(pkt)
-                    } catch (_: Exception) {
-                    }
-                }
-
-                // Collect replies for up to 550ms
-                val endAt = System.currentTimeMillis() + 550L
-                val buf = ByteArray(2048)
-                while (System.currentTimeMillis() < endAt) {
-                    try {
-                        val resp = DatagramPacket(buf, buf.size)
-                        sock.receive(resp)
-                        val json = JSONObject(String(resp.data, 0, resp.length, Charsets.UTF_8))
-                        if (json.optString("magic") == UDP_MAGIC && json.optString("type") == "ANNOUNCE") {
-                            handleIncomingBeacon(json, resp.address.hostAddress ?: "", "LAN")
+        // Send a bound UDP query on each individual interface so VPN default routes do not swallow LAN broadcasts
+        for (target in nonLoopbackTargets) {
+            launch(Dispatchers.IO) {
+                try {
+                    val sock = if (target.androidNetwork != null) {
+                        DatagramSocket().also { s ->
+                            runCatching { target.androidNetwork.bindSocket(s) }
                         }
-                    } catch (_: Exception) {
-                        break
+                    } else {
+                        runCatching {
+                            DatagramSocket(InetSocketAddress(target.ipAddress, 0))
+                        }.getOrElse { DatagramSocket() }
                     }
+                    sock.use { s ->
+                        s.broadcast = true
+                        s.soTimeout = 450
+                        val broadcastTargets = buildList {
+                            target.broadcastAddress?.takeIf { it.isNotBlank() }?.let { add(it) }
+                            NetworkUtils.subnetPrefix24(target.ipAddress)?.let { add("$it.255") }
+                            if (target.kind == EndpointKind.LAN) add("255.255.255.255")
+                        }.distinct()
+                        for (addrStr in broadcastTargets) {
+                            try {
+                                val pkt = DatagramPacket(
+                                    queryJson,
+                                    queryJson.size,
+                                    InetAddress.getByName(addrStr),
+                                    LocalIdentity.DISCOVERY_UDP_PORT
+                                )
+                                s.send(pkt)
+                            } catch (_: Exception) {
+                            }
+                        }
+                        collectUdpReplies(s, target.kind.badge)
+                    }
+                } catch (_: Exception) {
                 }
             }
-        } catch (_: Exception) {
+        }
+
+        // Unbound fallback query (covers environments without per-interface binding or Robolectric tests)
+        launch(Dispatchers.IO) {
+            try {
+                DatagramSocket().use { sock ->
+                    sock.broadcast = true
+                    sock.soTimeout = 450
+                    val targets = mutableSetOf("255.255.255.255")
+                    nonLoopbackTargets
+                        .mapNotNull { it.broadcastAddress ?: NetworkUtils.subnetPrefix24(it.ipAddress)?.let { p -> "$p.255" } }
+                        .forEach { targets.add(it) }
+                    for (addrStr in targets) {
+                        try {
+                            val pkt = DatagramPacket(
+                                queryJson,
+                                queryJson.size,
+                                InetAddress.getByName(addrStr),
+                                LocalIdentity.DISCOVERY_UDP_PORT
+                            )
+                            sock.send(pkt)
+                        } catch (_: Exception) {
+                        }
+                    }
+                    collectUdpReplies(sock, EndpointKind.LAN.badge)
+                }
+            } catch (_: Exception) {
+            }
         }
     }
 
-    private suspend fun probeActiveSubnets(identity: LocalIdentity) = withContext(Dispatchers.IO) {
-        val endpoints = NetworkUtils.getActiveEndpoints()
-            .filter { it.kind == EndpointKind.VPN || it.kind == EndpointKind.LAN }
-            .take(2)
-        val semaphore = Semaphore(64)
-        val targetPort = identity.listenPort
+    private fun collectUdpReplies(sock: DatagramSocket, fallbackBadge: String) {
+        val endAt = System.currentTimeMillis() + 550L
+        val buf = ByteArray(2048)
+        while (System.currentTimeMillis() < endAt) {
+            try {
+                val resp = DatagramPacket(buf, buf.size)
+                sock.receive(resp)
+                val json = JSONObject(String(resp.data, 0, resp.length, Charsets.UTF_8))
+                if (json.optString("magic") == UDP_MAGIC && json.optString("type") == "ANNOUNCE") {
+                    handleIncomingBeacon(json, resp.address.hostAddress ?: "", fallbackBadge)
+                }
+            } catch (_: Exception) {
+                break
+            }
+        }
+    }
+
+    private suspend fun probeActiveSubnets(
+        identity: LocalIdentity,
+        scanTargets: List<NetworkScanTarget>
+    ) = withContext(Dispatchers.IO) {
+        val networkTargets = scanTargets.filter {
+            !it.isCellular && (it.kind == EndpointKind.LAN || it.kind == EndpointKind.VPN)
+        }
+        if (networkTargets.isEmpty()) return@withContext
+
+        val portsToProbe = listOf(identity.listenPort, LocalIdentity.DEFAULT_TCP_PORT).distinct()
+        // Cap total concurrent subnet probes below Dispatchers.IO's 64-thread limit so
+        // localhost, knownTargets, UDP, and mDNS always have free threads available.
+        val globalSemaphore = Semaphore(40)
+        val perNetworkWorkers = (40 / networkTargets.size).coerceIn(10, 40)
 
         coroutineScope {
-            for (ep in endpoints) {
+            for (ep in networkTargets) {
                 val prefix = NetworkUtils.subnetPrefix24(ep.ipAddress) ?: continue
-                (1..254).forEach { hostOctet ->
-                    val candidateIp = "$prefix.$hostOctet"
-                    if (candidateIp != ep.ipAddress) {
-                        launch {
-                            semaphore.withPermit {
-                                probeSingleHost(candidateIp, targetPort, ep.kind.badge)
+                val candidates = ConcurrentLinkedQueue<Pair<String, Int>>()
+                // Enqueue primary listenPort across all hosts first, then secondary default port if customized
+                for (port in portsToProbe) {
+                    if (ep.prefixLength in 1..23) {
+                        val octets = ep.ipAddress.split(".")
+                        if (octets.size == 4 && octets[2] != "0") {
+                            val hubIp = "${octets[0]}.${octets[1]}.0.1"
+                            if (hubIp != ep.ipAddress) {
+                                candidates.add(hubIp to port)
+                            }
+                        }
+                    }
+                    for (hostOctet in 1..254) {
+                        val candidateIp = "$prefix.$hostOctet"
+                        if (candidateIp != ep.ipAddress) {
+                            candidates.add(candidateIp to port)
+                        }
+                    }
+                }
+
+                launch {
+                    coroutineScope {
+                        repeat(perNetworkWorkers) {
+                            launch {
+                                while (isActive) {
+                                    val target = candidates.poll() ?: break
+                                    globalSemaphore.withPermit {
+                                        probeSingleHost(
+                                            ip = target.first,
+                                            port = target.second,
+                                            badge = ep.kind.badge,
+                                            connectTimeoutMs = 90,
+                                            readTimeoutMs = 150,
+                                            androidNetwork = ep.androidNetwork
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -293,10 +440,14 @@ class DiscoveryManager(
         port: Int,
         badge: String,
         connectTimeoutMs: Int = 120,
-        readTimeoutMs: Int = 200
-    ) {
-        try {
+        readTimeoutMs: Int = 200,
+        androidNetwork: Network? = null
+    ): Boolean {
+        return try {
             Socket().use { socket ->
+                if (androidNetwork != null) {
+                    runCatching { androidNetwork.bindSocket(socket) }
+                }
                 socket.connect(InetSocketAddress(ip, port), connectTimeoutMs)
                 socket.soTimeout = readTimeoutMs
                 val out = DataOutputStream(socket.getOutputStream())
@@ -306,17 +457,29 @@ class DiscoveryManager(
                 out.flush()
 
                 val replyKind = inp.readByte()
-                if (replyKind != KIND_DISCOVERY_REPLY) return
+                if (replyKind != KIND_DISCOVERY_REPLY) return false
                 val len = inp.readInt()
-                if (len <= 0 || len > 65_536) return
+                if (len <= 0 || len > 65_536) return false
                 val bytes = ByteArray(len)
                 inp.readFully(bytes)
                 val json = JSONObject(String(bytes, Charsets.UTF_8))
                 handleIncomingBeacon(json, ip, badge)
+                true
             }
         } catch (_: Exception) {
             // Unreachable or peer is in Invisible Mode (socket closed silently)
+            false
         }
+    }
+
+    private fun sourcePriority(source: String): Int = when (source) {
+        EndpointKind.LOCALHOST.badge -> 0
+        EndpointKind.LAN.badge -> 1
+        "mDNS" -> 2
+        "UDP LAN", "LAN" -> 3
+        EndpointKind.VPN.badge -> 4
+        "Saved" -> 5
+        else -> 6
     }
 
     private fun handleIncomingBeacon(json: JSONObject, sourceIp: String, sourceLabel: String) {
@@ -335,7 +498,17 @@ class DiscoveryManager(
             fingerprint = CryptoEngine.formatFingerprintFromBase64(pubB64),
             source = sourceLabel
         )
-        _discoveredPeers.update { it + (peerId to peer) }
+        _discoveredPeers.update { current ->
+            val existing = current[peerId]
+            if (existing == null ||
+                !existing.viaBridgePeerId.isNullOrBlank() ||
+                sourcePriority(sourceLabel) <= sourcePriority(existing.source)
+            ) {
+                current + (peerId to peer)
+            } else {
+                current
+            }
+        }
 
         val bridgedArr = json.optJSONArray("bridgedPeers")
         if (bridgedArr != null) {

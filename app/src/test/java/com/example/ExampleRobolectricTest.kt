@@ -1719,4 +1719,104 @@ class ExampleRobolectricTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `discovery finds localhost peer on alternate port and classifies multi-network subnets`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        val discPeer = DiscoveryManager(context, scope)
+        val discScanner = DiscoveryManager(context, scope)
+        val peerMat = CryptoEngine.createIdentityMaterial()
+        val scannerMat = CryptoEngine.createIdentityMaterial()
+        val listener = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
+            ): File = File.createTempFile("unused_multi", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val nodePeer = P2PNodeManager(scope, discPeer, listener)
+
+        try {
+            val altPort = (LocalIdentity.DEFAULT_TCP_PORT + 1..LocalIdentity.DEFAULT_TCP_PORT + 10)
+                .firstOrNull { candidate ->
+                    runCatching { java.net.ServerSocket(candidate).use { true } }.getOrDefault(false)
+                } ?: (LocalIdentity.DEFAULT_TCP_PORT + 5)
+
+            nodePeer.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true,
+                    username = "LocalhostAltPort",
+                    publicKeyBase64 = peerMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = peerMat.wrappedPrivateKeyBase64,
+                    peerId = peerMat.peerId,
+                    fingerprint = peerMat.fingerprint,
+                    listenPort = altPort,
+                    isDiscoverable = true
+                )
+            )
+            repeat(20) {
+                if (nodePeer.serverRunning.value) return@repeat
+                delay(25)
+            }
+            assertEquals(altPort, nodePeer.boundPort.value)
+
+            discScanner.applyIdentityPolicy(
+                LocalIdentity(
+                    isInitialized = true,
+                    username = "Scanner",
+                    publicKeyBase64 = scannerMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = scannerMat.wrappedPrivateKeyBase64,
+                    peerId = scannerMat.peerId,
+                    fingerprint = scannerMat.fingerprint,
+                    listenPort = 43971,
+                    isDiscoverable = true
+                )
+            )
+
+            // Scan WITHOUT passing knownTargets — should still discover LocalhostAltPort via loopback port range
+            discScanner.scanNetworkNow(knownTargets = emptyList())
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (discScanner.discoveredPeers.value[peerMat.peerId] == null && System.nanoTime() < deadline) {
+                delay(25)
+            }
+            val found = discScanner.discoveredPeers.value[peerMat.peerId]
+            assertNotNull("Expected scanner to auto-discover localhost peer on port $altPort", found)
+            assertEquals(com.example.data.EndpointKind.LOCALHOST.badge, found!!.source)
+            assertEquals(altPort, found.port)
+
+            // Verify subnet & IP classification helpers across Localhost, LAN, and VPN
+            val fakeTargets = listOf(
+                com.example.network.NetworkScanTarget("lo", "127.0.0.1", com.example.data.EndpointKind.LOCALHOST, 8),
+                com.example.network.NetworkScanTarget("wlan0", "192.168.10.20", com.example.data.EndpointKind.LAN, 24),
+                com.example.network.NetworkScanTarget("tun0", "10.8.0.5", com.example.data.EndpointKind.VPN, 32)
+            )
+            assertEquals(com.example.data.EndpointKind.LOCALHOST, com.example.network.NetworkUtils.classifyIpKind("127.0.0.1", fakeTargets))
+            assertEquals(com.example.data.EndpointKind.LAN, com.example.network.NetworkUtils.classifyIpKind("192.168.10.42", fakeTargets))
+            assertEquals(com.example.data.EndpointKind.VPN, com.example.network.NetworkUtils.classifyIpKind("10.8.0.9", fakeTargets))
+            assertNull(com.example.network.NetworkUtils.findAndroidNetworkForIp(context, "127.0.0.1"))
+        } finally {
+            nodePeer.disconnectAll()
+            discPeer.shutdown()
+            discScanner.shutdown()
+            scope.cancel()
+        }
+    }
 }

@@ -181,9 +181,18 @@ class P2PNodeManager(
     @Volatile
     private var localAvatarBase64Provider: suspend () -> String? = { null }
 
+    private data class CachedBridgeDirectory(
+        val bridgePeerId: String,
+        val bridgeName: String,
+        val bridgeHost: String,
+        val bridgePort: Int,
+        val entries: List<DiscoveryManager.BridgedPeerInfo>
+    )
+
     private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
     private val sessions = ConcurrentHashMap<String, ActivePeerSession>()
+    private val activeBridgeDirectories = ConcurrentHashMap<String, CachedBridgeDirectory>()
     private val pendingBridgedHandshakes =
         ConcurrentHashMap<String, CompletableDeferred<Pair<Byte, ByteArray>>>()
 
@@ -226,6 +235,20 @@ class P2PNodeManager(
                             listenPort = s.remoteListenPort
                         )
                     }
+            }
+        }
+        discoveryManager.setActiveBridgedPeersRefresher {
+            activeBridgeDirectories.values.forEach { cached ->
+                val bridgeSession = sessions[cached.bridgePeerId]
+                if (bridgeSession != null && !bridgeSession.isClosed && cached.entries.isNotEmpty()) {
+                    discoveryManager.updateBridgedPeers(
+                        bridgePeerId = cached.bridgePeerId,
+                        bridgeName = cached.bridgeName,
+                        bridgeHost = cached.bridgeHost,
+                        bridgePort = cached.bridgePort,
+                        entries = cached.entries
+                    )
+                }
             }
         }
     }
@@ -326,10 +349,37 @@ class P2PNodeManager(
             return@withContext Result.failure(IllegalStateException("Local identity is not initialized yet"))
         }
         try {
-            val socket = Socket()
-            socket.tcpNoDelay = true
-            socket.keepAlive = true
-            socket.connect(InetSocketAddress(host.trim(), port), 2000)
+            val cleanHost = host.trim()
+            val matchedNetwork = discoveryManager.findAndroidNetworkForIp(cleanHost)
+            val socket = if (matchedNetwork != null) {
+                val boundSocket = Socket().apply {
+                    tcpNoDelay = true
+                    keepAlive = true
+                }
+                val boundOk = runCatching {
+                    matchedNetwork.bindSocket(boundSocket)
+                    boundSocket.connect(InetSocketAddress(cleanHost, port), 2000)
+                    true
+                }.getOrElse {
+                    runCatching { boundSocket.close() }
+                    false
+                }
+                if (boundOk) {
+                    boundSocket
+                } else {
+                    Socket().apply {
+                        tcpNoDelay = true
+                        keepAlive = true
+                        connect(InetSocketAddress(cleanHost, port), 2000)
+                    }
+                }
+            } else {
+                Socket().apply {
+                    tcpNoDelay = true
+                    keepAlive = true
+                    connect(InetSocketAddress(cleanHost, port), 2000)
+                }
+            }
             socket.soTimeout = 5_000
 
             val inp = DataInputStream(BufferedInputStream(socket.getInputStream()))
@@ -859,6 +909,7 @@ class P2PNodeManager(
             listener.onPeerDisconnected(session.peerId)
         }
         if (session.bridgePeerId == null) {
+            activeBridgeDirectories.remove(session.peerId)
             discoveryManager.clearBridgedPeersFromBridge(session.peerId)
             listener.onBridgeDirectoryUpdated(session.peerId, emptySet())
             val dependentSessions = sessions.values.filter { it.bridgePeerId == session.peerId }
@@ -983,6 +1034,17 @@ class P2PNodeManager(
                                 )
                             }
                         }
+                    }
+                    if (list.isEmpty()) {
+                        activeBridgeDirectories.remove(session.peerId)
+                    } else {
+                        activeBridgeDirectories[session.peerId] = CachedBridgeDirectory(
+                            bridgePeerId = session.peerId,
+                            bridgeName = bridgeName,
+                            bridgeHost = remoteIp,
+                            bridgePort = session.remoteListenPort,
+                            entries = list
+                        )
                     }
                     discoveryManager.updateBridgedPeers(
                         bridgePeerId = session.peerId,
@@ -1838,6 +1900,7 @@ class P2PNodeManager(
         stopServer()
         pendingBridgedHandshakes.values.forEach { it.cancel() }
         pendingBridgedHandshakes.clear()
+        activeBridgeDirectories.clear()
         discoveryManager.clearAllBridgedPeers()
         sessions.values.forEach { it.closeQuietly() }
         sessions.clear()
