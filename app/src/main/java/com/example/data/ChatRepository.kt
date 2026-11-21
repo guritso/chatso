@@ -78,6 +78,9 @@ class ChatRepository(
     private val sendingInFlightIds = ConcurrentHashMap.newKeySet<String>()
     private val incomingTransferStartTimes = ConcurrentHashMap<String, Long>()
     private val transientTestPeerIds = ConcurrentHashMap.newKeySet<String>()
+    private val connectMutexByPeer = ConcurrentHashMap<String, Mutex>()
+    private val lastAutoConnectAttemptMs = ConcurrentHashMap<String, Long>()
+    private var autoConnectJob: Job? = null
 
     private val _transferAlertResIds = MutableSharedFlow<Int>(extraBufferCapacity = 8)
     val transferAlertResIds: SharedFlow<Int> = _transferAlertResIds.asSharedFlow()
@@ -111,14 +114,32 @@ class ChatRepository(
             mediaStorage.encodeAvatarBase64(snap.avatarPath)
         }
         scope.launch(Dispatchers.IO) {
+            var wasInit = false
+            var wasBridge = false
             identityStore.identityFlow.collectLatest { identity ->
                 nodeManager.updateIdentityAndEnsureServer(identity)
+                if (identity.isInitialized && (!wasInit || (!wasBridge && identity.bridgeEnabled))) {
+                    launch {
+                        delay(300L)
+                        autoConnectActiveChats(force = true)
+                    }
+                }
+                wasInit = identity.isInitialized
+                wasBridge = identity.bridgeEnabled
             }
         }
         scope.launch(Dispatchers.IO) {
             while (isActive) {
                 cleanupExpiredMessages()
                 delay(1000L)
+            }
+        }
+        autoConnectJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(12_000L)
+                if (identityStore.getSnapshot().isInitialized && nodeManager.serverRunning.value) {
+                    autoConnectActiveChats(force = false)
+                }
             }
         }
     }
@@ -155,9 +176,12 @@ class ChatRepository(
     fun onAppForegroundChanged(inForeground: Boolean) {
         nodeManager.setLocalAppInForeground(inForeground)
         if (inForeground) {
-            val openPeer = currentlyOpenPeerId ?: return
             scope.launch(Dispatchers.IO) {
-                prepareConversationOpen(openPeer, preserveExistingAnchor = true)
+                autoConnectActiveChats(force = true)
+                val openPeer = currentlyOpenPeerId
+                if (openPeer != null) {
+                    prepareConversationOpen(openPeer, preserveExistingAnchor = true)
+                }
             }
         }
     }
@@ -289,74 +313,125 @@ class ChatRepository(
     suspend fun ensurePeerConnected(peerId: String): Boolean {
         if (isDevSimulatedOnline(peerId)) return true
         if (nodeManager.connectedPeers.value.contains(peerId)) return true
-        val peer = chatDao.getPeerById(peerId)
-        val discoveredDirect = discoveryManager.discoveredPeers.value[peerId]
-            ?.takeIf { it.viaBridgePeerId.isNullOrBlank() }
-        val discoveredBridged = discoveryManager.discoveredPeers.value[peerId]
-            ?.takeIf { !it.viaBridgePeerId.isNullOrBlank() }
+        val mutex = connectMutexByPeer.computeIfAbsent(peerId) { Mutex() }
+        return mutex.withLock {
+            if (isDevSimulatedOnline(peerId)) return@withLock true
+            if (nodeManager.connectedPeers.value.contains(peerId)) return@withLock true
+            val peer = chatDao.getPeerById(peerId)
+            val discoveredDirect = discoveryManager.discoveredPeers.value[peerId]
+                ?.takeIf { it.viaBridgePeerId.isNullOrBlank() }
+            val discoveredBridged = discoveryManager.discoveredPeers.value[peerId]
+                ?.takeIf { !it.viaBridgePeerId.isNullOrBlank() }
 
-        if (discoveredDirect != null) {
-            if (nodeManager.connectToPeer(
-                    host = discoveredDirect.ipAddress,
-                    port = discoveredDirect.port,
-                    expectedPubKeyBase64 = discoveredDirect.publicKeyBase64.ifBlank { peer?.publicKeyBase64.orEmpty() }
-                ).isSuccess
-            ) {
-                return true
+            if (discoveredDirect != null) {
+                if (nodeManager.connectToPeer(
+                        host = discoveredDirect.ipAddress,
+                        port = discoveredDirect.port,
+                        expectedPubKeyBase64 = discoveredDirect.publicKeyBase64.ifBlank { peer?.publicKeyBase64.orEmpty() }
+                    ).isSuccess
+                ) {
+                    return@withLock true
+                }
             }
-        }
 
-        if (peer != null && peer.lastIp.isNotBlank() && peer.viaBridgePeerId.isBlank() && discoveredBridged == null) {
-            val sameAsDiscovered = discoveredDirect != null &&
-                NetworkUtils.normalizeHost(discoveredDirect.ipAddress) == NetworkUtils.normalizeHost(peer.lastIp) &&
-                discoveredDirect.port == peer.lastPort
-            if (!sameAsDiscovered && nodeManager.connectToPeer(
+            if (peer != null && peer.lastIp.isNotBlank() && peer.lastPort in 1..65535 && peer.viaBridgePeerId.isBlank() && discoveredBridged == null) {
+                val sameAsDiscovered = discoveredDirect != null &&
+                    NetworkUtils.normalizeHost(discoveredDirect.ipAddress) == NetworkUtils.normalizeHost(peer.lastIp) &&
+                    discoveredDirect.port == peer.lastPort
+                if (!sameAsDiscovered && nodeManager.connectToPeer(
+                        host = peer.lastIp,
+                        port = peer.lastPort,
+                        expectedPubKeyBase64 = peer.publicKeyBase64
+                    ).isSuccess
+                ) {
+                    return@withLock true
+                }
+                if (!NetworkUtils.isLoopbackHost(peer.lastIp) &&
+                    peer.publicKeyBase64.isNotBlank() &&
+                    nodeManager.connectToPeer(
+                        host = "127.0.0.1",
+                        port = peer.lastPort,
+                        expectedPubKeyBase64 = peer.publicKeyBase64
+                    ).isSuccess
+                ) {
+                    return@withLock true
+                }
+            }
+
+            val bridgeId = discoveredBridged?.viaBridgePeerId
+                ?: peer?.viaBridgePeerId?.takeIf { it.isNotBlank() }
+            val targetPub = discoveredBridged?.publicKeyBase64 ?: peer?.publicKeyBase64.orEmpty()
+            if (!bridgeId.isNullOrBlank()) {
+                if (!nodeManager.connectedPeers.value.contains(bridgeId)) {
+                    val bridgePeer = chatDao.getPeerById(bridgeId)
+                    val bridgeIp = discoveredBridged?.bridgeHost ?: bridgePeer?.lastIp.orEmpty()
+                    val bridgePort = discoveredBridged?.bridgePort ?: bridgePeer?.lastPort ?: LocalIdentity.DEFAULT_TCP_PORT
+                    val bridgePub = bridgePeer?.publicKeyBase64.orEmpty()
+                    if (bridgeIp.isNotBlank() && bridgePort in 1..65535) {
+                        nodeManager.connectToPeer(bridgeIp, bridgePort, bridgePub)
+                    }
+                }
+                if (nodeManager.connectViaBridge(bridgeId, peerId, targetPub).isSuccess) {
+                    return@withLock true
+                }
+            }
+
+            if (peer != null && peer.lastIp.isNotBlank() && peer.lastPort in 1..65535 && peer.viaBridgePeerId.isNotBlank()) {
+                return@withLock nodeManager.connectToPeer(
                     host = peer.lastIp,
                     port = peer.lastPort,
                     expectedPubKeyBase64 = peer.publicKeyBase64
                 ).isSuccess
-            ) {
-                return true
             }
-            if (!NetworkUtils.isLoopbackHost(peer.lastIp) &&
-                peer.lastPort > 0 &&
-                peer.publicKeyBase64.isNotBlank() &&
-                nodeManager.connectToPeer(
-                    host = "127.0.0.1",
-                    port = peer.lastPort,
-                    expectedPubKeyBase64 = peer.publicKeyBase64
-                ).isSuccess
-            ) {
-                return true
-            }
+            false
         }
+    }
 
-        val bridgeId = discoveredBridged?.viaBridgePeerId
-            ?: peer?.viaBridgePeerId?.takeIf { it.isNotBlank() }
-        val targetPub = discoveredBridged?.publicKeyBase64 ?: peer?.publicKeyBase64.orEmpty()
-        if (!bridgeId.isNullOrBlank()) {
-            if (!nodeManager.connectedPeers.value.contains(bridgeId)) {
-                val bridgePeer = chatDao.getPeerById(bridgeId)
-                val bridgeIp = discoveredBridged?.bridgeHost ?: bridgePeer?.lastIp.orEmpty()
-                val bridgePort = discoveredBridged?.bridgePort ?: bridgePeer?.lastPort ?: LocalIdentity.DEFAULT_TCP_PORT
-                val bridgePub = bridgePeer?.publicKeyBase64.orEmpty()
-                if (bridgeIp.isNotBlank()) {
-                    nodeManager.connectToPeer(bridgeIp, bridgePort, bridgePub)
-                }
+    suspend fun autoConnectActiveChats(force: Boolean = false) {
+        if (!identityStore.getSnapshot().isInitialized || !nodeManager.serverRunning.value) return
+        val savedPeers = chatDao.getAllPeersOnce()
+            .filter { peer ->
+                !peer.peerId.startsWith(DEV_FAKE_PEER_PREFIX) &&
+                    !transientTestPeerIds.contains(peer.peerId) &&
+                    peer.publicKeyBase64.isNotBlank()
             }
-            if (nodeManager.connectViaBridge(bridgeId, peerId, targetPub).isSuccess) {
-                return true
-            }
+        if (savedPeers.isEmpty()) return
+
+        val now = System.currentTimeMillis()
+        // First pass: direct saved active chats (including Bridge contacts); second pass: bridged saved chats
+        val orderedPeers = savedPeers.sortedBy { if (it.viaBridgePeerId.isBlank()) 0 else 1 }
+        for (peer in orderedPeers) {
+            if (nodeManager.connectedPeers.value.contains(peer.peerId)) continue
+            val hasDirectEndpoint = peer.viaBridgePeerId.isBlank() && peer.lastIp.isNotBlank() && peer.lastPort in 1..65535
+            val hasBridgeRoute = peer.viaBridgePeerId.isNotBlank() &&
+                nodeManager.connectedPeers.value.contains(peer.viaBridgePeerId)
+            if (!hasDirectEndpoint && !hasBridgeRoute) continue
+
+            val lastAttempt = lastAutoConnectAttemptMs[peer.peerId] ?: 0L
+            if (!force && now - lastAttempt < 10_000L) continue
+            lastAutoConnectAttemptMs[peer.peerId] = now
+            ensurePeerConnected(peer.peerId)
         }
+    }
 
-        if (peer != null && peer.lastIp.isNotBlank() && peer.viaBridgePeerId.isNotBlank()) {
-            return nodeManager.connectToPeer(
+    override suspend fun ensureBridgeTargetConnected(targetPeerId: String): Boolean {
+        if (targetPeerId.startsWith(DEV_FAKE_PEER_PREFIX) || transientTestPeerIds.contains(targetPeerId)) {
+            return false
+        }
+        if (nodeManager.connectedPeers.value.contains(targetPeerId)) return true
+        val peer = chatDao.getPeerById(targetPeerId) ?: return false
+        if (peer.publicKeyBase64.isBlank() || peer.lastIp.isBlank() || peer.lastPort !in 1..65535) {
+            return false
+        }
+        val mutex = connectMutexByPeer.computeIfAbsent(targetPeerId) { Mutex() }
+        return mutex.withLock {
+            if (nodeManager.connectedPeers.value.contains(targetPeerId)) return@withLock true
+            nodeManager.connectToPeer(
                 host = peer.lastIp,
                 port = peer.lastPort,
                 expectedPubKeyBase64 = peer.publicKeyBase64
             ).isSuccess
         }
-        return false
     }
 
     private fun buildReplyMeta(replyTo: MessageEntity?): Triple<String?, String?, String?> {
@@ -1093,7 +1168,7 @@ class ChatRepository(
         }
     }
 
-    override suspend fun onBridgeDirectoryUpdated(bridgePeerId: String, availablePeerIds: Set<String>) {
+    override suspend fun onBridgePeersUpdated(bridgePeerId: String, availablePeerIds: Set<String>) {
         if (availablePeerIds.isEmpty()) return
         scope.launch(Dispatchers.IO) {
             for (targetPeerId in availablePeerIds) {
@@ -1101,10 +1176,7 @@ class ChatRepository(
                 if (peer.viaBridgePeerId != bridgePeerId && !nodeManager.connectedPeers.value.contains(targetPeerId)) {
                     chatDao.upsertPeer(peer.copy(viaBridgePeerId = bridgePeerId))
                 }
-                val hasPending = chatDao.getPendingOutgoingMessagesChronological(targetPeerId).isNotEmpty()
-                if ((hasPending || currentlyOpenPeerId == targetPeerId) &&
-                    !nodeManager.connectedPeers.value.contains(targetPeerId)
-                ) {
+                if (!nodeManager.connectedPeers.value.contains(targetPeerId)) {
                     if (ensurePeerConnected(targetPeerId)) {
                         flushPendingOutgoingMessages(targetPeerId)
                     }
@@ -2015,6 +2087,8 @@ class ChatRepository(
     }
 
     fun shutdown() {
+        autoConnectJob?.cancel()
+        autoConnectJob = null
         discoveryManager.shutdown()
         nodeManager.disconnectAll()
     }

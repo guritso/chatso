@@ -336,4 +336,6 @@
     <string name="dev_bridge_failed_relays">Relais échoués / hors ligne</string>
     <string name="dev_bridge_routes_label">Routes relayées actives</string>
     <string name="dev_bridge_no_routes">Aucune trame relayée pour le moment</string>
+    <string name="wireguard_vpn_note_title">Note sur VPN et WireGuard</string>
+    <string name="wireguard_vpn_note_desc">OpenVPN et Tailscale fonctionnent automatiquement sur LAN et VPN. WireGuard avec AllowedIPs = 0.0.0.0/0 bloque le LAN sauf si vous excluez votre sous-réseau local dans AllowedIPs ou contournez chatso.</string>
 </resources>

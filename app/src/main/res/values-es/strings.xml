@@ -336,4 +336,6 @@
     <string name="dev_bridge_failed_relays">Retransmisiones fallidas</string>
     <string name="dev_bridge_routes_label">Rutas retransmitidas</string>
     <string name="dev_bridge_no_routes">Aún sin tramas retransmitidas</string>
+    <string name="wireguard_vpn_note_title">Nota sobre VPN y WireGuard</string>
+    <string name="wireguard_vpn_note_desc">OpenVPN y Tailscale funcionan automáticamente en LAN y VPN. WireGuard con AllowedIPs = 0.0.0.0/0 bloquea la red local salvo que excluyas tu subred LAN en AllowedIPs o omitas chatso del túnel.</string>
 </resources>

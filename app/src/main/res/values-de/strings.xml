@@ -336,4 +336,6 @@
     <string name="dev_bridge_failed_relays">Fehlgeschlagene Weiterleitungen</string>
     <string name="dev_bridge_routes_label">Aktive Brückenrouten</string>
     <string name="dev_bridge_no_routes">Noch keine Frames weitergeleitet</string>
+    <string name="wireguard_vpn_note_title">Hinweis zu VPN &amp; WireGuard</string>
+    <string name="wireguard_vpn_note_desc">OpenVPN und Tailscale funktionieren im LAN und VPN automatisch. WireGuard mit AllowedIPs = 0.0.0.0/0 blockiert LAN-Verkehr, sofern das lokale Subnetz nicht in AllowedIPs ausgeschlossen oder chatso umgangen wird.</string>
 </resources>

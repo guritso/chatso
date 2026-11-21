@@ -336,4 +336,6 @@
     <string name="dev_bridge_failed_relays">丢弃 / 离线转发</string>
     <string name="dev_bridge_routes_label">活跃转发路由</string>
     <string name="dev_bridge_no_routes">尚未转发任何数据帧</string>
+    <string name="wireguard_vpn_note_title">VPN 与 WireGuard 说明</string>
+    <string name="wireguard_vpn_note_desc">OpenVPN 和 Tailscale 可在局域网与 VPN 下自动工作。WireGuard 若设为 AllowedIPs = 0.0.0.0/0 会拦截局域网流量，需在 AllowedIPs 中排除本地网段或为 chatso 启用分流。</string>
 </resources>

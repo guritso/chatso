@@ -1351,8 +1351,8 @@ class ExampleRobolectricTest {
                 isInitialized = true, username = "Charlie",
                 publicKeyBase64 = matC.publicKeyBase64, wrappedPrivateKeyBase64 = matC.wrappedPrivateKeyBase64,
                 peerId = matC.peerId, fingerprint = matC.fingerprint,
-                // Keep Charlie hidden from LAN discovery so Alice can only find him through BridgeB.
-                listenPort = 43943, isDiscoverable = false, bridgeEnabled = false
+                // Out of Alice's default loopback scan range so Alice discovers Charlie strictly through BridgeB.
+                listenPort = 43943, isDiscoverable = true, bridgeEnabled = false
             )
 
             nodeA.updateIdentityAndEnsureServer(idA)
@@ -1612,7 +1612,11 @@ class ExampleRobolectricTest {
                 listenPort = 43961, isDiscoverable = true
             )
             nodeAlice.updateIdentityAndEnsureServer(aliceId)
-            delay(200)
+            repeat(30) {
+                if (nodeAlice.serverRunning.value) return@repeat
+                delay(50)
+            }
+            assertTrue(nodeAlice.serverRunning.value)
 
             discScanner.applyIdentityPolicy(
                 LocalIdentity(
@@ -1811,7 +1815,7 @@ class ExampleRobolectricTest {
             assertEquals(com.example.data.EndpointKind.LOCALHOST, com.example.network.NetworkUtils.classifyIpKind("127.0.0.1", fakeTargets))
             assertEquals(com.example.data.EndpointKind.LAN, com.example.network.NetworkUtils.classifyIpKind("192.168.10.42", fakeTargets))
             assertEquals(com.example.data.EndpointKind.VPN, com.example.network.NetworkUtils.classifyIpKind("10.8.0.9", fakeTargets))
-            assertNull(com.example.network.NetworkUtils.findAndroidNetworkForIp(context, "127.0.0.1"))
+            assertEquals(com.example.data.EndpointKind.VPN, com.example.network.NetworkUtils.classifyIpKind("100.80.10.2", emptyList()))
         } finally {
             nodePeer.disconnectAll()
             discPeer.shutdown()
@@ -1860,22 +1864,8 @@ class ExampleRobolectricTest {
         shadowCm.setNetworkCapabilities(vpnNet, vpnCaps)
 
         assertTrue(com.example.network.NetworkUtils.hasActiveVpn(context))
-        val nonVpnNets = com.example.network.NetworkUtils.getNonVpnNetworks(context)
-        assertTrue(nonVpnNets.contains(wifiNet))
-        assertFalse(nonVpnNets.contains(vpnNet))
-        val emulatorNet = com.example.network.NetworkUtils.findAndroidNetworkForIp(context, "10.0.2.2")
-        assertNotNull(emulatorNet)
-        assertTrue(emulatorNet != vpnNet)
-
-        val loopbackAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "localhost")
-        assertTrue(loopbackAttempts.firstOrNull()?.androidNetwork in nonVpnNets)
-        assertTrue(loopbackAttempts.none { it.androidNetwork == vpnNet })
-        assertTrue(loopbackAttempts.any { it.androidNetwork == null && it.bindLocalLoopback })
-        assertTrue(loopbackAttempts.any { it.androidNetwork == null && !it.bindLocalLoopback })
-
-        val emulatorAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "10.0.2.2")
-        assertTrue(emulatorAttempts.firstOrNull()?.androidNetwork in nonVpnNets)
-        assertTrue(emulatorAttempts.none { it.androidNetwork == vpnNet })
+        val scanTargets = com.example.network.NetworkUtils.getActiveNetworkScanTargets(context)
+        assertTrue(scanTargets.any { it.kind == com.example.data.EndpointKind.LOCALHOST })
 
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val discPeer = DiscoveryManager(context, scope)
@@ -1976,100 +1966,288 @@ class ExampleRobolectricTest {
     }
 
     @Test
-    fun `wireguard full-tunnel 0_0_0_0 allows dual LAN 192_168_18_0_24 bypass and VPN discovery`() {
+    fun `invisible peer stays hidden across bridge discovery and search never creates chats`() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
-        val shadowCm = org.robolectric.Shadows.shadowOf(cm)
-
-        val wifiNet = org.robolectric.shadows.ShadowNetwork.newInstance(301)
-        val vpnNet = org.robolectric.shadows.ShadowNetwork.newInstance(302)
-        val wifiCaps = org.robolectric.shadows.ShadowNetworkCapabilities.newInstance().also { caps ->
-            val sc = org.robolectric.Shadows.shadowOf(caps)
-            sc.addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI)
-            sc.addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        }
-        val vpnCaps = org.robolectric.shadows.ShadowNetworkCapabilities.newInstance().also { caps ->
-            val sc = org.robolectric.Shadows.shadowOf(caps)
-            sc.addTransportType(android.net.NetworkCapabilities.TRANSPORT_VPN)
-            sc.addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        }
-        @Suppress("DEPRECATION")
-        val wifiInfo = org.robolectric.shadows.ShadowNetworkInfo.newInstance(
-            android.net.NetworkInfo.DetailedState.CONNECTED,
-            android.net.ConnectivityManager.TYPE_WIFI,
-            0,
-            true,
-            android.net.NetworkInfo.State.CONNECTED
-        )
-        @Suppress("DEPRECATION")
-        val vpnInfo = org.robolectric.shadows.ShadowNetworkInfo.newInstance(
-            android.net.NetworkInfo.DetailedState.CONNECTED,
-            android.net.ConnectivityManager.TYPE_VPN,
-            0,
-            true,
-            android.net.NetworkInfo.State.CONNECTED
-        )
-
-        val linkAddrCtor = android.net.LinkAddress::class.java.getConstructor(
-            java.net.InetAddress::class.java,
-            Int::class.javaPrimitiveType
-        )
-        val wifiLinkAddr = linkAddrCtor.newInstance(java.net.InetAddress.getByName("192.168.18.37"), 24)
-        val vpnLinkAddr = linkAddrCtor.newInstance(java.net.InetAddress.getByName("10.66.66.2"), 32)
-
-        val addLinkAddrMethod = android.net.LinkProperties::class.java.getMethod(
-            "addLinkAddress",
-            android.net.LinkAddress::class.java
-        )
-        val wifiLp = android.net.LinkProperties().apply {
-            interfaceName = "wlan_wg_test0"
-            addLinkAddrMethod.invoke(this, wifiLinkAddr)
-        }
-        val vpnLp = android.net.LinkProperties().apply {
-            interfaceName = "tun_wg_test0"
-            addLinkAddrMethod.invoke(this, vpnLinkAddr)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        dao.getAllPeersOnce().forEach {
+            dao.deleteAllMessagesForPeer(it.peerId)
+            dao.deletePeer(it.peerId)
         }
 
-        shadowCm.addNetwork(wifiNet, wifiInfo)
-        shadowCm.addNetwork(vpnNet, vpnInfo)
-        shadowCm.setNetworkCapabilities(wifiNet, wifiCaps)
-        shadowCm.setNetworkCapabilities(vpnNet, vpnCaps)
-        shadowCm.setLinkProperties(wifiNet, wifiLp)
-        shadowCm.setLinkProperties(vpnNet, vpnLp)
+        val store = LocalIdentityStore(context)
+        store.createIdentity("ScannerA", null, isDiscoverable = false)
+        val repoA = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = store,
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { true }
+        )
 
-        // Verify ConnectivityManager LinkProperties fallback discovers BOTH LAN and VPN targets
-        val targets = com.example.network.NetworkUtils.getActiveNetworkScanTargets(context)
-        val lanTarget = targets.firstOrNull { it.ipAddress == "192.168.18.37" }
-        val vpnTarget = targets.firstOrNull { it.ipAddress == "10.66.66.2" }
-        assertNotNull("Expected Wi-Fi target 192.168.18.37 from ConnectivityManager", lanTarget)
-        assertNotNull("Expected WireGuard target 10.66.66.2 from ConnectivityManager", vpnTarget)
-        assertEquals(com.example.data.EndpointKind.LAN, lanTarget!!.kind)
-        assertEquals("192.168.18.255", lanTarget.broadcastAddress)
-        assertEquals(wifiNet, lanTarget.androidNetwork)
-        assertEquals(com.example.data.EndpointKind.VPN, vpnTarget!!.kind)
-        assertEquals(vpnNet, vpnTarget.androidNetwork)
+        val discB = DiscoveryManager(context, scope)
+        val discC = DiscoveryManager(context, scope)
+        val matB = CryptoEngine.createIdentityMaterial()
+        val matC = CryptoEngine.createIdentityMaterial()
+        val noopListener = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
+            ): File = File.createTempFile("unused_inv", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val nodeB = P2PNodeManager(scope, discB, noopListener)
+        val nodeC = P2PNodeManager(scope, discC, noopListener)
 
-        val endpoints = com.example.network.NetworkUtils.getActiveEndpoints(context)
-        assertTrue(endpoints.any { it.ipAddress == "192.168.18.37" && it.kind == com.example.data.EndpointKind.LAN })
-        assertTrue(endpoints.any { it.ipAddress == "10.66.66.2" && it.kind == com.example.data.EndpointKind.VPN })
+        try {
+            repeat(30) {
+                if (repoA.nodeManager.serverRunning.value) return@repeat
+                delay(50)
+            }
+            nodeB.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true, username = "VisibleBridge",
+                    publicKeyBase64 = matB.publicKeyBase64, wrappedPrivateKeyBase64 = matB.wrappedPrivateKeyBase64,
+                    peerId = matB.peerId, fingerprint = matB.fingerprint,
+                    listenPort = 43973, isDiscoverable = true, bridgeEnabled = true
+                )
+            )
+            nodeC.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true, username = "InvisibleCharlie",
+                    publicKeyBase64 = matC.publicKeyBase64, wrappedPrivateKeyBase64 = matC.wrappedPrivateKeyBase64,
+                    peerId = matC.peerId, fingerprint = matC.fingerprint,
+                    listenPort = 43974, isDiscoverable = false, bridgeEnabled = false
+                )
+            )
+            repeat(30) {
+                if (nodeB.serverRunning.value && nodeC.serverRunning.value) return@repeat
+                delay(50)
+            }
 
-        // LAN peer (192.168.18.50) must match wifiNet and bypass WireGuard 0.0.0.0/0
-        assertEquals(wifiNet, com.example.network.NetworkUtils.findAndroidNetworkForIp(context, "192.168.18.50"))
-        assertEquals("192.168.18.37", com.example.network.NetworkUtils.findLocalIpForNetwork(context, wifiNet))
-        val lanAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "192.168.18.50")
-        assertEquals(wifiNet, lanAttempts.firstOrNull()?.androidNetwork)
+            // Connect C -> BridgeB while C is invisible
+            assertTrue(nodeC.connectToPeer("127.0.0.1", nodeB.boundPort.value, matB.publicKeyBase64).isSuccess)
+            delay(350)
 
-        // Unmatched local 192.168.x.x or mDNS IPv6 link-local (under AllowedIPs = ::/0) must also try wifiNet before default VPN route
-        val ipv6LanAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "fe80::1a2b:3c4d%wlan0")
-        assertTrue(ipv6LanAttempts.firstOrNull()?.androidNetwork != null)
-        assertTrue(ipv6LanAttempts.firstOrNull()?.androidNetwork != vpnNet)
+            // BridgeB must NOT advertise InvisibleCharlie in bridgeTelemetry or beacons
+            assertFalse(nodeB.bridgeTelemetry.value.advertisedPeerNames.contains("InvisibleCharlie"))
 
-        // WireGuard VPN peer (10.66.66.5) must use default system/tun0 routing first (androidNetwork == null),
-        // never forcing wifiNet or failing on restricted TRANSPORT_VPN bindSocket
-        assertNull(com.example.network.NetworkUtils.findAndroidNetworkForIp(context, "10.66.66.5"))
-        assertTrue(com.example.network.NetworkUtils.isIpInActiveVpnSubnet(context, "10.66.66.5"))
-        val vpnAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "10.66.66.5", preferredNetwork = vpnNet)
-        assertNull("Expected default tun0 routing first for WireGuard VPN peer", vpnAttempts.firstOrNull()?.androidNetwork)
-        assertTrue(vpnAttempts.none { it.androidNetwork == wifiNet })
+            // Even if ScannerA probes BridgeB directly and C's port directly, invisible C must NOT appear,
+            // and scanning must NEVER auto-create any PeerEntity chats in Room
+            val bPort = nodeB.boundPort.value
+            val cPort = nodeC.boundPort.value
+            repoA.discoveryManager.scanNetworkNow(
+                knownTargets = listOf("127.0.0.1" to bPort, "127.0.0.1" to cPort)
+            )
+            while (repoA.discoveryManager.isScanning.value) {
+                delay(50)
+            }
+            assertFalse(
+                "Invisible peer C must not be discovered directly or via bridge",
+                repoA.discoveryManager.discoveredPeers.value.containsKey(matC.peerId)
+            )
+            assertTrue(
+                "Search/discovery must never auto-create chats in database",
+                dao.getAllPeersOnce().isEmpty()
+            )
+        } finally {
+            nodeC.disconnectAll()
+            nodeB.disconnectAll()
+            discC.shutdown()
+            discB.shutdown()
+            repoA.shutdown()
+            dao.deleteAllMessagesForPeer(matB.peerId)
+            dao.deleteAllMessagesForPeer(matC.peerId)
+            dao.deletePeer(matB.peerId)
+            dao.deletePeer(matC.peerId)
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `active saved chats auto-connect and bridge auto-connects saved target on demand`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        dao.getAllPeersOnce().forEach {
+            dao.deleteAllMessagesForPeer(it.peerId)
+            dao.deletePeer(it.peerId)
+        }
+
+        val storeB = LocalIdentityStore(context)
+        storeB.createIdentity("BridgeRepo", null, isDiscoverable = true)
+        storeB.setBridgeEnabled(true)
+        val repoB = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = storeB,
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { true }
+        )
+
+        val discA = DiscoveryManager(context, scope)
+        val discC = DiscoveryManager(context, scope)
+        val matA = CryptoEngine.createIdentityMaterial()
+        val matC = CryptoEngine.createIdentityMaterial()
+        val cReceivedFromA = CompletableFuture<String>()
+
+        val listenerA = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
+            ): File = File.createTempFile("unused_auto_a", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val listenerC = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {
+                if (peerId == matA.peerId) cReceivedFromA.complete(text)
+            }
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
+            ): File = File.createTempFile("unused_auto_c", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val nodeA = P2PNodeManager(scope, discA, listenerA)
+        val nodeC = P2PNodeManager(scope, discC, listenerC)
+
+        try {
+            repeat(30) {
+                if (repoB.nodeManager.serverRunning.value) return@repeat
+                delay(50)
+            }
+            nodeA.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true, username = "Alice",
+                    publicKeyBase64 = matA.publicKeyBase64, wrappedPrivateKeyBase64 = matA.wrappedPrivateKeyBase64,
+                    peerId = matA.peerId, fingerprint = matA.fingerprint,
+                    listenPort = 43985, isDiscoverable = false
+                )
+            )
+            nodeC.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true, username = "SavedCharlie",
+                    publicKeyBase64 = matC.publicKeyBase64, wrappedPrivateKeyBase64 = matC.wrappedPrivateKeyBase64,
+                    peerId = matC.peerId, fingerprint = matC.fingerprint,
+                    listenPort = 43986, isDiscoverable = false
+                )
+            )
+            repeat(30) {
+                if (nodeA.serverRunning.value && nodeC.serverRunning.value) return@repeat
+                delay(50)
+            }
+            val bIdentity = storeB.getSnapshot()
+
+            // Save Charlie as an existing active chat on BridgeRepo without manually connecting first
+            dao.upsertPeer(
+                com.example.data.PeerEntity(
+                    peerId = matC.peerId,
+                    username = "SavedCharlie",
+                    publicKeyBase64 = matC.publicKeyBase64,
+                    fingerprint = matC.fingerprint,
+                    lastIp = "127.0.0.1",
+                    lastPort = nodeC.boundPort.value
+                )
+            )
+            assertFalse(repoB.nodeManager.connectedPeers.value.contains(matC.peerId))
+
+            // Alice connects directly to BridgeRepo and initiates a bridged chat with Charlie;
+            // BridgeRepo auto-connects to SavedCharlie on demand and delivers the message E2EE
+            assertTrue(
+                nodeA.connectToPeer("127.0.0.1", repoB.nodeManager.boundPort.value, bIdentity.publicKeyBase64).isSuccess
+            )
+            val bridgedRes = nodeA.connectViaBridge(bIdentity.peerId, matC.peerId, matC.publicKeyBase64)
+            assertTrue(
+                "Bridge should auto-connect to saved target Charlie without manual connection: ${bridgedRes.exceptionOrNull()}",
+                bridgedRes.isSuccess
+            )
+            assertTrue(repoB.nodeManager.connectedPeers.value.contains(matC.peerId))
+            assertTrue(
+                nodeA.sendTextMessage(
+                    peerId = matC.peerId,
+                    messageId = "auto-bridge-msg-1",
+                    text = "Hello via auto-connected bridge!",
+                    selfDestructSec = 0,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            assertEquals("Hello via auto-connected bridge!", cReceivedFromA.get(4, TimeUnit.SECONDS))
+
+            // Also verify explicit autoConnectActiveChats() reconnects saved peers when disconnected
+            repoB.nodeManager.disconnectAll()
+            nodeA.disconnectAll()
+            repoB.nodeManager.updateIdentityAndEnsureServer(bIdentity)
+            repeat(30) {
+                if (repoB.nodeManager.serverRunning.value) return@repeat
+                delay(50)
+            }
+            repoB.autoConnectActiveChats(force = true)
+            assertTrue(
+                "autoConnectActiveChats should automatically reconnect saved peer Charlie",
+                repoB.nodeManager.connectedPeers.value.contains(matC.peerId)
+            )
+        } finally {
+            nodeA.disconnectAll()
+            nodeC.disconnectAll()
+            discA.shutdown()
+            discC.shutdown()
+            repoB.shutdown()
+            dao.deleteAllMessagesForPeer(matA.peerId)
+            dao.deleteAllMessagesForPeer(matC.peerId)
+            dao.deletePeer(matA.peerId)
+            dao.deletePeer(matC.peerId)
+            scope.cancel()
+        }
     }
 }

@@ -1,7 +1,6 @@
 package com.example.network
 
 import android.content.Context
-import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
@@ -34,15 +33,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Handles multi-network peer discovery (Localhost, LAN/Wi-Fi, VPN, and Bridged)
- * while strictly honoring Invisible Mode (`isDiscoverable == false`).
- * When `isDiscoverable` is false:
- * - Zero NSD/mDNS service announcements are registered.
- * - Zero UDP discovery beacons or replies are transmitted.
+ * Handles passive multi-network peer discovery (Localhost, LAN/Wi-Fi, OpenVPN/Tailscale VPN,
+ * and discoverable Bridged peers) while strictly honoring Invisible Mode (`isDiscoverable == false`).
+ *
+ * Discovery NEVER performs handshakes and NEVER creates chat entries in persistence.
  */
 class DiscoveryManager(
     private val context: Context,
@@ -52,7 +51,8 @@ class DiscoveryManager(
         val peerId: String,
         val username: String,
         val publicKeyBase64: String,
-        val listenPort: Int
+        val listenPort: Int,
+        val isDiscoverable: Boolean = true
     )
 
     companion object {
@@ -78,24 +78,12 @@ class DiscoveryManager(
     @Volatile
     private var bridgedPeersProvider: () -> List<BridgedPeerInfo> = { emptyList() }
 
-    @Volatile
-    private var activeBridgedPeersRefresher: (() -> Unit)? = null
-
     fun setBridgedPeersProvider(provider: () -> List<BridgedPeerInfo>) {
         bridgedPeersProvider = provider
     }
 
-    fun setActiveBridgedPeersRefresher(refresher: () -> Unit) {
-        activeBridgedPeersRefresher = refresher
-    }
-
-    fun findAndroidNetworkForIp(hostIp: String): Network? {
-        return NetworkUtils.findAndroidNetworkForIp(context, hostIp)
-    }
-
-    fun openConnectedTcpSocket(host: String, port: Int, connectTimeoutMs: Int = 1500): Socket {
-        return NetworkUtils.openConnectedTcpSocket(
-            context = context,
+    fun openTcpSocket(host: String, port: Int, connectTimeoutMs: Int = 1500): Socket {
+        return NetworkUtils.openTcpSocket(
             host = host,
             port = port,
             connectTimeoutMs = connectTimeoutMs
@@ -110,7 +98,6 @@ class DiscoveryManager(
     fun applyIdentityPolicy(identity: LocalIdentity) {
         latestIdentity = identity
         if (!identity.isInitialized || !identity.isDiscoverable) {
-            // Strict Invisible Mode: immediately tear down all network announcements
             stopAdvertising()
         } else {
             startAdvertising(identity)
@@ -166,50 +153,15 @@ class DiscoveryManager(
                 if (type == "QUERY") {
                     val senderPeerId = json.optString("peerId")
                     if (senderPeerId == current.peerId) continue
-                    val replyBytes = buildBeaconJson(current, "ANNOUNCE").toByteArray(Charsets.UTF_8)
-                    val senderIp = NetworkUtils.normalizeHost(packet.address.hostAddress ?: "")
-                    val replyNet = NetworkUtils.findAndroidNetworkForIp(context, senderIp)
-                        ?: if (NetworkUtils.hasActiveVpn(context) &&
-                            NetworkUtils.isAlwaysLocalLanIp(senderIp) &&
-                            !NetworkUtils.isIpInActiveVpnSubnet(context, senderIp)
-                        ) {
-                            NetworkUtils.getNonVpnNetworks(context, preferLanOnly = true).firstOrNull()
-                        } else {
-                            null
-                        }
-                    var sentViaBoundNet = false
-                    if (replyNet != null && !NetworkUtils.isVpnNetwork(context, replyNet)) {
-                        sentViaBoundNet = runCatching {
-                            val localBindIp = NetworkUtils.findLocalIpForNetwork(context, replyNet)
-                            val boundSock = if (!localBindIp.isNullOrBlank()) {
-                                runCatching { DatagramSocket(InetSocketAddress(localBindIp, 0)) }
-                                    .getOrElse { DatagramSocket() }
-                            } else {
-                                DatagramSocket()
-                            }
-                            boundSock.use { rs ->
-                                replyNet.bindSocket(rs)
-                                rs.send(
-                                    DatagramPacket(
-                                        replyBytes,
-                                        replyBytes.size,
-                                        packet.address,
-                                        packet.port
-                                    )
-                                )
-                            }
-                            true
-                        }.getOrDefault(false)
-                    }
-                    if (!sentViaBoundNet) {
-                        val replyPacket = DatagramPacket(
-                            replyBytes,
-                            replyBytes.size,
-                            packet.address,
-                            packet.port
-                        )
-                        socket.send(replyPacket)
-                    }
+                    val beaconStr = buildBeaconJson(current, "ANNOUNCE") ?: continue
+                    val replyBytes = beaconStr.toByteArray(Charsets.UTF_8)
+                    val replyPacket = DatagramPacket(
+                        replyBytes,
+                        replyBytes.size,
+                        packet.address,
+                        packet.port
+                    )
+                    socket.send(replyPacket)
                 } else if (type == "ANNOUNCE") {
                     val senderIp = NetworkUtils.normalizeHost(packet.address.hostAddress ?: "")
                     val badge = if (packet.address.isLoopbackAddress ||
@@ -246,10 +198,9 @@ class DiscoveryManager(
             try {
                 val scanTargets = NetworkUtils.getActiveNetworkScanTargets(context)
                 startNsdBrowse()
-                kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                withTimeoutOrNull(2500L) {
                     coroutineScope {
-                        // 1. Always probe Localhost (127.0.0.1 across multi-port range & 10.0.2.2 emulator host)
-                        // in parallel, using VPN-bypassing non-VPN sockets + loopback fallback when VPN is active.
+                        // 1. Localhost multi-port + emulator host
                         val loopbackPorts = (
                             listOf(identity.listenPort, LocalIdentity.DEFAULT_TCP_PORT) +
                                 (LocalIdentity.DEFAULT_TCP_PORT..(LocalIdentity.DEFAULT_TCP_PORT + 10))
@@ -264,9 +215,7 @@ class DiscoveryManager(
                                         port = port,
                                         badge = EndpointKind.LOCALHOST.badge,
                                         connectTimeoutMs = 200,
-                                        readTimeoutMs = 350,
-                                        androidNetwork = null,
-                                        allowFallback = true
+                                        readTimeoutMs = 350
                                     )
                                 }
                             }
@@ -277,30 +226,25 @@ class DiscoveryManager(
                                         port = port,
                                         badge = EndpointKind.LOCALHOST.badge,
                                         connectTimeoutMs = 180,
-                                        readTimeoutMs = 300,
-                                        androidNetwork = null,
-                                        allowFallback = true
+                                        readTimeoutMs = 300
                                     )
                                 }
                             }
                         }
 
-                        // 2. Immediately probe known/saved peer endpoints on their matched interface (with fallback)
+                        // 2. Known endpoints (fast direct discovery probe — never initiates a chat handshake)
                         if (knownTargets.isNotEmpty()) {
                             launch {
                                 knownTargets.distinct().forEach { (ip, port) ->
-                                    if (ip.isNotBlank()) {
+                                    if (ip.isNotBlank() && port > 0) {
                                         launch {
                                             val kindBadge = NetworkUtils.classifyIpKind(ip, scanTargets)?.badge ?: "Saved"
-                                            val matchedNetwork = NetworkUtils.findAndroidNetworkForIp(context, ip)
                                             probeSingleHost(
                                                 ip = ip,
                                                 port = port,
                                                 badge = kindBadge,
-                                                connectTimeoutMs = 700,
-                                                readTimeoutMs = 900,
-                                                androidNetwork = matchedNetwork,
-                                                allowFallback = true
+                                                connectTimeoutMs = 600,
+                                                readTimeoutMs = 800
                                             )
                                         }
                                     }
@@ -308,19 +252,17 @@ class DiscoveryManager(
                             }
                         }
 
-                        // 3. Per-interface UDP broadcast queries (each bound to its interface so VPN won't hijack LAN)
+                        // 3. UDP broadcast discovery query
                         launch { sendUdpQuery(identity, scanTargets) }
 
-                        // 4. Concurrent subnet TCP probe across ALL active LAN & VPN interfaces
+                        // 4. Parallel /24 TCP discovery probe across LAN & VPN (OpenVPN / Tailscale)
                         launch { probeActiveSubnets(identity, scanTargets) }
 
-                        // Keep mDNS browse active briefly within the 2.5s window
                         launch { delay(1800L) }
                     }
                 }
             } finally {
                 stopNsdBrowse()
-                activeBridgedPeersRefresher?.invoke()
                 _isScanning.value = false
             }
         }
@@ -334,24 +276,15 @@ class DiscoveryManager(
         }.toString().toByteArray(Charsets.UTF_8)
 
         val nonLoopbackTargets = scanTargets.filter {
-            !it.isCellular && (it.kind == EndpointKind.LAN || it.kind == EndpointKind.VPN)
+            it.kind == EndpointKind.LAN || it.kind == EndpointKind.VPN
         }
 
-        // Send a bound UDP query on each individual interface so VPN default routes do not swallow LAN broadcasts
         for (target in nonLoopbackTargets) {
             launch(Dispatchers.IO) {
                 try {
-                    val sock = if (target.kind == EndpointKind.LAN && target.androidNetwork != null) {
-                        runCatching {
-                            DatagramSocket(InetSocketAddress(target.ipAddress, 0))
-                        }.getOrElse { DatagramSocket() }.also { s ->
-                            runCatching { target.androidNetwork.bindSocket(s) }
-                        }
-                    } else {
-                        runCatching {
-                            DatagramSocket(InetSocketAddress(target.ipAddress, 0))
-                        }.getOrElse { DatagramSocket() }
-                    }
+                    val sock = runCatching {
+                        DatagramSocket(InetSocketAddress(target.ipAddress, 0))
+                    }.getOrElse { DatagramSocket() }
                     sock.use { s ->
                         s.broadcast = true
                         s.soTimeout = 450
@@ -379,7 +312,6 @@ class DiscoveryManager(
             }
         }
 
-        // Unbound fallback query + direct localhost UDP query (works even if local instance uses custom port)
         launch(Dispatchers.IO) {
             try {
                 DatagramSocket().use { sock ->
@@ -439,25 +371,18 @@ class DiscoveryManager(
         scanTargets: List<NetworkScanTarget>
     ) = withContext(Dispatchers.IO) {
         val networkTargets = scanTargets.filter {
-            !it.isCellular && (it.kind == EndpointKind.LAN || it.kind == EndpointKind.VPN)
+            it.kind == EndpointKind.LAN || it.kind == EndpointKind.VPN
         }
         if (networkTargets.isEmpty()) return@withContext
 
-        val vpnActive = NetworkUtils.hasActiveVpn(context)
-        val fallbackLanNetwork = if (vpnActive) {
-            NetworkUtils.getNonVpnNetworks(context, preferLanOnly = true).firstOrNull()
-        } else {
-            null
-        }
         val portsToProbe = listOf(identity.listenPort, LocalIdentity.DEFAULT_TCP_PORT).distinct()
-        val globalSemaphore = Semaphore(64)
-        val perNetworkWorkers = (64 / networkTargets.size).coerceIn(24, 64)
+        val globalSemaphore = Semaphore(32)
+        val perNetworkWorkers = (32 / networkTargets.size).coerceIn(12, 32)
 
         coroutineScope {
             for (ep in networkTargets) {
                 val prefix = NetworkUtils.subnetPrefix24(ep.ipAddress) ?: continue
                 val candidates = ConcurrentLinkedQueue<Pair<String, Int>>()
-                // Enqueue primary listenPort across all hosts first, then secondary default port if customized
                 for (port in portsToProbe) {
                     if (ep.prefixLength in 1..23) {
                         val octets = ep.ipAddress.split(".")
@@ -476,19 +401,7 @@ class DiscoveryManager(
                     }
                 }
 
-                val isVpnTarget = ep.kind == EndpointKind.VPN
-                val targetNet = if (isVpnTarget) {
-                    // Use default routing (tun0) for VPN peers to avoid TRANSPORT_VPN bindSocket restrictions
-                    null
-                } else {
-                    ep.androidNetwork ?: fallbackLanNetwork
-                }
-                val allowFallback = if (isVpnTarget) {
-                    true
-                } else {
-                    targetNet == null && !vpnActive
-                }
-                val connectTimeout = if (isVpnTarget) 260 else 190
+                val connectTimeout = if (ep.kind == EndpointKind.VPN) 260 else 190
 
                 launch {
                     coroutineScope {
@@ -502,9 +415,7 @@ class DiscoveryManager(
                                             port = target.second,
                                             badge = ep.kind.badge,
                                             connectTimeoutMs = connectTimeout,
-                                            readTimeoutMs = 350,
-                                            androidNetwork = targetNet,
-                                            allowFallback = allowFallback
+                                            readTimeoutMs = 350
                                         )
                                     }
                                 }
@@ -521,19 +432,14 @@ class DiscoveryManager(
         port: Int,
         badge: String,
         connectTimeoutMs: Int = 120,
-        readTimeoutMs: Int = 200,
-        androidNetwork: Network? = null,
-        allowFallback: Boolean = true
+        readTimeoutMs: Int = 200
     ): Boolean {
         val cleanIp = NetworkUtils.normalizeHost(ip)
         return try {
-            NetworkUtils.openConnectedTcpSocket(
-                context = context,
+            NetworkUtils.openTcpSocket(
                 host = cleanIp,
                 port = port,
-                connectTimeoutMs = connectTimeoutMs,
-                preferredNetwork = androidNetwork,
-                allowFallback = allowFallback
+                connectTimeoutMs = connectTimeoutMs
             ).use { socket ->
                 socket.soTimeout = readTimeoutMs
                 val out = DataOutputStream(socket.getOutputStream())
@@ -553,7 +459,6 @@ class DiscoveryManager(
                 true
             }
         } catch (_: Exception) {
-            // Unreachable or peer is in Invisible Mode (socket closed silently)
             false
         }
     }
@@ -569,6 +474,8 @@ class DiscoveryManager(
     }
 
     private fun handleIncomingBeacon(json: JSONObject, sourceIp: String, sourceLabel: String) {
+        // Strictly reject peers that identify as Invisible Mode
+        if (json.has("disc") && !json.optBoolean("disc", true)) return
         val pubB64 = json.optString("pub")
         if (pubB64.isBlank() || sourceIp.isBlank()) return
         val peerId = CryptoEngine.computePeerIdFromBase64(pubB64)
@@ -601,6 +508,7 @@ class DiscoveryManager(
             val entries = buildList {
                 for (i in 0 until bridgedArr.length()) {
                     val obj = bridgedArr.optJSONObject(i) ?: continue
+                    if (obj.has("disc") && !obj.optBoolean("disc", true)) continue
                     val bPub = obj.optString("pub")
                     if (bPub.isBlank()) continue
                     val bPeerId = CryptoEngine.computePeerIdFromBase64(bPub)
@@ -610,7 +518,8 @@ class DiscoveryManager(
                             peerId = bPeerId,
                             username = obj.optString("name", "Chatso User"),
                             publicKeyBase64 = bPub,
-                            listenPort = obj.optInt("port", LocalIdentity.DEFAULT_TCP_PORT)
+                            listenPort = obj.optInt("port", LocalIdentity.DEFAULT_TCP_PORT),
+                            isDiscoverable = obj.optBoolean("disc", true)
                         )
                     )
                 }
@@ -636,7 +545,8 @@ class DiscoveryManager(
         val cleanBridgeName = bridgeName.ifBlank { bridgeHost.ifBlank { bridgeBadge } }
         val sourceText = "$bridgeBadge ($cleanBridgeName)"
         val validEntries = entries.filter {
-            it.peerId != latestIdentity.peerId &&
+            it.isDiscoverable &&
+                it.peerId != latestIdentity.peerId &&
                 it.peerId != bridgePeerId &&
                 it.publicKeyBase64.isNotBlank()
         }
@@ -684,10 +594,12 @@ class DiscoveryManager(
     }
 
     fun buildDiscoveryReplyBytes(identity: LocalIdentity): ByteArray {
-        return buildBeaconJson(identity, "ANNOUNCE").toByteArray(Charsets.UTF_8)
+        val beacon = buildBeaconJson(identity, "ANNOUNCE") ?: return ByteArray(0)
+        return beacon.toByteArray(Charsets.UTF_8)
     }
 
-    private fun buildBeaconJson(identity: LocalIdentity, type: String): String {
+    private fun buildBeaconJson(identity: LocalIdentity, type: String): String? {
+        if (!identity.isInitialized || !identity.isDiscoverable) return null
         return JSONObject().apply {
             put("magic", UDP_MAGIC)
             put("type", type)
@@ -695,9 +607,14 @@ class DiscoveryManager(
             put("name", identity.username)
             put("port", identity.listenPort)
             put("pub", identity.publicKeyBase64)
+            put("disc", true)
             if (identity.bridgeEnabled && type == "ANNOUNCE") {
                 val bridged = bridgedPeersProvider()
-                    .filter { it.peerId != identity.peerId && it.publicKeyBase64.isNotBlank() }
+                    .filter {
+                        it.isDiscoverable &&
+                            it.peerId != identity.peerId &&
+                            it.publicKeyBase64.isNotBlank()
+                    }
                 if (bridged.isNotEmpty()) {
                     val arr = JSONArray()
                     bridged.forEach { p ->
@@ -707,6 +624,7 @@ class DiscoveryManager(
                                 put("name", p.username)
                                 put("pub", p.publicKeyBase64)
                                 put("port", p.listenPort)
+                                put("disc", true)
                             }
                         )
                     }

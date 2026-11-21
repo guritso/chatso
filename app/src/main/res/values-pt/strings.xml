@@ -348,4 +348,6 @@
     <string name="dev_bridge_failed_relays">Repasses falhos / offline</string>
     <string name="dev_bridge_routes_label">Rotas repassadas</string>
     <string name="dev_bridge_no_routes">Nenhum quadro repassado ainda</string>
+    <string name="wireguard_vpn_note_title">Nota sobre VPN e WireGuard</string>
+    <string name="wireguard_vpn_note_desc">OpenVPN e Tailscale funcionam normalmente na rede local e na VPN. No WireGuard com AllowedIPs = 0.0.0.0/0, a LAN só funciona se você ajustar o AllowedIPs para excluir sua sub-rede local ou liberar o chatso no bypass do túnel.</string>
 </resources>
