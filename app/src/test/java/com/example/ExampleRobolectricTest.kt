@@ -1351,7 +1351,8 @@ class ExampleRobolectricTest {
                 isInitialized = true, username = "Charlie",
                 publicKeyBase64 = matC.publicKeyBase64, wrappedPrivateKeyBase64 = matC.wrappedPrivateKeyBase64,
                 peerId = matC.peerId, fingerprint = matC.fingerprint,
-                listenPort = 43943, isDiscoverable = true, bridgeEnabled = false
+                // Keep Charlie hidden from LAN discovery so Alice can only find him through BridgeB.
+                listenPort = 43943, isDiscoverable = false, bridgeEnabled = false
             )
 
             nodeA.updateIdentityAndEnsureServer(idA)
