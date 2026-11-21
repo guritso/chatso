@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -356,6 +357,17 @@ private fun PeerConversationCard(
                                 contentDescription = stringResource(R.string.safety_title),
                                 tint = OnlineEmerald,
                                 modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        if (peer.viaBridgePeerId.isNotBlank()) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Filled.Hub,
+                                contentDescription = stringResource(R.string.contact_via_bridge),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .size(15.dp)
+                                    .testTag("peer_bridge_icon_${peer.peerId}")
                             )
                         }
                         if (peer.selfDestructSeconds > 0) {

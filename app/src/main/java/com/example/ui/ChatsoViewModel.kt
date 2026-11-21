@@ -10,6 +10,7 @@ import com.example.R
 import com.example.crypto.CryptoEngine
 import com.example.data.ActiveTransferInfo
 import com.example.data.AppLanguage
+import com.example.data.BridgeTelemetry
 import com.example.data.DiscoveredPeer
 import com.example.data.FavoriteStickerEntity
 import com.example.data.LocalIdentity
@@ -99,6 +100,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     val typingPeers: StateFlow<Set<String>> = repository.typingPeers
     val activeTransfers: StateFlow<List<ActiveTransferInfo>> = repository.activeTransfers
     val unreadDivider: StateFlow<UnreadDividerInfo?> = repository.unreadDivider
+    val bridgeTelemetry: StateFlow<BridgeTelemetry> = repository.bridgeTelemetry
     val devOnlineFakePeers: StateFlow<Set<String>> = repository.devOnlineFakePeers
     val devAutoReplyEnabled: StateFlow<Boolean> = repository.devAutoReplyEnabled
     val totalMessageCount: StateFlow<Int> = repository.totalMessageCountFlow
@@ -206,9 +208,23 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         _messageLimit.value = 150
         _activePeerId.value = peerId
         repository.currentlyOpenPeerId = peerId
+        repository.isOpenChatAtBottom = true
         viewModelScope.launch {
-            repository.captureUnreadDividerAndMarkRead(peerId, preserveExistingAnchor = false)
+            repository.prepareConversationOpen(peerId, preserveExistingAnchor = false)
             repository.ensurePeerConnected(peerId)
+        }
+    }
+
+    fun setActiveChatAtBottom(atBottom: Boolean) {
+        val peerId = _activePeerId.value ?: return
+        repository.setOpenChatAtBottom(peerId, atBottom)
+    }
+
+    fun markVisibleMessagesRead(messageIds: Set<String>) {
+        val peerId = _activePeerId.value ?: return
+        if (messageIds.isEmpty()) return
+        viewModelScope.launch {
+            repository.markVisibleMessagesRead(peerId, messageIds)
         }
     }
 
@@ -223,6 +239,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         val prev = _activePeerId.value
         _activePeerId.value = null
         repository.currentlyOpenPeerId = null
+        repository.isOpenChatAtBottom = true
         repository.clearUnreadDivider()
         lastTypingPeerId = null
         lastTypingState = false

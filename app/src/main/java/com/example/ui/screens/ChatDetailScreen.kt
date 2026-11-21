@@ -63,6 +63,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
@@ -129,6 +130,7 @@ import androidx.core.content.ContextCompat
 import com.example.R
 import com.example.crypto.CryptoEngine
 import com.example.data.ActiveTransferInfo
+import com.example.data.DeliveryStatus
 import com.example.data.FavoriteStickerEntity
 import com.example.data.LocalIdentity
 import com.example.data.MessageEntity
@@ -194,8 +196,11 @@ fun ChatDetailScreen(
     voicePlaybackState: VoicePlaybackState,
     unreadDividerAnchorId: String? = null,
     unreadDividerCount: Int = 0,
+    bridgePeerName: String? = null,
     showBackButton: Boolean,
     onBack: () -> Unit,
+    onAtBottomChanged: (Boolean) -> Unit = {},
+    onMarkVisibleMessagesRead: (Set<String>) -> Unit = {},
     onLoadMoreMessages: () -> Unit,
     onSendText: (String, MessageEntity?) -> Unit,
     onToggleReaction: (messageId: String, emoji: String) -> Unit,
@@ -325,6 +330,49 @@ fun ChatDetailScreen(
         if (activeTransfers.isEmpty()) transfersExpanded = false
     }
 
+    val isAtBottom by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 140
+        }
+    }
+    LaunchedEffect(peer.peerId, isAtBottom) {
+        onAtBottomChanged(isAtBottom)
+    }
+
+    val visibleMessageIds by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String }.toSet()
+        }
+    }
+    val seenUnreadIds by remember(messages) {
+        derivedStateOf {
+            messages.asSequence()
+                .filter {
+                    !it.isOutgoing &&
+                        it.status != DeliveryStatus.READ.name &&
+                        it.transferProgress >= 100 &&
+                        visibleMessageIds.contains(it.messageId)
+                }
+                .map { it.messageId }
+                .toSet()
+        }
+    }
+    LaunchedEffect(peer.peerId, seenUnreadIds) {
+        if (seenUnreadIds.isNotEmpty()) {
+            onMarkVisibleMessagesRead(seenUnreadIds)
+        }
+    }
+
+    val unseenIncomingCount by remember(messages) {
+        derivedStateOf {
+            messages.count {
+                !it.isOutgoing &&
+                    it.status != DeliveryStatus.READ.name &&
+                    it.transferProgress >= 100
+            }
+        }
+    }
+
     val newestMessage = messages.firstOrNull()
     val newestMessageId = newestMessage?.messageId
     var prevNewestMessageId by remember(peer.peerId) { mutableStateOf<String?>(null) }
@@ -334,7 +382,8 @@ fun ChatDetailScreen(
             val idx = messages.indexOfFirst { it.messageId == unreadDividerAnchorId }
             if (idx >= 0) {
                 lastAutoScrolledAnchor = unreadDividerAnchorId
-                if (idx > 2) {
+                // Only auto-jump to unread divider on initial open (while still at bottom), never yank scrolled-up readers
+                if (idx > 2 && isAtBottom) {
                     listState.scrollToItem(idx)
                 }
             }
@@ -346,7 +395,7 @@ fun ChatDetailScreen(
         val isOutgoingNewest = newestMessage?.isOutgoing == true
         val shouldScroll = newestMessageId != null && (
             scrollToBottomPending ||
-                (previous != null && previous != newestMessageId && (isOutgoingNewest || listState.firstVisibleItemIndex <= 2))
+                (previous != null && previous != newestMessageId && (isOutgoingNewest || isAtBottom))
             )
         if (shouldScroll) {
             scrollToBottomPending = false
@@ -613,13 +662,19 @@ fun ChatDetailScreen(
                                 )
                             }
                         }
+                        val baseStatusText = when {
+                            isPeerTyping -> stringResource(R.string.status_typing)
+                            presence == PeerPresence.ONLINE -> stringResource(R.string.status_online)
+                            presence == PeerPresence.BACKGROUND -> stringResource(R.string.status_background)
+                            else -> stringResource(R.string.status_offline_tap)
+                        }
+                        val statusText = if (peer.viaBridgePeerId.isNotBlank() && !isPeerTyping) {
+                            "$baseStatusText ${stringResource(R.string.chat_status_via_bridge_suffix)}"
+                        } else {
+                            baseStatusText
+                        }
                         Text(
-                            text = when {
-                                isPeerTyping -> stringResource(R.string.status_typing)
-                                presence == PeerPresence.ONLINE -> stringResource(R.string.status_online)
-                                presence == PeerPresence.BACKGROUND -> stringResource(R.string.status_background)
-                                else -> stringResource(R.string.status_offline_tap)
-                            },
+                            text = statusText,
                             style = MaterialTheme.typography.bodySmall,
                             color = when {
                                 isPeerTyping -> MaterialTheme.colorScheme.primary
@@ -726,6 +781,41 @@ fun ChatDetailScreen(
                     Text(
                         text = stringResource(R.string.key_changed_warning),
                         style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+
+        if (peer.viaBridgePeerId.isNotBlank()) {
+            val bridgeNoticeText = if (!bridgePeerName.isNullOrBlank()) {
+                stringResource(R.string.chat_bridge_notice_with_name, bridgePeerName)
+            } else {
+                stringResource(R.string.chat_bridge_notice_generic)
+            }
+            Surface(
+                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showContactProfileDialog = true }
+                    .testTag("chat_bridge_notice_banner")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Hub,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = bridgeNoticeText,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -888,9 +978,56 @@ fun ChatDetailScreen(
             }
             val bottomSpaceDp = maxOf(effectiveImeDp, activeTrayDp, immediateOpenFloorDp, heldFloorDp)
 
-            // Floating Scroll-to-Bottom Button when scrolled up in chat history
+            // Bottom-center New Messages Alert pill with unread count when scrolled up & unseen messages exist
             androidx.compose.animation.AnimatedVisibility(
-                visible = showScrollToBottom,
+                visible = showScrollToBottom && unseenIncomingCount > 0,
+                enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.9f, animationSpec = tween(150)),
+                exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.9f, animationSpec = tween(150)),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = composerOverlayHeightDp + 12.dp)
+            ) {
+                val alertText = if (unseenIncomingCount == 1) {
+                    stringResource(R.string.unread_messages_single)
+                } else {
+                    stringResource(R.string.unread_messages_plural, unseenIncomingCount)
+                }
+                Surface(
+                    onClick = { scope.launch { scrollToBottomSmooth() } },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    shadowElevation = 6.dp,
+                    tonalElevation = 4.dp,
+                    modifier = Modifier
+                        .defaultMinSize(minHeight = 42.dp)
+                        .minimumInteractiveComponentSize()
+                        .testTag("chat_new_messages_alert")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = stringResource(R.string.cd_scroll_to_bottom),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = alertText,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+
+            // Floating Scroll-to-Bottom Button when scrolled up in chat history with no unseen alert
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showScrollToBottom && unseenIncomingCount == 0,
                 enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.85f, animationSpec = tween(150)),
                 exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.85f, animationSpec = tween(150)),
                 modifier = Modifier
@@ -944,7 +1081,8 @@ fun ChatDetailScreen(
                                 tonalElevation = 2.dp,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .defaultMinSize(minHeight = 46.dp)
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .testTag("chat_voice_recording_surface")
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -1017,7 +1155,10 @@ fun ChatDetailScreen(
                                 color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
                                 shadowElevation = 4.dp,
                                 tonalElevation = 2.dp,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .testTag("chat_composer_input_surface")
                             ) {
                                 Column(modifier = Modifier.fillMaxWidth()) {
                                     if (replyingToMessage != null) {
@@ -1083,8 +1224,8 @@ fun ChatDetailScreen(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .defaultMinSize(minHeight = 44.dp)
-                                            .padding(start = 2.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+                                            .defaultMinSize(minHeight = 48.dp)
+                                            .padding(horizontal = 4.dp, vertical = 3.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         val isStickersOpen = activeTrayMode == ComposerTrayMode.STICKERS
@@ -1097,7 +1238,7 @@ fun ChatDetailScreen(
                                                 }
                                             },
                                             modifier = Modifier
-                                                .size(40.dp)
+                                                .size(42.dp)
                                                 .testTag("chat_stickers_button")
                                         ) {
                                             if (isStickersOpen) {
@@ -1133,7 +1274,7 @@ fun ChatDetailScreen(
                                                     }
                                                 }
                                                 .contentReceiver(receiveContentListener)
-                                                .padding(vertical = 8.dp, horizontal = 4.dp)
+                                                .padding(vertical = 10.dp, horizontal = 4.dp)
                                                 .testTag("chat_message_input"),
                                             decorator = { innerTextField ->
                                                 Box(contentAlignment = Alignment.CenterStart) {
@@ -1166,7 +1307,7 @@ fun ChatDetailScreen(
                                                 }
                                             },
                                             modifier = Modifier
-                                                .size(40.dp)
+                                                .size(42.dp)
                                                 .testTag("chat_attach_button")
                                         ) {
                                             Icon(
@@ -1488,6 +1629,7 @@ fun ChatDetailScreen(
             peer = peer,
             presence = presence,
             selfDestructLabel = SelfDestructOption.fromSeconds(peer.selfDestructSeconds).localizedLabel(),
+            bridgePeerName = bridgePeerName,
             onDismiss = { showContactProfileDialog = false },
             onViewAvatar = { path ->
                 showContactProfileDialog = false

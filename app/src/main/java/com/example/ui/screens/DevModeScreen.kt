@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.MarkChatUnread
@@ -66,10 +67,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.BridgeTelemetry
 import com.example.data.ChatRepository
 import com.example.data.LocalIdentity
 import com.example.data.NetworkEndpointInfo
 import com.example.data.PeerEntity
+import com.example.network.NetworkUtils
 import com.example.ui.theme.DangerCoral
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OnlineEmerald
@@ -87,6 +90,7 @@ fun DevModeScreen(
     devOnlineFakePeers: Set<String>,
     devAutoReplyEnabled: Boolean,
     scheduledDelayRemainingSec: Int?,
+    bridgeTelemetry: BridgeTelemetry = BridgeTelemetry(),
     onBack: () -> Unit,
     onCreateFakePeer: (String, onCreated: (PeerEntity) -> Unit) -> Unit,
     onSendFakeIncomingText: (peerId: String, text: String, delaySeconds: Int) -> Unit,
@@ -630,6 +634,97 @@ fun DevModeScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.dev_clear_fakes_btn))
+                    }
+                }
+            }
+        }
+
+        // 5. Bridge Relay Diagnostics Card (shown when bridge mode is enabled or bridge activity exists)
+        if (identity.bridgeEnabled || bridgeTelemetry.relayedFramesTotal > 0 || bridgeTelemetry.activeRoutes.isNotEmpty()) {
+            Card(
+                shape = MaterialTheme.shapes.large,
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier.testTag("dev_bridge_section_card")
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.Hub,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.dev_bridge_section),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    val isBridgeActive = identity.bridgeEnabled || bridgeTelemetry.isEnabled
+                    DiagnosticRow(
+                        label = stringResource(R.string.dev_bridge_status_label),
+                        value = stringResource(
+                            if (isBridgeActive) R.string.dev_bridge_status_active else R.string.dev_bridge_status_off
+                        ),
+                        valueColor = if (isBridgeActive) OnlineEmerald else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    DiagnosticRow(
+                        label = stringResource(R.string.dev_bridge_direct_peers),
+                        value = if (bridgeTelemetry.directPeerNames.isNotEmpty()) {
+                            "${bridgeTelemetry.directSessionCount} (${bridgeTelemetry.directPeerNames.joinToString(", ")})"
+                        } else {
+                            bridgeTelemetry.directSessionCount.toString()
+                        }
+                    )
+                    DiagnosticRow(
+                        label = stringResource(R.string.dev_bridge_advertised_peers),
+                        value = if (bridgeTelemetry.advertisedPeerNames.isNotEmpty()) {
+                            "${bridgeTelemetry.advertisedPeerCount} (${bridgeTelemetry.advertisedPeerNames.joinToString(", ")})"
+                        } else {
+                            bridgeTelemetry.advertisedPeerCount.toString()
+                        }
+                    )
+                    DiagnosticRow(
+                        label = stringResource(R.string.dev_bridge_relayed_frames),
+                        value = bridgeTelemetry.relayedFramesTotal.toString()
+                    )
+                    DiagnosticRow(
+                        label = stringResource(R.string.dev_bridge_relayed_bytes),
+                        value = NetworkUtils.formatBytes(bridgeTelemetry.relayedBytesTotal)
+                    )
+                    DiagnosticRow(
+                        label = stringResource(R.string.dev_bridge_failed_relays),
+                        value = bridgeTelemetry.failedRelaysTotal.toString(),
+                        valueColor = if (bridgeTelemetry.failedRelaysTotal > 0L) WarningAmber else MaterialTheme.colorScheme.onSurface
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = stringResource(R.string.dev_bridge_routes_label),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    if (bridgeTelemetry.activeRoutes.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.dev_bridge_no_routes),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        bridgeTelemetry.activeRoutes.forEach { route ->
+                            DiagnosticRow(
+                                label = "${route.fromName} → ${route.toName}",
+                                value = "${route.relayedFrames} · ${NetworkUtils.formatBytes(route.relayedBytes)}"
+                            )
+                        }
                     }
                 }
             }

@@ -311,4 +311,18 @@
     <string name="contact_unverified_short">Not verified</string>
     <string name="contact_self_destruct_label">Self-destruct</string>
     <string name="contact_via_bridge">Via bridge</string>
+    <string name="chat_bridge_notice_generic">Chatting with a bridged user · E2EE</string>
+    <string name="chat_bridge_notice_with_name">Chatting via bridge (%1$s) · E2EE</string>
+    <string name="chat_status_via_bridge_suffix">· Via bridge</string>
+    <string name="dev_bridge_section">Bridge Diagnostics</string>
+    <string name="dev_bridge_status_label">Bridge state</string>
+    <string name="dev_bridge_status_active">ACTIVE</string>
+    <string name="dev_bridge_status_off">DISABLED</string>
+    <string name="dev_bridge_direct_peers">Direct connected peers</string>
+    <string name="dev_bridge_advertised_peers">Advertised bridged peers</string>
+    <string name="dev_bridge_relayed_frames">Relayed E2EE frames</string>
+    <string name="dev_bridge_relayed_bytes">Relayed traffic</string>
+    <string name="dev_bridge_failed_relays">Dropped / offline relays</string>
+    <string name="dev_bridge_routes_label">Active relayed routes</string>
+    <string name="dev_bridge_no_routes">No frames relayed yet</string>
 </resources>

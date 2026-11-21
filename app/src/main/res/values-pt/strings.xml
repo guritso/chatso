@@ -323,4 +323,18 @@
     <string name="contact_unverified_short">Não verificado</string>
     <string name="contact_self_destruct_label">Autodestruição</string>
     <string name="contact_via_bridge">Via ponte</string>
+    <string name="chat_bridge_notice_generic">Você está conversando com um usuário via ponte · E2EE</string>
+    <string name="chat_bridge_notice_with_name">Conversando via ponte (%1$s) · E2EE</string>
+    <string name="chat_status_via_bridge_suffix">· Via ponte</string>
+    <string name="dev_bridge_section">Diagnóstico da Ponte</string>
+    <string name="dev_bridge_status_label">Estado da ponte</string>
+    <string name="dev_bridge_status_active">ATIVA</string>
+    <string name="dev_bridge_status_off">DESATIVADA</string>
+    <string name="dev_bridge_direct_peers">Conexões diretas</string>
+    <string name="dev_bridge_advertised_peers">Contatos anunciados</string>
+    <string name="dev_bridge_relayed_frames">Quadros E2EE repassados</string>
+    <string name="dev_bridge_relayed_bytes">Tráfego repassado</string>
+    <string name="dev_bridge_failed_relays">Repasses falhos / offline</string>
+    <string name="dev_bridge_routes_label">Rotas repassadas</string>
+    <string name="dev_bridge_no_routes">Nenhum quadro repassado ainda</string>
 </resources>

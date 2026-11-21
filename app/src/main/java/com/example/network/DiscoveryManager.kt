@@ -186,14 +186,14 @@ class DiscoveryManager(
                         ).distinct()
                         launch {
                             localhostTargets.forEach { (ip, port) ->
-                                launch { probeSingleHost(ip, port, EndpointKind.LOCALHOST.badge) }
+                                launch { probeSingleHost(ip, port, EndpointKind.LOCALHOST.badge, connectTimeoutMs = 400, readTimeoutMs = 500) }
                             }
                         }
                         if (knownTargets.isNotEmpty()) {
                             launch {
                                 knownTargets.distinct().forEach { (ip, port) ->
                                     if (ip.isNotBlank()) {
-                                        launch { probeSingleHost(ip, port, "Saved") }
+                                        launch { probeSingleHost(ip, port, "Saved", connectTimeoutMs = 400, readTimeoutMs = 500) }
                                     }
                                 }
                             }
@@ -288,11 +288,17 @@ class DiscoveryManager(
         }
     }
 
-    private fun probeSingleHost(ip: String, port: Int, badge: String) {
+    private fun probeSingleHost(
+        ip: String,
+        port: Int,
+        badge: String,
+        connectTimeoutMs: Int = 120,
+        readTimeoutMs: Int = 200
+    ) {
         try {
             Socket().use { socket ->
-                socket.connect(InetSocketAddress(ip, port), 120)
-                socket.soTimeout = 200
+                socket.connect(InetSocketAddress(ip, port), connectTimeoutMs)
+                socket.soTimeout = readTimeoutMs
                 val out = DataOutputStream(socket.getOutputStream())
                 val inp = DataInputStream(socket.getInputStream())
                 out.writeByte(KIND_DISCOVERY_PROBE.toInt())

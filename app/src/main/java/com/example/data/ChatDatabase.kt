@@ -84,6 +84,9 @@ interface ChatDao {
     @Query("UPDATE peers SET unreadCount = 0 WHERE peerId = :peerId")
     suspend fun clearUnread(peerId: String)
 
+    @Query("UPDATE peers SET unreadCount = :count WHERE peerId = :peerId")
+    suspend fun setUnreadCount(peerId: String, count: Int)
+
     @Query("UPDATE peers SET isVerified = :verified, keyChangedWarning = 0 WHERE peerId = :peerId")
     suspend fun setPeerVerified(peerId: String, verified: Boolean)
 

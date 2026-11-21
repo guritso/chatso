@@ -378,6 +378,7 @@ private fun ChatsoAuthenticatedShell(
     val devOnlineFakePeers by viewModel.devOnlineFakePeers.collectAsStateWithLifecycle()
     val devAutoReplyEnabled by viewModel.devAutoReplyEnabled.collectAsStateWithLifecycle()
     val scheduledFakeDelay by viewModel.scheduledFakeDelayRemainingSec.collectAsStateWithLifecycle()
+    val bridgeTelemetry by viewModel.bridgeTelemetry.collectAsStateWithLifecycle()
 
     var showDevTools by rememberSaveable { mutableStateOf(false) }
 
@@ -544,8 +545,11 @@ private fun ChatsoAuthenticatedShell(
                                     voicePlaybackState = voicePlaybackState,
                                     unreadDividerAnchorId = unreadDivider?.takeIf { it.peerId == peer.peerId }?.anchorMessageId,
                                     unreadDividerCount = unreadDivider?.takeIf { it.peerId == peer.peerId }?.unreadCount ?: 0,
+                                    bridgePeerName = peers.firstOrNull { it.peerId == peer.viaBridgePeerId }?.username,
                                     showBackButton = false,
                                     onBack = viewModel::closeConversation,
+                                    onAtBottomChanged = viewModel::setActiveChatAtBottom,
+                                    onMarkVisibleMessagesRead = viewModel::markVisibleMessagesRead,
                                     onLoadMoreMessages = viewModel::loadMoreMessages,
                                     onSendText = viewModel::sendTextMessage,
                                     onToggleReaction = viewModel::toggleReaction,
@@ -625,6 +629,7 @@ private fun ChatsoAuthenticatedShell(
                                     devOnlineFakePeers = devOnlineFakePeers,
                                     devAutoReplyEnabled = devAutoReplyEnabled,
                                     scheduledDelayRemainingSec = scheduledFakeDelay,
+                                    bridgeTelemetry = bridgeTelemetry,
                                     onBack = { showDevTools = false },
                                     onCreateFakePeer = viewModel::devCreateFakePeer,
                                     onSendFakeIncomingText = viewModel::devSendFakeIncomingMessage,
@@ -700,8 +705,11 @@ private fun ChatsoAuthenticatedShell(
                             voicePlaybackState = voicePlaybackState,
                             unreadDividerAnchorId = unreadDivider?.takeIf { it.peerId == currentOpenPeer.peerId }?.anchorMessageId,
                             unreadDividerCount = unreadDivider?.takeIf { it.peerId == currentOpenPeer.peerId }?.unreadCount ?: 0,
+                            bridgePeerName = peers.firstOrNull { it.peerId == currentOpenPeer.viaBridgePeerId }?.username,
                             showBackButton = true,
                             onBack = viewModel::closeConversation,
+                            onAtBottomChanged = viewModel::setActiveChatAtBottom,
+                            onMarkVisibleMessagesRead = viewModel::markVisibleMessagesRead,
                             onLoadMoreMessages = viewModel::loadMoreMessages,
                             onSendText = viewModel::sendTextMessage,
                             onToggleReaction = viewModel::toggleReaction,
@@ -872,6 +880,7 @@ private fun ChatsoAuthenticatedShell(
                                         devOnlineFakePeers = devOnlineFakePeers,
                                         devAutoReplyEnabled = devAutoReplyEnabled,
                                         scheduledDelayRemainingSec = scheduledFakeDelay,
+                                        bridgeTelemetry = bridgeTelemetry,
                                         onBack = { showDevTools = false },
                                         onCreateFakePeer = viewModel::devCreateFakePeer,
                                         onSendFakeIncomingText = viewModel::devSendFakeIncomingMessage,

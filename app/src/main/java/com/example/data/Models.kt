@@ -208,3 +208,26 @@ data class DiscoveredPeer(
     val bridgeHost: String? = null,
     val bridgePort: Int = LocalIdentity.DEFAULT_TCP_PORT
 )
+
+data class BridgeRouteInfo(
+    val fromPeerId: String,
+    val fromName: String,
+    val toPeerId: String,
+    val toName: String,
+    val relayedFrames: Long,
+    val relayedBytes: Long,
+    val lastRelayedAt: Long
+)
+
+data class BridgeTelemetry(
+    val isEnabled: Boolean = false,
+    val directSessionCount: Int = 0,
+    val directPeerNames: List<String> = emptyList(),
+    val advertisedPeerCount: Int = 0,
+    val advertisedPeerNames: List<String> = emptyList(),
+    val relayedFramesTotal: Long = 0L,
+    val relayedBytesTotal: Long = 0L,
+    val failedRelaysTotal: Long = 0L,
+    val activeRoutes: List<BridgeRouteInfo> = emptyList()
+)
+

@@ -61,6 +61,7 @@ fun ContactProfileDialog(
     peer: PeerEntity,
     presence: PeerPresence,
     selfDestructLabel: String,
+    bridgePeerName: String? = null,
     onDismiss: () -> Unit,
     onViewAvatar: (String) -> Unit,
     onOpenSafetyNumber: () -> Unit,
@@ -176,6 +177,11 @@ fun ContactProfileDialog(
                         )
                     }
                     if (peer.viaBridgePeerId.isNotBlank()) {
+                        val bridgeLabel = if (!bridgePeerName.isNullOrBlank()) {
+                            "${stringResource(R.string.contact_via_bridge)} ($bridgePeerName)"
+                        } else {
+                            stringResource(R.string.contact_via_bridge)
+                        }
                         Surface(
                             shape = RoundedCornerShape(999.dp),
                             color = MaterialTheme.colorScheme.primaryContainer
@@ -192,7 +198,7 @@ fun ContactProfileDialog(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = stringResource(R.string.contact_via_bridge),
+                                    text = bridgeLabel,
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
@@ -230,7 +236,11 @@ fun ContactProfileDialog(
                 val endpointText = if (peer.lastIp.isNotBlank()) {
                     "${peer.lastIp}:${peer.lastPort}"
                 } else if (peer.viaBridgePeerId.isNotBlank()) {
-                    stringResource(R.string.contact_via_bridge)
+                    if (!bridgePeerName.isNullOrBlank()) {
+                        "${stringResource(R.string.contact_via_bridge)} ($bridgePeerName)"
+                    } else {
+                        stringResource(R.string.contact_via_bridge)
+                    }
                 } else {
                     "—"
                 }

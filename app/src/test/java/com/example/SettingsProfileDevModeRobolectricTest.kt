@@ -31,6 +31,8 @@ import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.SettingsScreen
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.toArgb
+import com.example.data.BridgeRouteInfo
+import com.example.data.BridgeTelemetry
 import com.example.data.ThemePalette
 import com.example.network.ChatsoNotificationHelper
 import com.example.ui.theme.ChatsoTheme
@@ -616,6 +618,339 @@ class SettingsProfileDevModeRobolectricTest {
         } finally {
             avatarFile.delete()
         }
+    }
+
+    @Test
+    fun scrolledUpChatShowsNewMessagesAlertAndOnlyMarksVisibleMessagesRead() {
+        val now = System.currentTimeMillis()
+        // 30 old READ messages + 2 incoming DELIVERED (unread) messages at index 0..1 (newest at bottom)
+        val messagesDesc = listOf(
+            MessageEntity(
+                messageId = "unread_2",
+                peerId = "peer_unseen",
+                isOutgoing = false,
+                type = MessageType.TEXT.name,
+                textContent = "Second unseen incoming",
+                status = DeliveryStatus.DELIVERED.name,
+                createdAt = now + 2000L
+            ),
+            MessageEntity(
+                messageId = "unread_1",
+                peerId = "peer_unseen",
+                isOutgoing = false,
+                type = MessageType.TEXT.name,
+                textContent = "First unseen incoming",
+                status = DeliveryStatus.DELIVERED.name,
+                createdAt = now + 1000L
+            )
+        ) + (0 until 30).map { idx ->
+            MessageEntity(
+                messageId = "old_$idx",
+                peerId = "peer_unseen",
+                isOutgoing = idx % 2 == 0,
+                type = MessageType.TEXT.name,
+                textContent = "Older message #$idx",
+                status = DeliveryStatus.READ.name,
+                createdAt = now - ((idx + 1) * 1000L)
+            )
+        }
+        val messagesState = mutableStateOf(messagesDesc)
+        val markedReadIds = mutableSetOf<String>()
+        val atBottomHistory = mutableListOf<Boolean>()
+        val nowClock = MutableStateFlow(now)
+
+        composeTestRule.setContent {
+            ChatsoTheme {
+                ChatDetailScreen(
+                    identity = LocalIdentity(isInitialized = true, username = "Me", peerId = "me"),
+                    peer = PeerEntity(
+                        peerId = "peer_unseen",
+                        username = "Peer",
+                        publicKeyBase64 = "KEY",
+                        fingerprint = "FP"
+                    ),
+                    messages = messagesState.value,
+                    currentMessageLimit = 150,
+                    presence = PeerPresence.ONLINE,
+                    isPeerTyping = false,
+                    activeTransfers = emptyList(),
+                    favoriteStickers = emptyList(),
+                    nowClockFlow = nowClock,
+                    voiceRecordingState = VoiceRecordingState(),
+                    voicePlaybackState = VoicePlaybackState(),
+                    unreadDividerAnchorId = "unread_1",
+                    unreadDividerCount = 2,
+                    showBackButton = true,
+                    onBack = {},
+                    onAtBottomChanged = { atBottomHistory.add(it) },
+                    onMarkVisibleMessagesRead = { ids ->
+                        markedReadIds.addAll(ids)
+                        messagesState.value = messagesState.value.map { msg ->
+                            if (ids.contains(msg.messageId)) msg.copy(status = DeliveryStatus.READ.name) else msg
+                        }
+                    },
+                    onLoadMoreMessages = {},
+                    onSendText = { _, _ -> },
+                    onToggleReaction = { _, _ -> },
+                    onTypingChanged = {},
+                    onSendPhotoUri = { _, _ -> },
+                    onSendVideoUri = { _, _ -> },
+                    onSendDocumentUri = { _, _ -> },
+                    onSendStickerStream = { _, _, _, _ -> },
+                    onCheckStickerFavorited = { false },
+                    onToggleFavoriteSticker = {},
+                    onRemoveFavoriteSticker = {},
+                    onSendFavoriteSticker = { _, _ -> },
+                    onStartVoiceRecording = {},
+                    onCancelVoiceRecording = {},
+                    onSendVoiceRecording = {},
+                    onToggleVoicePlayback = { _, _ -> },
+                    onOpenAttachment = { _, _ -> },
+                    onCancelTransfer = {},
+                    onRetryDownload = {},
+                    onSetSelfDestruct = {},
+                    onVerifyPeerKey = {},
+                    onReconnect = {},
+                    onDeleteMessage = {},
+                    onDeleteConversation = {},
+                    onNotify = {}
+                )
+            }
+        }
+
+        // Scroll to the top of history first, then add an unseen incoming message while scrolled up
+        composeTestRule.onNodeWithTag("chat_messages_list").performScrollToIndex(28)
+        composeTestRule.waitForIdle()
+        assertTrue(atBottomHistory.lastOrNull() == false)
+        markedReadIds.clear()
+
+        val newestUnseen = listOf(
+            MessageEntity(
+                messageId = "unread_live_2",
+                peerId = "peer_unseen",
+                isOutgoing = false,
+                type = MessageType.TEXT.name,
+                textContent = "Live unseen 2",
+                status = DeliveryStatus.DELIVERED.name,
+                createdAt = now + 4000L
+            ),
+            MessageEntity(
+                messageId = "unread_live_1",
+                peerId = "peer_unseen",
+                isOutgoing = false,
+                type = MessageType.TEXT.name,
+                textContent = "Live unseen 1",
+                status = DeliveryStatus.DELIVERED.name,
+                createdAt = now + 3000L
+            )
+        )
+        messagesState.value = newestUnseen + messagesState.value
+        composeTestRule.waitForIdle()
+
+        // Must NOT mark unread_live_1 / unread_live_2 read while scrolled up, and MUST show bottom-center alert
+        assertTrue(!markedReadIds.contains("unread_live_1"))
+        assertTrue(!markedReadIds.contains("unread_live_2"))
+        composeTestRule.onNodeWithTag("chat_new_messages_alert").assertIsDisplayed()
+        composeTestRule.onNodeWithText("2 new messages").assertIsDisplayed()
+
+        // Tapping the alert scrolls to bottom and marks both visible messages READ
+        composeTestRule.onNodeWithTag("chat_new_messages_alert").performClick()
+        composeTestRule.waitForIdle()
+
+        assertTrue(markedReadIds.contains("unread_live_1"))
+        assertTrue(markedReadIds.contains("unread_live_2"))
+        assertTrue(atBottomHistory.lastOrNull() == true)
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("chat_new_messages_alert")).fetchSemanticsNodes().isEmpty()
+        )
+    }
+
+    @Test
+    fun composerInputHeightMatchesVoiceAndSendButtons() {
+        val nowClock = MutableStateFlow(System.currentTimeMillis())
+        composeTestRule.setContent {
+            ChatsoTheme {
+                ChatDetailScreen(
+                    identity = LocalIdentity(isInitialized = true, username = "Me", peerId = "me"),
+                    peer = PeerEntity(
+                        peerId = "peer_height",
+                        username = "Peer",
+                        publicKeyBase64 = "KEY",
+                        fingerprint = "FP"
+                    ),
+                    messages = emptyList(),
+                    currentMessageLimit = 150,
+                    presence = PeerPresence.ONLINE,
+                    isPeerTyping = false,
+                    activeTransfers = emptyList(),
+                    favoriteStickers = emptyList(),
+                    nowClockFlow = nowClock,
+                    voiceRecordingState = VoiceRecordingState(),
+                    voicePlaybackState = VoicePlaybackState(),
+                    showBackButton = true,
+                    onBack = {},
+                    onLoadMoreMessages = {},
+                    onSendText = { _, _ -> },
+                    onToggleReaction = { _, _ -> },
+                    onTypingChanged = {},
+                    onSendPhotoUri = { _, _ -> },
+                    onSendVideoUri = { _, _ -> },
+                    onSendDocumentUri = { _, _ -> },
+                    onSendStickerStream = { _, _, _, _ -> },
+                    onCheckStickerFavorited = { false },
+                    onToggleFavoriteSticker = {},
+                    onRemoveFavoriteSticker = {},
+                    onSendFavoriteSticker = { _, _ -> },
+                    onStartVoiceRecording = {},
+                    onCancelVoiceRecording = {},
+                    onSendVoiceRecording = {},
+                    onToggleVoicePlayback = { _, _ -> },
+                    onOpenAttachment = { _, _ -> },
+                    onCancelTransfer = {},
+                    onRetryDownload = {},
+                    onSetSelfDestruct = {},
+                    onVerifyPeerKey = {},
+                    onReconnect = {},
+                    onDeleteMessage = {},
+                    onDeleteConversation = {},
+                    onNotify = {}
+                )
+            }
+        }
+
+        val inputBounds = composeTestRule.onNodeWithTag("chat_composer_input_surface").getUnclippedBoundsInRoot()
+        val voiceBounds = composeTestRule.onNodeWithTag("chat_voice_button").getUnclippedBoundsInRoot()
+        val inputHeight = inputBounds.bottom - inputBounds.top
+        val voiceHeight = voiceBounds.bottom - voiceBounds.top
+        assertTrue("Expected composer input height ($inputHeight) >= voice button ($voiceHeight)", inputHeight >= voiceHeight - 1f.dpValueCheck)
+    }
+
+    @Test
+    fun bridgedChatShowsNoticeBannerWithBridgeName() {
+        val nowClock = MutableStateFlow(System.currentTimeMillis())
+        composeTestRule.setContent {
+            ChatsoTheme {
+                ChatDetailScreen(
+                    identity = LocalIdentity(isInitialized = true, username = "Me", peerId = "me"),
+                    peer = PeerEntity(
+                        peerId = "peer_charlie",
+                        username = "Charlie",
+                        publicKeyBase64 = "KEY",
+                        fingerprint = "FP",
+                        viaBridgePeerId = "peer_bridge_b"
+                    ),
+                    messages = emptyList(),
+                    currentMessageLimit = 150,
+                    presence = PeerPresence.ONLINE,
+                    isPeerTyping = false,
+                    activeTransfers = emptyList(),
+                    favoriteStickers = emptyList(),
+                    nowClockFlow = nowClock,
+                    voiceRecordingState = VoiceRecordingState(),
+                    voicePlaybackState = VoicePlaybackState(),
+                    bridgePeerName = "BridgeB",
+                    showBackButton = true,
+                    onBack = {},
+                    onLoadMoreMessages = {},
+                    onSendText = { _, _ -> },
+                    onToggleReaction = { _, _ -> },
+                    onTypingChanged = {},
+                    onSendPhotoUri = { _, _ -> },
+                    onSendVideoUri = { _, _ -> },
+                    onSendDocumentUri = { _, _ -> },
+                    onSendStickerStream = { _, _, _, _ -> },
+                    onCheckStickerFavorited = { false },
+                    onToggleFavoriteSticker = {},
+                    onRemoveFavoriteSticker = {},
+                    onSendFavoriteSticker = { _, _ -> },
+                    onStartVoiceRecording = {},
+                    onCancelVoiceRecording = {},
+                    onSendVoiceRecording = {},
+                    onToggleVoicePlayback = { _, _ -> },
+                    onOpenAttachment = { _, _ -> },
+                    onCancelTransfer = {},
+                    onRetryDownload = {},
+                    onSetSelfDestruct = {},
+                    onVerifyPeerKey = {},
+                    onReconnect = {},
+                    onDeleteMessage = {},
+                    onDeleteConversation = {},
+                    onNotify = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("chat_bridge_notice_banner").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Chatting via bridge (BridgeB) · E2EE").assertIsDisplayed()
+        composeTestRule.onNodeWithText("Online · Via bridge").assertIsDisplayed()
+    }
+
+    @Test
+    fun devModeDisplaysBridgeTelemetryAndActiveRoutes() {
+        val telemetry = BridgeTelemetry(
+            isEnabled = true,
+            directSessionCount = 2,
+            directPeerNames = listOf("Alice", "Charlie"),
+            advertisedPeerCount = 1,
+            advertisedPeerNames = listOf("Charlie"),
+            relayedFramesTotal = 14L,
+            relayedBytesTotal = 2048L,
+            failedRelaysTotal = 1L,
+            activeRoutes = listOf(
+                BridgeRouteInfo(
+                    fromPeerId = "a",
+                    fromName = "Alice",
+                    toPeerId = "c",
+                    toName = "Charlie",
+                    relayedFrames = 9L,
+                    relayedBytes = 1536L,
+                    lastRelayedAt = System.currentTimeMillis()
+                )
+            )
+        )
+
+        composeTestRule.setContent {
+            ChatsoTheme {
+                DevModeScreen(
+                    identity = LocalIdentity(
+                        isInitialized = true,
+                        username = "BridgeB",
+                        peerId = "local_bridge_id_1234",
+                        devModeEnabled = true,
+                        bridgeEnabled = true
+                    ),
+                    peers = emptyList(),
+                    endpoints = emptyList(),
+                    boundPort = 42850,
+                    serverRunning = true,
+                    totalMessageCount = 12,
+                    devOnlineFakePeers = emptySet(),
+                    devAutoReplyEnabled = false,
+                    scheduledDelayRemainingSec = null,
+                    bridgeTelemetry = telemetry,
+                    onBack = {},
+                    onCreateFakePeer = { _, _ -> },
+                    onSendFakeIncomingText = { _, _, _ -> },
+                    onSendFakeUnreadBurst = { _, _, _ -> },
+                    onSendFakeMedia = { _, _ -> },
+                    onSimulateTyping = {},
+                    onSimulateReaction = {},
+                    onTriggerKeyWarning = {},
+                    onTogglePeerSimulatedOnline = { _, _ -> },
+                    onToggleAutoReply = {},
+                    onOpenPeerChat = {},
+                    onClearFakePeers = {},
+                    onNotify = {}
+                )
+            }
+        }
+
+        composeTestRule.onNodeWithTag("dev_bridge_section_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("ACTIVE").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("2 (Alice, Charlie)").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("1 (Charlie)").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("14").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithText("Alice → Charlie").performScrollTo().assertIsDisplayed()
     }
 }
 

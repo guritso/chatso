@@ -64,6 +64,8 @@ class ChatRepository(
     private val _unreadDivider = MutableStateFlow<UnreadDividerInfo?>(null)
     val unreadDivider: StateFlow<UnreadDividerInfo?> = _unreadDivider.asStateFlow()
 
+    val bridgeTelemetry: StateFlow<BridgeTelemetry> = nodeManager.bridgeTelemetry
+
     val totalMessageCountFlow: Flow<Int> = chatDao.observeTotalMessageCount()
 
     private val transfersMap = ConcurrentHashMap<String, ActiveTransferInfo>()
@@ -80,6 +82,9 @@ class ChatRepository(
 
     @Volatile
     var currentlyOpenPeerId: String? = null
+
+    @Volatile
+    var isOpenChatAtBottom: Boolean = true
 
     var onClearPeerNotification: ((peerId: String) -> Unit)? = null
 
@@ -141,7 +146,70 @@ class ChatRepository(
         if (inForeground) {
             val openPeer = currentlyOpenPeerId ?: return
             scope.launch(Dispatchers.IO) {
-                captureUnreadDividerAndMarkRead(openPeer, preserveExistingAnchor = true)
+                prepareConversationOpen(openPeer, preserveExistingAnchor = true)
+            }
+        }
+    }
+
+    fun setOpenChatAtBottom(peerId: String, atBottom: Boolean) {
+        if (currentlyOpenPeerId == peerId) {
+            isOpenChatAtBottom = atBottom
+        }
+    }
+
+    suspend fun prepareConversationOpen(
+        peerId: String,
+        preserveExistingAnchor: Boolean = false
+    ) {
+        if (!isAppInForegroundProvider()) return
+        onClearPeerNotification?.invoke(peerId)
+        val unread = chatDao.getUnreadIncomingMessagesChronological(peerId)
+            .filter { it.transferProgress >= 100 }
+        if (unread.isNotEmpty()) {
+            val current = _unreadDivider.value
+            val existingAnchorMsg = if (preserveExistingAnchor && current != null && current.peerId == peerId) {
+                chatDao.getMessageById(current.anchorMessageId)
+            } else {
+                null
+            }
+            if (existingAnchorMsg != null && existingAnchorMsg.status != DeliveryStatus.READ.name) {
+                _unreadDivider.value = current!!.copy(unreadCount = unread.size)
+            } else {
+                _unreadDivider.value = UnreadDividerInfo(
+                    peerId = peerId,
+                    anchorMessageId = unread.first().messageId,
+                    unreadCount = unread.size
+                )
+            }
+        } else if (!preserveExistingAnchor) {
+            _unreadDivider.value = null
+        }
+    }
+
+    suspend fun markVisibleMessagesRead(peerId: String, visibleMessageIds: Set<String>) {
+        if (!isAppInForegroundProvider() || visibleMessageIds.isEmpty()) return
+        val unread = chatDao.getUnreadIncomingMessages(peerId)
+            .filter { it.transferProgress >= 100 }
+        if (unread.isEmpty()) return
+
+        val now = System.currentTimeMillis()
+        var markedCount = 0
+        for (msg in unread) {
+            if (!visibleMessageIds.contains(msg.messageId)) continue
+            val expiresAt = if (msg.selfDestructSeconds > 0) {
+                now + msg.selfDestructSeconds * 1000L
+            } else {
+                null
+            }
+            chatDao.markMessageRead(msg.messageId, DeliveryStatus.READ.name, now, expiresAt)
+            nodeManager.sendReadReceipt(peerId, msg.messageId)
+            markedCount++
+        }
+        if (markedCount > 0) {
+            val remaining = (unread.size - markedCount).coerceAtLeast(0)
+            chatDao.setUnreadCount(peerId, remaining)
+            if (remaining == 0) {
+                onClearPeerNotification?.invoke(peerId)
             }
         }
     }
@@ -1106,6 +1174,24 @@ class ChatRepository(
         }
     }
 
+    private suspend fun recordScrolledUpUnreadAnchor(peerId: String, messageId: String) {
+        val currentDiv = _unreadDivider.value
+        val existingAnchorMsg = if (currentDiv != null && currentDiv.peerId == peerId) {
+            chatDao.getMessageById(currentDiv.anchorMessageId)
+        } else {
+            null
+        }
+        if (currentDiv != null && existingAnchorMsg != null && existingAnchorMsg.status != DeliveryStatus.READ.name) {
+            _unreadDivider.value = currentDiv.copy(unreadCount = currentDiv.unreadCount + 1)
+        } else {
+            _unreadDivider.value = UnreadDividerInfo(
+                peerId = peerId,
+                anchorMessageId = messageId,
+                unreadCount = 1
+            )
+        }
+    }
+
     override suspend fun onIncomingTextMessage(
         peerId: String,
         messageId: String,
@@ -1117,9 +1203,10 @@ class ChatRepository(
         replyToPreview: String?
     ) {
         _typingPeers.update { it - peerId }
-        val isOpen = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
+        val isChatOpenInFg = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
+        val isActivelyViewed = isChatOpenInFg && isOpenChatAtBottom
         val now = System.currentTimeMillis()
-        val expiresAt = if (isOpen && selfDestructSec > 0) {
+        val expiresAt = if (isActivelyViewed && selfDestructSec > 0) {
             now + selfDestructSec * 1000L
         } else {
             null
@@ -1131,10 +1218,10 @@ class ChatRepository(
             type = MessageType.TEXT.name,
             textContent = text,
             transferProgress = 100,
-            status = if (isOpen) DeliveryStatus.READ.name else DeliveryStatus.DELIVERED.name,
+            status = if (isActivelyViewed) DeliveryStatus.READ.name else DeliveryStatus.DELIVERED.name,
             selfDestructSeconds = selfDestructSec,
             createdAt = createdAt,
-            readAt = if (isOpen) now else null,
+            readAt = if (isActivelyViewed) now else null,
             expiresAt = expiresAt,
             replyToMessageId = replyToMessageId,
             replyToSenderTag = replyToSenderTag,
@@ -1147,12 +1234,14 @@ class ChatRepository(
                 peer.copy(
                     lastMessagePreview = text,
                     lastActivityAt = now,
-                    unreadCount = if (isOpen) 0 else peer.unreadCount + 1
+                    unreadCount = if (isActivelyViewed) 0 else peer.unreadCount + 1
                 )
             )
         }
-        if (isOpen) {
+        if (isActivelyViewed) {
             nodeManager.sendReadReceipt(peerId, messageId)
+        } else if (isChatOpenInFg) {
+            recordScrolledUpUnreadAnchor(peerId, messageId)
         } else {
             val senderName = peer?.username ?: "Chatso"
             onIncomingNotification?.invoke(peerId, senderName, text, peer?.avatarPath)
@@ -1259,9 +1348,10 @@ class ChatRepository(
             return
         }
         val existing = chatDao.getMessageById(messageId) ?: return
-        val isOpen = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
+        val isChatOpenInFg = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
+        val isActivelyViewed = isChatOpenInFg && isOpenChatAtBottom
         val now = System.currentTimeMillis()
-        val expiresAt = if (isOpen && existing.selfDestructSeconds > 0) {
+        val expiresAt = if (isActivelyViewed && existing.selfDestructSeconds > 0) {
             now + existing.selfDestructSeconds * 1000L
         } else {
             null
@@ -1278,8 +1368,8 @@ class ChatRepository(
                 textContent = finalPreview,
                 mediaLocalPath = file.absolutePath,
                 transferProgress = 100,
-                status = if (isOpen) DeliveryStatus.READ.name else DeliveryStatus.DELIVERED.name,
-                readAt = if (isOpen) now else null,
+                status = if (isActivelyViewed) DeliveryStatus.READ.name else DeliveryStatus.DELIVERED.name,
+                readAt = if (isActivelyViewed) now else null,
                 expiresAt = expiresAt
             )
         )
@@ -1289,12 +1379,14 @@ class ChatRepository(
                 peer.copy(
                     lastMessagePreview = finalPreview,
                     lastActivityAt = now,
-                    unreadCount = if (isOpen) 0 else peer.unreadCount + 1
+                    unreadCount = if (isActivelyViewed) 0 else peer.unreadCount + 1
                 )
             )
         }
-        if (isOpen) {
+        if (isActivelyViewed) {
             nodeManager.sendReadReceipt(peerId, messageId)
+        } else if (isChatOpenInFg) {
+            recordScrolledUpUnreadAnchor(peerId, messageId)
         } else {
             val senderName = peer?.username ?: "Chatso"
             onIncomingNotification?.invoke(peerId, senderName, finalPreview, peer?.avatarPath)

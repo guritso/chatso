@@ -334,7 +334,12 @@ class ExampleRobolectricTest {
             nodeB.setLocalAppInForeground(true)
             nodeA.updateIdentityAndEnsureServer(aliceIdentity)
             nodeB.updateIdentityAndEnsureServer(bobIdentity)
-            delay(250)
+            repeat(40) {
+                if (nodeA.serverRunning.value && nodeB.serverRunning.value) return@repeat
+                delay(50)
+            }
+            assertTrue(nodeA.serverRunning.value)
+            assertTrue(nodeB.serverRunning.value)
 
             val bobPort = nodeB.boundPort.value
             val alicePort = nodeA.boundPort.value
@@ -1378,6 +1383,14 @@ class ExampleRobolectricTest {
             )
             assertEquals("Hi Alice back via BridgeB!", aReceivedTextFromC.get(3, TimeUnit.SECONDS))
 
+            // BridgeB telemetry must reflect relayed frames, bytes, and routes between Alice & Charlie
+            val bridgeStats = nodeB.bridgeTelemetry.value
+            assertTrue(bridgeStats.isEnabled)
+            assertEquals(2, bridgeStats.directSessionCount)
+            assertTrue(bridgeStats.relayedFramesTotal >= 2L)
+            assertTrue(bridgeStats.relayedBytesTotal > 0L)
+            assertTrue(bridgeStats.activeRoutes.isNotEmpty())
+
             // Stopping BridgeB cascades disconnect to Alice's bridged session with Charlie
             nodeB.disconnectAll()
             assertTrue(aDisconnectedFromC.get(3, TimeUnit.SECONDS))
@@ -1388,6 +1401,83 @@ class ExampleRobolectricTest {
             discA.shutdown()
             discB.shutdown()
             discC.shutdown()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `open chat while scrolled up keeps messages unread until viewed`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        val peerId = "peer_scroll_read_${System.currentTimeMillis()}"
+
+        val repo = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = LocalIdentityStore(context),
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { true }
+        )
+
+        try {
+            dao.upsertPeer(
+                com.example.data.PeerEntity(
+                    peerId = peerId,
+                    username = "ScrollPeer",
+                    publicKeyBase64 = "K",
+                    fingerprint = "F"
+                )
+            )
+            // Chat is open in foreground, but user is scrolled up reading older history
+            repo.currentlyOpenPeerId = peerId
+            repo.isOpenChatAtBottom = false
+
+            repo.onIncomingTextMessage(
+                peerId = peerId,
+                messageId = "msg_up_1",
+                text = "Scrolled up msg 1",
+                selfDestructSec = 0,
+                createdAt = 1000L,
+                replyToMessageId = null,
+                replyToSenderTag = null,
+                replyToPreview = null
+            )
+            repo.onIncomingTextMessage(
+                peerId = peerId,
+                messageId = "msg_up_2",
+                text = "Scrolled up msg 2",
+                selfDestructSec = 0,
+                createdAt = 2000L,
+                replyToMessageId = null,
+                replyToSenderTag = null,
+                replyToPreview = null
+            )
+
+            // Neither message should be marked READ yet, unreadCount == 2, divider anchored at msg_up_1
+            assertEquals(DeliveryStatus.DELIVERED.name, dao.getMessageById("msg_up_1")?.status)
+            assertEquals(DeliveryStatus.DELIVERED.name, dao.getMessageById("msg_up_2")?.status)
+            assertEquals(2, dao.getPeerById(peerId)?.unreadCount)
+            assertEquals("msg_up_1", repo.unreadDivider.value?.anchorMessageId)
+            assertEquals(2, repo.unreadDivider.value?.unreadCount)
+
+            // User sees msg_up_1 first -> only msg_up_1 transitions to READ, unreadCount becomes 1
+            repo.markVisibleMessagesRead(peerId, setOf("msg_up_1"))
+            assertEquals(DeliveryStatus.READ.name, dao.getMessageById("msg_up_1")?.status)
+            assertEquals(DeliveryStatus.DELIVERED.name, dao.getMessageById("msg_up_2")?.status)
+            assertEquals(1, dao.getPeerById(peerId)?.unreadCount)
+
+            // User scrolls to bottom and sees msg_up_2 -> transitions to READ, unreadCount == 0
+            repo.isOpenChatAtBottom = true
+            repo.markVisibleMessagesRead(peerId, setOf("msg_up_2"))
+            assertEquals(DeliveryStatus.READ.name, dao.getMessageById("msg_up_2")?.status)
+            assertEquals(0, dao.getPeerById(peerId)?.unreadCount)
+        } finally {
+            repo.shutdown()
+            dao.deleteAllMessagesForPeer(peerId)
+            dao.deletePeer(peerId)
             scope.cancel()
         }
     }
