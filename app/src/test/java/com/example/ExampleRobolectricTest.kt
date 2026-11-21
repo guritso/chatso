@@ -1344,24 +1344,55 @@ class ExampleRobolectricTest {
             delay(250)
 
             // Both Alice and Charlie connect directly to BridgeB (e.g. A on localhost, C on VPN)
-            assertTrue(nodeA.connectToPeer("127.0.0.1", nodeB.boundPort.value, matB.publicKeyBase64).isSuccess)
-            assertTrue(nodeC.connectToPeer("127.0.0.1", nodeB.boundPort.value, matB.publicKeyBase64).isSuccess)
-            delay(250)
+            assertTrue(
+                "Alice should connect directly to BridgeB",
+                nodeA.connectToPeer("127.0.0.1", nodeB.boundPort.value, matB.publicKeyBase64).isSuccess
+            )
+            assertTrue(
+                "Charlie should connect directly to BridgeB",
+                nodeC.connectToPeer("127.0.0.1", nodeB.boundPort.value, matB.publicKeyBase64).isSuccess
+            )
+
+            val bridgeReadyDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (nodeB.bridgeTelemetry.value.directSessionCount < 2 &&
+                System.nanoTime() < bridgeReadyDeadline
+            ) {
+                delay(25)
+            }
+            assertEquals(
+                "BridgeB should have both direct peers before advertising its directory",
+                2,
+                nodeB.bridgeTelemetry.value.directSessionCount
+            )
 
             // When Alice probes BridgeB's beacon port, Alice discovers Charlie via BridgeB
             discA.applyIdentityPolicy(idA)
             discA.scanNetworkNow(listOf("127.0.0.1" to nodeB.boundPort.value))
-            delay(400)
+            val discoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (discA.discoveredPeers.value[matC.peerId] == null &&
+                System.nanoTime() < discoveryDeadline
+            ) {
+                delay(25)
+            }
             val discoveredC = discA.discoveredPeers.value[matC.peerId]
-            assertNotNull(discoveredC)
-            assertEquals(matB.peerId, discoveredC!!.viaBridgePeerId)
+            assertNotNull("Alice should discover Charlie through BridgeB", discoveredC)
+            assertEquals(
+                "Charlie should be advertised through BridgeB",
+                matB.peerId,
+                discoveredC!!.viaBridgePeerId
+            )
 
             // Alice connects to Charlie via BridgeB and both exchange E2EE messages
             val bridgedId = nodeA.connectViaBridge(matB.peerId, matC.peerId, matC.publicKeyBase64).getOrThrow()
-            assertEquals(matC.peerId, bridgedId)
-            assertEquals(matB.peerId, cHandshakedWithAViaBridge.get(3, TimeUnit.SECONDS))
+            assertEquals("Bridge handshake should identify Charlie", matC.peerId, bridgedId)
+            assertEquals(
+                "Charlie should report Alice's connection through BridgeB",
+                matB.peerId,
+                cHandshakedWithAViaBridge.get(3, TimeUnit.SECONDS)
+            )
 
             assertTrue(
+                "Alice should send a message through BridgeB",
                 nodeA.sendTextMessage(
                     peerId = matC.peerId,
                     messageId = "bridge-msg-1",
@@ -1370,9 +1401,14 @@ class ExampleRobolectricTest {
                     createdAt = System.currentTimeMillis()
                 )
             )
-            assertEquals("Hello Charlie across BridgeB!", cReceivedTextFromA.get(3, TimeUnit.SECONDS))
+            assertEquals(
+                "Charlie should receive Alice's bridged message",
+                "Hello Charlie across BridgeB!",
+                cReceivedTextFromA.get(3, TimeUnit.SECONDS)
+            )
 
             assertTrue(
+                "Charlie should send a reply through BridgeB",
                 nodeC.sendTextMessage(
                     peerId = matA.peerId,
                     messageId = "bridge-msg-2",
@@ -1381,19 +1417,26 @@ class ExampleRobolectricTest {
                     createdAt = System.currentTimeMillis()
                 )
             )
-            assertEquals("Hi Alice back via BridgeB!", aReceivedTextFromC.get(3, TimeUnit.SECONDS))
+            assertEquals(
+                "Alice should receive Charlie's bridged reply",
+                "Hi Alice back via BridgeB!",
+                aReceivedTextFromC.get(3, TimeUnit.SECONDS)
+            )
 
             // BridgeB telemetry must reflect relayed frames, bytes, and routes between Alice & Charlie
             val bridgeStats = nodeB.bridgeTelemetry.value
-            assertTrue(bridgeStats.isEnabled)
-            assertEquals(2, bridgeStats.directSessionCount)
-            assertTrue(bridgeStats.relayedFramesTotal >= 2L)
-            assertTrue(bridgeStats.relayedBytesTotal > 0L)
-            assertTrue(bridgeStats.activeRoutes.isNotEmpty())
+            assertTrue("BridgeB telemetry should be enabled", bridgeStats.isEnabled)
+            assertEquals("BridgeB should retain both direct sessions", 2, bridgeStats.directSessionCount)
+            assertTrue("BridgeB should count relayed frames", bridgeStats.relayedFramesTotal >= 2L)
+            assertTrue("BridgeB should count relayed bytes", bridgeStats.relayedBytesTotal > 0L)
+            assertTrue("BridgeB should report an active route", bridgeStats.activeRoutes.isNotEmpty())
 
             // Stopping BridgeB cascades disconnect to Alice's bridged session with Charlie
             nodeB.disconnectAll()
-            assertTrue(aDisconnectedFromC.get(3, TimeUnit.SECONDS))
+            assertTrue(
+                "Disconnecting BridgeB should close Alice's virtual session with Charlie",
+                aDisconnectedFromC.get(3, TimeUnit.SECONDS)
+            )
         } finally {
             nodeA.disconnectAll()
             nodeB.disconnectAll()
