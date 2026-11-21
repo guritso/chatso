@@ -295,4 +295,5 @@
     <string name="dev_msg_fakes_cleared">All fake contacts removed.</string>
     <string name="dev_msg_key_warning">Simulated key change warning for %1$s.</string>
     <string name="dev_msg_no_message_for_reaction">Send or simulate a message first to react.</string>
+    <string name="cd_scroll_to_bottom">Scroll to bottom</string>
 </resources>

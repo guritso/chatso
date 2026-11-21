@@ -10,12 +10,17 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
@@ -59,6 +64,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -225,6 +231,24 @@ fun ChatDetailScreen(
     val focusManager = LocalFocusManager.current
     val inputFocusRequester = remember { FocusRequester() }
 
+    // Key LazyListState per peer to eliminate any flash/position bleed across chats
+    val listState = key(peer.peerId) { rememberLazyListState() }
+    var scrollToBottomPending by remember(peer.peerId) { mutableStateOf(false) }
+
+    suspend fun scrollToBottomSmooth() {
+        if (listState.firstVisibleItemIndex > 20) {
+            listState.scrollToItem(15)
+        }
+        listState.animateScrollToItem(0)
+    }
+
+    fun markSendingAndScroll() {
+        scrollToBottomPending = true
+        if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0) {
+            scope.launch { scrollToBottomSmooth() }
+        }
+    }
+
     val textFieldState = key(peer.peerId) { rememberTextFieldState() }
     val draftText = textFieldState.text.toString()
     LaunchedEffect(peer.peerId, draftText) {
@@ -261,6 +285,7 @@ fun ChatDetailScreen(
                 }.getOrNull()
                 val replyTarget = latestReplyingTo
                 replyingToId = null
+                markSendingAndScroll()
                 latestSendSticker(stream, mimeType, fileName, replyTarget)
                 true
             }
@@ -297,10 +322,8 @@ fun ChatDetailScreen(
         if (activeTransfers.isEmpty()) transfersExpanded = false
     }
 
-    // Key LazyListState per peer to eliminate any flash/position bleed across chats
-    val listState = key(peer.peerId) { rememberLazyListState() }
-
-    val newestMessageId = messages.firstOrNull()?.messageId
+    val newestMessage = messages.firstOrNull()
+    val newestMessageId = newestMessage?.messageId
     var prevNewestMessageId by remember(peer.peerId) { mutableStateOf<String?>(null) }
     var lastAutoScrolledAnchor by remember(peer.peerId) { mutableStateOf<String?>(null) }
     LaunchedEffect(peer.peerId, unreadDividerAnchorId, messages.size) {
@@ -317,8 +340,20 @@ fun ChatDetailScreen(
     LaunchedEffect(newestMessageId) {
         val previous = prevNewestMessageId
         prevNewestMessageId = newestMessageId
-        if (newestMessageId != null && previous != null && previous != newestMessageId && listState.firstVisibleItemIndex <= 2) {
-            listState.animateScrollToItem(0)
+        val isOutgoingNewest = newestMessage?.isOutgoing == true
+        val shouldScroll = newestMessageId != null && (
+            scrollToBottomPending ||
+                (previous != null && previous != newestMessageId && (isOutgoingNewest || listState.firstVisibleItemIndex <= 2))
+            )
+        if (shouldScroll) {
+            scrollToBottomPending = false
+            scrollToBottomSmooth()
+        }
+    }
+
+    val showScrollToBottom by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex >= 1 || listState.firstVisibleItemScrollOffset > 240
         }
     }
 
@@ -843,6 +878,36 @@ fun ChatDetailScreen(
             }
             val bottomSpaceDp = maxOf(effectiveImeDp, activeTrayDp, immediateOpenFloorDp, heldFloorDp)
 
+            // Floating Scroll-to-Bottom Button when scrolled up in chat history
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showScrollToBottom,
+                enter = fadeIn(tween(150)) + scaleIn(initialScale = 0.85f, animationSpec = tween(150)),
+                exit = fadeOut(tween(150)) + scaleOut(targetScale = 0.85f, animationSpec = tween(150)),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 14.dp, bottom = composerOverlayHeightDp + 10.dp)
+            ) {
+                Surface(
+                    onClick = { scope.launch { scrollToBottomSmooth() } },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    shadowElevation = 4.dp,
+                    tonalElevation = 3.dp,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("chat_scroll_to_bottom_button")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = stringResource(R.string.cd_scroll_to_bottom),
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            }
+
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -912,6 +977,7 @@ fun ChatDetailScreen(
                                 onClick = {
                                     val replyTarget = replyingToMessage
                                     replyingToId = null
+                                    markSendingAndScroll()
                                     onSendVoiceRecording(replyTarget)
                                 },
                                 shape = CircleShape,
@@ -1116,6 +1182,7 @@ fun ChatDetailScreen(
                                         val replyTarget = replyingToMessage
                                         textFieldState.clearText()
                                         replyingToId = null
+                                        markSendingAndScroll()
                                         onSendText(toSend, replyTarget)
                                     },
                                     shape = CircleShape,
@@ -1198,6 +1265,7 @@ fun ChatDetailScreen(
                                         onSendFavoriteSticker = { sticker ->
                                             val replyTarget = replyingToMessage
                                             replyingToId = null
+                                            markSendingAndScroll()
                                             onSendFavoriteSticker(sticker, replyTarget)
                                         },
                                         onRemoveFavoriteSticker = onRemoveFavoriteSticker
@@ -1210,16 +1278,19 @@ fun ChatDetailScreen(
                                         onSendPhotoUri = { uri ->
                                             val replyTarget = replyingToMessage
                                             replyingToId = null
+                                            markSendingAndScroll()
                                             onSendPhotoUri(uri, replyTarget)
                                         },
                                         onSendVideoUri = { uri ->
                                             val replyTarget = replyingToMessage
                                             replyingToId = null
+                                            markSendingAndScroll()
                                             onSendVideoUri(uri, replyTarget)
                                         },
                                         onSendDocumentUri = { uri ->
                                             val replyTarget = replyingToMessage
                                             replyingToId = null
+                                            markSendingAndScroll()
                                             onSendDocumentUri(uri, replyTarget)
                                         },
                                         onOpenSelfDestruct = { showSelfDestructDialog = true },

@@ -317,20 +317,24 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun setThemePalette(palette: ThemePalette) {
+        val advanced = identityState.value?.themeAdvanced ?: false
+        com.example.network.ChatsoNotificationHelper.syncThemeConfig(getApplication(), palette, advanced)
         viewModelScope.launch {
             identityStore.setThemePalette(palette)
             AppIconManager.scheduleIconSync(
                 palette = palette,
-                fullThemeEnabled = identityState.value?.themeAdvanced ?: false
+                fullThemeEnabled = advanced
             )
         }
     }
 
     fun setThemeAdvanced(enabled: Boolean) {
+        val palette = identityState.value?.themePalette ?: ThemePalette.PURPLE
+        com.example.network.ChatsoNotificationHelper.syncThemeConfig(getApplication(), palette, enabled)
         viewModelScope.launch {
             identityStore.setThemeAdvanced(enabled)
             AppIconManager.scheduleIconSync(
-                palette = identityState.value?.themePalette ?: ThemePalette.PURPLE,
+                palette = palette,
                 fullThemeEnabled = enabled
             )
         }

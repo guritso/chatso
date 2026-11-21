@@ -1,8 +1,14 @@
 package com.example.ui.screens
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
@@ -31,12 +37,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LightMode
@@ -69,6 +75,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -121,6 +128,8 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     var showLicensesDialog by remember { mutableStateOf(false) }
+    var themeExpanded by rememberSaveable { mutableStateOf(false) }
+    var languageExpanded by rememberSaveable { mutableStateOf(false) }
     var portInput by rememberSaveable(identity.listenPort) {
         mutableStateOf(identity.listenPort.toString())
     }
@@ -373,14 +382,23 @@ fun SettingsScreen(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
                 val activePaletteName = paletteDisplayName(identity.themePalette)
+                val themeChevronRotation by animateFloatAsState(
+                    targetValue = if (themeExpanded) 180f else 0f,
+                    label = "themeChevronRotation"
+                )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .minimumInteractiveComponentSize()
+                        .clickable { themeExpanded = !themeExpanded }
+                        .padding(vertical = 8.dp)
+                        .testTag("settings_theme_expand_button")
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Palette,
@@ -410,194 +428,211 @@ fun SettingsScreen(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .rotate(themeChevronRotation)
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                AnimatedVisibility(
+                    visible = themeExpanded,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
                 ) {
-                    ThemePalette.entries.forEach { palette ->
-                        val isSelected = identity.themePalette == palette
-                        val spec = palette.spec()
-                        val label = paletteDisplayName(palette)
-                        val ringWidth by animateDpAsState(
-                            targetValue = if (isSelected) 2.5.dp else 1.dp,
-                            animationSpec = spring(),
-                            label = "paletteRingWidth"
-                        )
-                        val ringColor by animateColorAsState(
-                            targetValue = if (isSelected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.outlineVariant
-                            },
-                            label = "paletteRingColor"
-                        )
+                    Column {
+                        Spacer(modifier = Modifier.height(8.dp))
 
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .widthIn(min = 68.dp)
-                                .clip(MaterialTheme.shapes.small)
-                                .minimumInteractiveComponentSize()
-                                .semantics {
-                                    selected = isSelected
-                                }
-                                .clickable(
-                                    role = Role.RadioButton,
-                                    onClickLabel = label
-                                ) {
-                                    onChangePalette(palette)
-                                }
-                                .padding(horizontal = 4.dp, vertical = 4.dp)
-                                .testTag("settings_palette_${palette.name.lowercase()}")
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Box(
-                                contentAlignment = Alignment.Center,
-                                modifier = Modifier
-                                    .size(46.dp)
-                                    .border(ringWidth, ringColor, CircleShape)
-                                    .padding(4.dp)
-                            ) {
-                                Canvas(
+                            ThemePalette.entries.forEach { palette ->
+                                val isSelected = identity.themePalette == palette
+                                val spec = palette.spec()
+                                val label = paletteDisplayName(palette)
+                                val ringWidth by animateDpAsState(
+                                    targetValue = if (isSelected) 2.5.dp else 1.dp,
+                                    animationSpec = spring(),
+                                    label = "paletteRingWidth"
+                                )
+                                val ringColor by animateColorAsState(
+                                    targetValue = if (isSelected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.outlineVariant
+                                    },
+                                    label = "paletteRingColor"
+                                )
+
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
                                     modifier = Modifier
-                                        .fillMaxSize()
-                                        .clip(CircleShape)
+                                        .widthIn(min = 68.dp)
+                                        .clip(MaterialTheme.shapes.small)
+                                        .minimumInteractiveComponentSize()
+                                        .semantics {
+                                            selected = isSelected
+                                        }
+                                        .clickable(
+                                            role = Role.RadioButton,
+                                            onClickLabel = label
+                                        ) {
+                                            onChangePalette(palette)
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                                        .testTag("settings_palette_${palette.name.lowercase()}")
                                 ) {
-                                    drawCircle(color = spec.swatchPrimary)
-                                    val halfPath = Path().apply {
-                                        moveTo(size.width, 0f)
-                                        lineTo(size.width, size.height)
-                                        lineTo(0f, size.height)
-                                        close()
+                                    Box(
+                                        contentAlignment = Alignment.Center,
+                                        modifier = Modifier
+                                            .size(46.dp)
+                                            .border(ringWidth, ringColor, CircleShape)
+                                            .padding(4.dp)
+                                    ) {
+                                        Canvas(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(CircleShape)
+                                        ) {
+                                            drawCircle(color = spec.swatchPrimary)
+                                            val halfPath = Path().apply {
+                                                moveTo(size.width, 0f)
+                                                lineTo(size.width, size.height)
+                                                lineTo(0f, size.height)
+                                                close()
+                                            }
+                                            drawPath(path = halfPath, color = spec.swatchSecondary)
+                                            drawLine(
+                                                color = Color.White.copy(alpha = 0.35f),
+                                                start = Offset(size.width, 0f),
+                                                end = Offset(0f, size.height),
+                                                strokeWidth = 1.5f
+                                            )
+                                        }
+                                        if (isSelected) {
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = spec.light.primary.copy(alpha = 0.92f),
+                                                modifier = Modifier.size(22.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center) {
+                                                    Icon(
+                                                        imageVector = Icons.Filled.Check,
+                                                        contentDescription = label,
+                                                        tint = Color.White,
+                                                        modifier = Modifier.size(14.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
-                                    drawPath(path = halfPath, color = spec.swatchSecondary)
-                                    drawLine(
-                                        color = Color.White.copy(alpha = 0.35f),
-                                        start = Offset(size.width, 0f),
-                                        end = Offset(0f, size.height),
-                                        strokeWidth = 1.5f
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center
                                     )
                                 }
-                                if (isSelected) {
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .clickable { onToggleThemeAdvanced(!identity.themeAdvanced) }
+                                .padding(vertical = 4.dp)
+                                .testTag("settings_theme_advanced_row"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.theme_advanced_title),
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = stringResource(R.string.theme_advanced_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = identity.themeAdvanced,
+                                onCheckedChange = onToggleThemeAdvanced,
+                                modifier = Modifier.testTag("settings_theme_advanced_switch")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Surface(
+                            shape = MaterialTheme.shapes.medium,
+                            color = MaterialTheme.colorScheme.background,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp, 14.dp, 14.dp, 4.dp),
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    tonalElevation = 1.dp
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.theme_preview_incoming),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                    )
+                                }
+                                Row(
+                                    horizontalArrangement = Arrangement.End,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
                                     Surface(
-                                        shape = CircleShape,
-                                        color = spec.light.primary.copy(alpha = 0.92f),
-                                        modifier = Modifier.size(22.dp)
+                                        shape = RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp),
+                                        color = MaterialTheme.colorScheme.primaryContainer
                                     ) {
-                                        Box(contentAlignment = Alignment.Center) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
+                                            Text(
+                                                text = stringResource(R.string.theme_preview_outgoing),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                fontWeight = FontWeight.Medium
+                                            )
                                             Icon(
-                                                imageVector = Icons.Filled.Check,
-                                                contentDescription = label,
-                                                tint = Color.White,
+                                                imageVector = Icons.Filled.DoneAll,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
                                                 modifier = Modifier.size(14.dp)
                                             )
                                         }
                                     }
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (isSelected) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(MaterialTheme.shapes.small)
-                        .clickable { onToggleThemeAdvanced(!identity.themeAdvanced) }
-                        .padding(vertical = 4.dp)
-                        .testTag("settings_theme_advanced_row"),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.theme_advanced_title),
-                            style = MaterialTheme.typography.titleSmall
-                        )
-                        Text(
-                            text = stringResource(R.string.theme_advanced_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Switch(
-                        checked = identity.themeAdvanced,
-                        onCheckedChange = onToggleThemeAdvanced,
-                        modifier = Modifier.testTag("settings_theme_advanced_switch")
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Surface(
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.background,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                    ) {
-                        Surface(
-                            shape = RoundedCornerShape(14.dp, 14.dp, 14.dp, 4.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            tonalElevation = 1.dp
-                        ) {
-                            Text(
-                                text = stringResource(R.string.theme_preview_incoming),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                            )
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.End,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(14.dp, 14.dp, 4.dp, 14.dp),
-                                color = MaterialTheme.colorScheme.primaryContainer
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                ) {
-                                    Text(
-                                        text = stringResource(R.string.theme_preview_outgoing),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    Icon(
-                                        imageVector = Icons.Filled.DoneAll,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(14.dp)
-                                    )
                                 }
                             }
                         }
@@ -606,13 +641,30 @@ fun SettingsScreen(
             }
         }
 
-        // 4. Language Card
+        // 4. Language Card (Expandable)
         Card(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                val activeLanguageName = if (identity.language == AppLanguage.SYSTEM) {
+                    stringResource(R.string.language_system)
+                } else {
+                    identity.language.nativeName
+                }
+                val languageChevronRotation by animateFloatAsState(
+                    targetValue = if (languageExpanded) 180f else 0f,
+                    label = "languageChevronRotation"
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .minimumInteractiveComponentSize()
+                        .clickable { languageExpanded = !languageExpanded }
+                        .testTag("settings_language_expand_button")
+                ) {
                     Icon(
                         imageVector = Icons.Filled.Language,
                         contentDescription = null,
@@ -622,35 +674,65 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.language_section),
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = activeLanguageName,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .rotate(languageChevronRotation)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                AnimatedVisibility(
+                    visible = languageExpanded,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
                 ) {
-                    AppLanguage.entries.forEach { lang ->
-                        val label = if (lang == AppLanguage.SYSTEM) {
-                            stringResource(R.string.language_system)
-                        } else {
-                            lang.nativeName
-                        }
-                        FilterChip(
-                            selected = identity.language == lang,
-                            onClick = { onChangeLanguage(lang) },
-                            label = {
-                                Text(
-                                    text = label,
-                                    maxLines = 1,
-                                    softWrap = false
+                    Column {
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            AppLanguage.entries.forEach { lang ->
+                                val label = if (lang == AppLanguage.SYSTEM) {
+                                    stringResource(R.string.language_system)
+                                } else {
+                                    lang.nativeName
+                                }
+                                FilterChip(
+                                    selected = identity.language == lang,
+                                    onClick = { onChangeLanguage(lang) },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("settings_lang_${lang.code}")
                                 )
-                            },
-                            modifier = Modifier.testTag("settings_lang_${lang.code}")
-                        )
+                            }
+                        }
                     }
                 }
             }
@@ -737,37 +819,77 @@ fun SettingsScreen(
             }
         }
 
-        // 6. Updates Card (Standalone)
+        // 6. Consolidated About, Updates, Licenses & Discreet Developer Mode Card
         Card(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.testTag("settings_updates_card")
+            modifier = Modifier.testTag("settings_about_section_card")
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // About
+                Column(modifier = Modifier.testTag("settings_about_card")) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.about_section),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.about_version_label,
+                            BuildConfig.VERSION_NAME,
+                            BuildConfig.VERSION_CODE
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontFamily = JetBrainsMonoFontFamily
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.about_app_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                // Updates
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("settings_updates_card"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Icon(
                         imageVector = Icons.Filled.SystemUpdate,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.updates_only_section),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                    Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
+                            text = stringResource(R.string.updates_only_section),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
                             text = stringResource(R.string.current_version_label, BuildConfig.VERSION_NAME),
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -799,172 +921,99 @@ fun SettingsScreen(
                         }
                     }
                 }
-            }
-        }
 
-        // 7. About Card (Standalone)
-        Card(
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.testTag("settings_about_card")
-        ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.about_section),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
+                HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleSmall
-                )
-                Text(
-                    text = stringResource(
-                        R.string.about_version_label,
-                        BuildConfig.VERSION_NAME,
-                        BuildConfig.VERSION_CODE
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontFamily = JetBrainsMonoFontFamily
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.about_app_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        // 8. Open Source Licenses Card (Standalone)
-        Card(
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier
-                .clip(MaterialTheme.shapes.large)
-                .clickable { showLicensesDialog = true }
-                .testTag("settings_licenses_card")
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Description,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.licenses_section),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    Text(
-                        text = stringResource(R.string.open_source_licenses_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        // 9. Developer Mode Card (Standalone)
-        Card(
-            shape = MaterialTheme.shapes.large,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.testTag("settings_dev_mode_card")
-        ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.Build,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.dev_mode_section),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
+                // Open Source Licenses
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onToggleDevMode(!identity.devModeEnabled) },
+                        .clip(MaterialTheme.shapes.small)
+                        .minimumInteractiveComponentSize()
+                        .clickable { showLicensesDialog = true }
+                        .padding(vertical = 4.dp)
+                        .testTag("settings_licenses_card"),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Icon(
+                        imageVector = Icons.Filled.Description,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = stringResource(R.string.dev_mode_title),
+                            text = stringResource(R.string.licenses_section),
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            text = stringResource(R.string.dev_mode_desc),
+                            text = stringResource(R.string.open_source_licenses_desc),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Switch(
-                        checked = identity.devModeEnabled,
-                        onCheckedChange = onToggleDevMode,
-                        modifier = Modifier.testTag("settings_dev_mode_switch")
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                if (identity.devModeEnabled) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+
+                // Discreet Developer Mode toggle
+                Column(modifier = Modifier.testTag("settings_dev_mode_card")) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(MaterialTheme.shapes.medium)
-                            .clickable(onClick = onOpenDevTools)
-                            .padding(vertical = 6.dp)
-                            .testTag("settings_open_dev_tools"),
+                            .clip(MaterialTheme.shapes.small)
+                            .minimumInteractiveComponentSize()
+                            .clickable { onToggleDevMode(!identity.devModeEnabled) }
+                            .padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.dev_mode_section),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = identity.devModeEnabled,
+                            onCheckedChange = onToggleDevMode,
+                            modifier = Modifier.testTag("settings_dev_mode_switch")
+                        )
+                    }
+
+                    AnimatedVisibility(
+                        visible = identity.devModeEnabled,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .minimumInteractiveComponentSize()
+                                .clickable(onClick = onOpenDevTools)
+                                .padding(vertical = 6.dp)
+                                .testTag("settings_open_dev_tools"),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
                                 text = stringResource(R.string.dev_mode_open_tools),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.primary
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.weight(1f)
                             )
-                            Text(
-                                text = stringResource(R.string.dev_mode_open_tools_desc),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
                     }
                 }
             }

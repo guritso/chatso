@@ -307,4 +307,5 @@
     <string name="dev_msg_fakes_cleared">Usuários fake removidos.</string>
     <string name="dev_msg_key_warning">Alerta de troca de chave simulado para %1$s.</string>
     <string name="dev_msg_no_message_for_reaction">Envie ou simule uma mensagem primeiro para reagir.</string>
+    <string name="cd_scroll_to_bottom">Rolar para baixo</string>
 </resources>

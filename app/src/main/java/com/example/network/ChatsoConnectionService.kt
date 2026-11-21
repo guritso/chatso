@@ -30,10 +30,13 @@ import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+import androidx.compose.ui.graphics.toArgb
 import com.example.ChatsoApplication
 import com.example.MainActivity
 import com.example.R
 import com.example.data.LocaleHelper
+import com.example.data.ThemePalette
+import com.example.ui.theme.spec
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +46,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
@@ -56,8 +60,50 @@ object ChatsoNotificationHelper {
     const val ACTION_REPLY = "com.example.action.NOTIF_REPLY"
     const val ACTION_DISMISS = "com.example.action.NOTIF_DISMISS"
     const val KEY_TEXT_REPLY = "key_text_reply"
-    private const val BRAND_TEAL = 0xFF0F766E.toInt()
+    private const val PREFS_NOTIF_THEME = "chatso_notif_theme_prefs"
+    private const val KEY_THEME_PALETTE = "theme_palette"
+    private const val KEY_THEME_ADVANCED = "theme_advanced"
+    private const val DEFAULT_APP_ICON_COLOR = 0xFF222634.toInt()
     private const val MAX_CACHED_MESSAGES = 8
+
+    @Volatile
+    private var cachedPalette: ThemePalette? = null
+
+    @Volatile
+    private var cachedThemeAdvanced: Boolean? = null
+
+    fun syncThemeConfig(context: Context, palette: ThemePalette, fullThemeEnabled: Boolean) {
+        cachedPalette = palette
+        cachedThemeAdvanced = fullThemeEnabled
+        runCatching {
+            context.getSharedPreferences(PREFS_NOTIF_THEME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_THEME_PALETTE, palette.name)
+                .putBoolean(KEY_THEME_ADVANCED, fullThemeEnabled)
+                .apply()
+        }
+    }
+
+    fun resolveAccentColor(context: Context): Int {
+        val palette = cachedPalette ?: run {
+            val savedName = runCatching {
+                context.getSharedPreferences(PREFS_NOTIF_THEME, Context.MODE_PRIVATE)
+                    .getString(KEY_THEME_PALETTE, ThemePalette.PURPLE.name)
+            }.getOrNull()
+            ThemePalette.fromName(savedName).also { cachedPalette = it }
+        }
+        val fullTheme = cachedThemeAdvanced ?: run {
+            runCatching {
+                context.getSharedPreferences(PREFS_NOTIF_THEME, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_THEME_ADVANCED, false)
+            }.getOrDefault(false).also { cachedThemeAdvanced = it }
+        }
+        return if (fullTheme) {
+            palette.spec().light.primary.toArgb()
+        } else {
+            DEFAULT_APP_ICON_COLOR
+        }
+    }
 
     private data class CachedBubbleLine(
         val text: CharSequence,
@@ -125,7 +171,7 @@ object ChatsoNotificationHelper {
 
         return NotificationCompat.Builder(context, CHANNEL_CONNECTION)
             .setSmallIcon(R.drawable.ic_notification_chatso)
-            .setColor(BRAND_TEAL)
+            .setColor(resolveAccentColor(context))
             .setContentTitle(localized.getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
@@ -374,10 +420,11 @@ object ChatsoNotificationHelper {
             .setShowsUserInterface(false)
             .build()
 
+        val accentColor = resolveAccentColor(context)
         val latestLine = cache.lines.lastOrNull()?.text ?: ""
         val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
             .setSmallIcon(R.drawable.ic_notification_chatso)
-            .setColor(BRAND_TEAL)
+            .setColor(accentColor)
             .setLargeIcon(cleanAvatarBitmap)
             .setContentTitle(cache.senderName)
             .setContentText(latestLine)
@@ -438,8 +485,9 @@ object ChatsoNotificationHelper {
             }
         }
 
+        val accentColor = resolveAccentColor(context)
         if (!drewPhoto) {
-            val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = BRAND_TEAL }
+            val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accentColor }
             canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, bgPaint)
 
             val initials = senderName.trim()
@@ -469,7 +517,7 @@ object ChatsoNotificationHelper {
                 color = android.graphics.Color.WHITE
             }
             val badgeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = BRAND_TEAL
+                color = accentColor
             }
             canvas.drawCircle(cx, cy, badgeRadius + 5f, borderPaint)
             canvas.drawCircle(cx, cy, badgeRadius, badgeBgPaint)
@@ -586,13 +634,23 @@ class ChatsoConnectionService : Service() {
         val container = (application as ChatsoApplication).container
 
         monitorJob = serviceScope.launch {
-            container.repository.nodeManager.connectedPeers.collectLatest { connected ->
+            combine(
+                container.repository.nodeManager.connectedPeers,
+                container.identityStore.identityFlow
+            ) { connected, identity ->
+                connected.size to (identity.themePalette to identity.themeAdvanced)
+            }.collectLatest { (connectedCount, themeConfig) ->
+                ChatsoNotificationHelper.syncThemeConfig(
+                    applicationContext,
+                    themeConfig.first,
+                    themeConfig.second
+                )
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 nm?.notify(
                     ChatsoNotificationHelper.NOTIFICATION_ID_SERVICE,
                     ChatsoNotificationHelper.buildServiceNotification(
                         applicationContext,
-                        connected.size
+                        connectedCount
                     )
                 )
             }

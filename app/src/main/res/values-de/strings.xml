@@ -295,4 +295,5 @@
     <string name="dev_msg_fakes_cleared">Alle Fake-Kontakte entfernt.</string>
     <string name="dev_msg_key_warning">Schlüsselwechsel-Warnung für %1$s simuliert.</string>
     <string name="dev_msg_no_message_for_reaction">Sende oder simuliere zuerst eine Nachricht.</string>
+    <string name="cd_scroll_to_bottom">Nach unten scrollen</string>
 </resources>

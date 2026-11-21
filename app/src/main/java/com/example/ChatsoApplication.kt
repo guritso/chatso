@@ -37,6 +37,11 @@ class ChatsoContainer(context: Context) {
 
     init {
         ChatsoNotificationHelper.ensureChannels(context)
+        appScope.launch {
+            identityStore.identityFlow.collect { id ->
+                ChatsoNotificationHelper.syncThemeConfig(context, id.themePalette, id.themeAdvanced)
+            }
+        }
         repository.onClearPeerNotification = { peerId ->
             ChatsoNotificationHelper.cancelPeerNotification(context, peerId)
         }

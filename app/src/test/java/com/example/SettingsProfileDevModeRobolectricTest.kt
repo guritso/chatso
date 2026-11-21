@@ -9,7 +9,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextInput
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.ChatDatabase
 import com.example.data.ChatRepository
@@ -27,7 +29,12 @@ import com.example.ui.screens.ChatDetailScreen
 import com.example.ui.screens.DevModeScreen
 import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.SettingsScreen
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.toArgb
+import com.example.data.ThemePalette
+import com.example.network.ChatsoNotificationHelper
 import com.example.ui.theme.ChatsoTheme
+import com.example.ui.theme.spec
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -91,13 +98,55 @@ class SettingsProfileDevModeRobolectricTest {
             composeTestRule.onAllNodes(hasTestTag("profile_username_input")).fetchSemanticsNodes().isEmpty()
         )
 
-        // Updates, About, Licenses, and Developer Mode are separate standalone cards
-        composeTestRule.onNodeWithTag("settings_updates_card").performScrollTo().assertIsDisplayed()
+        // Theme Auto/Light/Dark are visible initially, while palette & full theme are collapsed
+        composeTestRule.onNodeWithTag("settings_theme_system").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_theme_light").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_theme_dark").assertIsDisplayed()
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("settings_palette_purple")).fetchSemanticsNodes().isEmpty()
+        )
+        composeTestRule.onNodeWithTag("settings_theme_expand_button").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("settings_palette_purple").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_theme_advanced_switch").performScrollTo().assertIsDisplayed()
+
+        // Language options are collapsed initially and visible after expanding
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("settings_lang_pt")).fetchSemanticsNodes().isEmpty()
+        )
+        composeTestRule.onNodeWithTag("settings_language_expand_button").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("settings_lang_pt").performScrollTo().assertIsDisplayed()
+
+        // Updates, About, Licenses, and discreet Developer Mode live inside one unified card
+        composeTestRule.onNodeWithTag("settings_about_section_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("settings_about_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_updates_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("settings_licenses_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("settings_dev_mode_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_dev_mode_switch").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("settings_open_dev_tools").performScrollTo().performClick()
         assertTrue(devToolsOpened)
+    }
+
+    @Test
+    fun notificationAccentColorFollowsDefaultIconOrActiveFullTheme() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+
+        ChatsoNotificationHelper.syncThemeConfig(
+            context = context,
+            palette = ThemePalette.BLUE,
+            fullThemeEnabled = false
+        )
+        assertEquals(0xFF222634.toInt(), ChatsoNotificationHelper.resolveAccentColor(context))
+
+        ChatsoNotificationHelper.syncThemeConfig(
+            context = context,
+            palette = ThemePalette.BLUE,
+            fullThemeEnabled = true
+        )
+        assertEquals(
+            ThemePalette.BLUE.spec().light.primary.toArgb(),
+            ChatsoNotificationHelper.resolveAccentColor(context)
+        )
     }
 
     @Test
@@ -354,6 +403,116 @@ class SettingsProfileDevModeRobolectricTest {
         assertEquals(5, sentDelay)
         composeTestRule.onNodeWithTag("dev_unread_burst_button").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("dev_clear_fakes_button").performScrollTo().assertIsDisplayed()
+    }
+
+    @Test
+    fun chatDetailShowsScrollToBottomButtonWhenScrolledUpAndAutoScrollsOnSend() {
+        val now = System.currentTimeMillis()
+        val initialMessages = (0 until 30).map { idx ->
+            MessageEntity(
+                messageId = "msg_$idx",
+                peerId = "peer_scroll",
+                isOutgoing = idx % 2 == 0,
+                type = MessageType.TEXT.name,
+                textContent = "Message #$idx with some text",
+                status = DeliveryStatus.READ.name,
+                createdAt = now - (idx * 1000L)
+            )
+        }
+        val messagesState = mutableStateOf(initialMessages)
+        val nowClock = MutableStateFlow(now)
+
+        composeTestRule.setContent {
+            ChatsoTheme {
+                ChatDetailScreen(
+                    identity = LocalIdentity(isInitialized = true, username = "Me", peerId = "me"),
+                    peer = PeerEntity(
+                        peerId = "peer_scroll",
+                        username = "Peer",
+                        publicKeyBase64 = "KEY",
+                        fingerprint = "FP"
+                    ),
+                    messages = messagesState.value,
+                    currentMessageLimit = 150,
+                    presence = PeerPresence.ONLINE,
+                    isPeerTyping = false,
+                    activeTransfers = emptyList(),
+                    favoriteStickers = emptyList(),
+                    nowClockFlow = nowClock,
+                    voiceRecordingState = VoiceRecordingState(),
+                    voicePlaybackState = VoicePlaybackState(),
+                    showBackButton = true,
+                    onBack = {},
+                    onLoadMoreMessages = {},
+                    onSendText = { text, _ ->
+                        val newMsg = MessageEntity(
+                            messageId = "msg_sent_new",
+                            peerId = "peer_scroll",
+                            isOutgoing = true,
+                            type = MessageType.TEXT.name,
+                            textContent = text,
+                            status = DeliveryStatus.SENT.name,
+                            createdAt = now + 5000L
+                        )
+                        messagesState.value = listOf(newMsg) + messagesState.value
+                    },
+                    onToggleReaction = { _, _ -> },
+                    onTypingChanged = {},
+                    onSendPhotoUri = { _, _ -> },
+                    onSendVideoUri = { _, _ -> },
+                    onSendDocumentUri = { _, _ -> },
+                    onSendStickerStream = { _, _, _, _ -> },
+                    onCheckStickerFavorited = { false },
+                    onToggleFavoriteSticker = {},
+                    onRemoveFavoriteSticker = {},
+                    onSendFavoriteSticker = { _, _ -> },
+                    onStartVoiceRecording = {},
+                    onCancelVoiceRecording = {},
+                    onSendVoiceRecording = {},
+                    onToggleVoicePlayback = { _, _ -> },
+                    onOpenAttachment = { _, _ -> },
+                    onCancelTransfer = {},
+                    onRetryDownload = {},
+                    onSetSelfDestruct = {},
+                    onVerifyPeerKey = {},
+                    onReconnect = {},
+                    onDeleteMessage = {},
+                    onDeleteConversation = {},
+                    onNotify = {}
+                )
+            }
+        }
+
+        // At bottom initially -> scroll-to-bottom button is hidden
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("chat_scroll_to_bottom_button")).fetchSemanticsNodes().isEmpty()
+        )
+
+        // Scroll up to older messages -> button appears
+        composeTestRule.onNodeWithTag("chat_messages_list").performScrollToIndex(20)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("chat_scroll_to_bottom_button").assertIsDisplayed()
+
+        // Tap scroll-to-bottom button -> returns to bottom and hides button
+        composeTestRule.onNodeWithTag("chat_scroll_to_bottom_button").performClick()
+        composeTestRule.waitForIdle()
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("chat_scroll_to_bottom_button")).fetchSemanticsNodes().isEmpty()
+        )
+
+        // Scroll up again, then send a message -> auto-scrolls back to bottom showing new message
+        composeTestRule.onNodeWithTag("chat_messages_list").performScrollToIndex(20)
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag("chat_scroll_to_bottom_button").assertIsDisplayed()
+
+        composeTestRule.onNodeWithTag("chat_message_input").performTextInput("Hello from top")
+        composeTestRule.onNodeWithTag("chat_send_button").performClick()
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("message_bubble_msg_sent_new").assertIsDisplayed()
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("chat_scroll_to_bottom_button")).fetchSemanticsNodes().isEmpty()
+        )
     }
 }
 
