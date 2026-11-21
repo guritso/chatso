@@ -34,7 +34,9 @@ enum class AppLanguage(val code: String, val nativeName: String) {
     EN("en", "English"),
     ES("es", "Español"),
     FR("fr", "Français"),
-    DE("de", "Deutsch");
+    DE("de", "Deutsch"),
+    ZH("zh", "中文"),
+    JA("ja", "日本語");
 
     companion object {
         fun fromCode(code: String?): AppLanguage =

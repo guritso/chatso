@@ -101,6 +101,16 @@ class ExampleRobolectricTest {
         assertEquals("Na Rede", ptCtx.getString(R.string.connect_lan_tab))
         assertEquals("Visível", ptCtx.getString(R.string.status_visible))
 
+        LocaleHelper.saveLanguage(base, AppLanguage.ZH)
+        val zhCtx = LocaleHelper.wrapContext(base)
+        assertEquals("局域网内", zhCtx.getString(R.string.connect_lan_tab))
+        assertEquals("可见", zhCtx.getString(R.string.status_visible))
+
+        LocaleHelper.saveLanguage(base, AppLanguage.JA)
+        val jaCtx = LocaleHelper.wrapContext(base)
+        assertEquals("ネットワーク内", jaCtx.getString(R.string.connect_lan_tab))
+        assertEquals("公開", jaCtx.getString(R.string.status_visible))
+
         LocaleHelper.saveLanguage(base, AppLanguage.SYSTEM)
     }
 

@@ -119,6 +119,8 @@ class SettingsProfileDevModeRobolectricTest {
         )
         composeTestRule.onNodeWithTag("settings_language_expand_button").performScrollTo().performClick()
         composeTestRule.onNodeWithTag("settings_lang_pt").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_lang_zh").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_lang_ja").performScrollTo().assertIsDisplayed()
 
         // Network & Port + Bridge mode are collapsed initially and visible after expanding
         assertTrue(
