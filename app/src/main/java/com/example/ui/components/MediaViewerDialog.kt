@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
+import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
@@ -124,10 +125,7 @@ private fun ImmersiveFullscreenDialogWindow() {
             }
         }
         onDispose {
-            // Re-sync underlying Activity insets on dismiss so status/nav bars & IME never stay broken
-            dialogWindow?.let { w ->
-                WindowCompat.getInsetsController(w, view).show(WindowInsetsCompat.Type.systemBars())
-            }
+            // Re-sync underlying Activity insets on dismiss without mutating the closing dialog surface
             context.findActivity()?.window?.let { activityWindow ->
                 WindowCompat.getInsetsController(activityWindow, activityWindow.decorView)
                     .show(WindowInsetsCompat.Type.systemBars())
@@ -233,6 +231,8 @@ fun FullScreenVideoPlayerDialog(
     var playbackError by remember(videoPath) { mutableStateOf<PlaybackException?>(null) }
     var showControls by remember(videoPath) { mutableStateOf(true) }
 
+    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+
     val exoPlayer = remember(videoPath) {
         val renderersFactory = DefaultRenderersFactory(context).setEnableDecoderFallback(true)
         ExoPlayer.Builder(context, renderersFactory).build().apply {
@@ -257,7 +257,14 @@ fun FullScreenVideoPlayerDialog(
         }
         exoPlayer.addListener(listener)
         onDispose {
+            playerViewRef?.let { pv ->
+                pv.setControllerVisibilityListener(null as PlayerView.ControllerVisibilityListener?)
+                pv.player = null
+            }
+            playerViewRef = null
             exoPlayer.removeListener(listener)
+            exoPlayer.stop()
+            exoPlayer.clearVideoSurface()
             exoPlayer.release()
         }
     }
@@ -279,7 +286,9 @@ fun FullScreenVideoPlayerDialog(
             AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
-                    PlayerView(ctx).apply {
+                    val inflated = LayoutInflater.from(ctx)
+                        .inflate(R.layout.view_chatso_player, null, false) as PlayerView
+                    inflated.apply {
                         useController = true
                         keepScreenOn = true
                         controllerShowTimeoutMs = 3000
@@ -291,11 +300,22 @@ fun FullScreenVideoPlayerDialog(
                             }
                         )
                         player = exoPlayer
-                    }
+                    }.also { playerViewRef = it }
                 },
                 update = { playerView ->
+                    playerViewRef = playerView
                     if (playerView.player !== exoPlayer) {
                         playerView.player = exoPlayer
+                    }
+                },
+                onReset = { playerView ->
+                    playerView.player = null
+                },
+                onRelease = { playerView ->
+                    playerView.setControllerVisibilityListener(null as PlayerView.ControllerVisibilityListener?)
+                    playerView.player = null
+                    if (playerViewRef === playerView) {
+                        playerViewRef = null
                     }
                 }
             )

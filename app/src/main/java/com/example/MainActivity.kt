@@ -391,7 +391,7 @@ private fun ChatsoAuthenticatedShell(
 
     val onChangeLanguage = { lang: com.example.data.AppLanguage ->
         viewModel.setLanguage(lang) {
-            activity?.recreate()
+            activity?.takeIf { !it.isFinishing && !it.isDestroyed }?.recreate()
         }
     }
 

@@ -85,6 +85,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.data.DiscoveredPeer
@@ -870,9 +871,20 @@ private fun CameraQrScannerPreview(onQrDetected: (String) -> Unit) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
     var alreadyEmitted by remember { mutableStateOf(false) }
+    var isDisposed by remember { mutableStateOf(false) }
+    var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    var boundPreview by remember { mutableStateOf<Preview?>(null) }
+    var boundAnalysis by remember { mutableStateOf<ImageAnalysis?>(null) }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(lifecycleOwner) {
         onDispose {
+            isDisposed = true
+            boundPreview?.surfaceProvider = null
+            boundAnalysis?.clearAnalyzer()
+            runCatching { boundCameraProvider?.unbindAll() }
+            boundPreview = null
+            boundAnalysis = null
+            boundCameraProvider = null
             executor.shutdown()
         }
     }
@@ -880,9 +892,14 @@ private fun CameraQrScannerPreview(onQrDetected: (String) -> Unit) {
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
-            val previewView = PreviewView(ctx)
+            val previewView = PreviewView(ctx).apply {
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            }
             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
             cameraProviderFuture.addListener({
+                if (isDisposed || lifecycleOwner.lifecycle.currentState == Lifecycle.State.DESTROYED) {
+                    return@addListener
+                }
                 runCatching {
                     val cameraProvider = cameraProviderFuture.get()
                     val preview = Preview.Builder().build().also {
@@ -893,12 +910,18 @@ private fun CameraQrScannerPreview(onQrDetected: (String) -> Unit) {
                         .build()
                         .also { imageAnalysis ->
                             imageAnalysis.setAnalyzer(executor) { imageProxy ->
-                                val decoded = QrCodeHelper.decodeFromImageProxy(imageProxy)
-                                if (!decoded.isNullOrBlank() && !alreadyEmitted) {
-                                    alreadyEmitted = true
-                                    ContextCompat.getMainExecutor(ctx).execute {
-                                        onQrDetected(decoded)
+                                try {
+                                    val decoded = QrCodeHelper.decodeFromImageProxy(imageProxy)
+                                    if (!decoded.isNullOrBlank() && !alreadyEmitted && !isDisposed) {
+                                        alreadyEmitted = true
+                                        ContextCompat.getMainExecutor(ctx).execute {
+                                            if (!isDisposed) {
+                                                onQrDetected(decoded)
+                                            }
+                                        }
                                     }
+                                } finally {
+                                    runCatching { imageProxy.close() }
                                 }
                             }
                         }
@@ -909,9 +932,17 @@ private fun CameraQrScannerPreview(onQrDetected: (String) -> Unit) {
                         preview,
                         analysis
                     )
+                    boundCameraProvider = cameraProvider
+                    boundPreview = preview
+                    boundAnalysis = analysis
                 }
             }, ContextCompat.getMainExecutor(ctx))
             previewView
+        },
+        onRelease = {
+            boundPreview?.surfaceProvider = null
+            boundAnalysis?.clearAnalyzer()
+            runCatching { boundCameraProvider?.unbindAll() }
         }
     )
 }
