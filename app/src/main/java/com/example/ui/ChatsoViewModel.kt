@@ -182,7 +182,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     fun refreshEndpoints() {
         viewModelScope.launch(Dispatchers.IO) {
-            _endpoints.value = NetworkUtils.getActiveEndpoints()
+            _endpoints.value = NetworkUtils.getActiveEndpoints(getApplication())
         }
     }
 

@@ -5,6 +5,7 @@ import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import android.os.Build
 import com.example.R
 import com.example.crypto.CryptoEngine
 import com.example.data.DiscoveredPeer
@@ -14,6 +15,7 @@ import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -165,13 +167,49 @@ class DiscoveryManager(
                     val senderPeerId = json.optString("peerId")
                     if (senderPeerId == current.peerId) continue
                     val replyBytes = buildBeaconJson(current, "ANNOUNCE").toByteArray(Charsets.UTF_8)
-                    val replyPacket = DatagramPacket(
-                        replyBytes,
-                        replyBytes.size,
-                        packet.address,
-                        packet.port
-                    )
-                    socket.send(replyPacket)
+                    val senderIp = NetworkUtils.normalizeHost(packet.address.hostAddress ?: "")
+                    val replyNet = NetworkUtils.findAndroidNetworkForIp(context, senderIp)
+                        ?: if (NetworkUtils.hasActiveVpn(context) &&
+                            NetworkUtils.isAlwaysLocalLanIp(senderIp) &&
+                            !NetworkUtils.isIpInActiveVpnSubnet(context, senderIp)
+                        ) {
+                            NetworkUtils.getNonVpnNetworks(context, preferLanOnly = true).firstOrNull()
+                        } else {
+                            null
+                        }
+                    var sentViaBoundNet = false
+                    if (replyNet != null && !NetworkUtils.isVpnNetwork(context, replyNet)) {
+                        sentViaBoundNet = runCatching {
+                            val localBindIp = NetworkUtils.findLocalIpForNetwork(context, replyNet)
+                            val boundSock = if (!localBindIp.isNullOrBlank()) {
+                                runCatching { DatagramSocket(InetSocketAddress(localBindIp, 0)) }
+                                    .getOrElse { DatagramSocket() }
+                            } else {
+                                DatagramSocket()
+                            }
+                            boundSock.use { rs ->
+                                replyNet.bindSocket(rs)
+                                rs.send(
+                                    DatagramPacket(
+                                        replyBytes,
+                                        replyBytes.size,
+                                        packet.address,
+                                        packet.port
+                                    )
+                                )
+                            }
+                            true
+                        }.getOrDefault(false)
+                    }
+                    if (!sentViaBoundNet) {
+                        val replyPacket = DatagramPacket(
+                            replyBytes,
+                            replyBytes.size,
+                            packet.address,
+                            packet.port
+                        )
+                        socket.send(replyPacket)
+                    }
                 } else if (type == "ANNOUNCE") {
                     val senderIp = NetworkUtils.normalizeHost(packet.address.hostAddress ?: "")
                     val badge = if (packet.address.isLoopbackAddress ||
@@ -303,8 +341,10 @@ class DiscoveryManager(
         for (target in nonLoopbackTargets) {
             launch(Dispatchers.IO) {
                 try {
-                    val sock = if (target.androidNetwork != null) {
-                        DatagramSocket().also { s ->
+                    val sock = if (target.kind == EndpointKind.LAN && target.androidNetwork != null) {
+                        runCatching {
+                            DatagramSocket(InetSocketAddress(target.ipAddress, 0))
+                        }.getOrElse { DatagramSocket() }.also { s ->
                             runCatching { target.androidNetwork.bindSocket(s) }
                         }
                     } else {
@@ -403,11 +443,15 @@ class DiscoveryManager(
         }
         if (networkTargets.isEmpty()) return@withContext
 
+        val vpnActive = NetworkUtils.hasActiveVpn(context)
+        val fallbackLanNetwork = if (vpnActive) {
+            NetworkUtils.getNonVpnNetworks(context, preferLanOnly = true).firstOrNull()
+        } else {
+            null
+        }
         val portsToProbe = listOf(identity.listenPort, LocalIdentity.DEFAULT_TCP_PORT).distinct()
-        // Cap total concurrent subnet probes below Dispatchers.IO's 64-thread limit so
-        // localhost, knownTargets, UDP, and mDNS always have free threads available.
-        val globalSemaphore = Semaphore(40)
-        val perNetworkWorkers = (40 / networkTargets.size).coerceIn(10, 40)
+        val globalSemaphore = Semaphore(64)
+        val perNetworkWorkers = (64 / networkTargets.size).coerceIn(24, 64)
 
         coroutineScope {
             for (ep in networkTargets) {
@@ -432,6 +476,20 @@ class DiscoveryManager(
                     }
                 }
 
+                val isVpnTarget = ep.kind == EndpointKind.VPN
+                val targetNet = if (isVpnTarget) {
+                    // Use default routing (tun0) for VPN peers to avoid TRANSPORT_VPN bindSocket restrictions
+                    null
+                } else {
+                    ep.androidNetwork ?: fallbackLanNetwork
+                }
+                val allowFallback = if (isVpnTarget) {
+                    true
+                } else {
+                    targetNet == null && !vpnActive
+                }
+                val connectTimeout = if (isVpnTarget) 260 else 190
+
                 launch {
                     coroutineScope {
                         repeat(perNetworkWorkers) {
@@ -443,10 +501,10 @@ class DiscoveryManager(
                                             ip = target.first,
                                             port = target.second,
                                             badge = ep.kind.badge,
-                                            connectTimeoutMs = 90,
-                                            readTimeoutMs = 150,
-                                            androidNetwork = ep.androidNetwork,
-                                            allowFallback = false
+                                            connectTimeoutMs = connectTimeout,
+                                            readTimeoutMs = 350,
+                                            androidNetwork = targetNet,
+                                            allowFallback = allowFallback
                                         )
                                     }
                                 }
@@ -700,7 +758,15 @@ class DiscoveryManager(
                         nsdManager?.resolveService(service, object : NsdManager.ResolveListener {
                             override fun onResolveFailed(info: NsdServiceInfo, code: Int) {}
                             override fun onServiceResolved(info: NsdServiceInfo) {
-                                val rawIp = info.host?.hostAddress ?: return
+                                val resolvedAddr = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                    runCatching {
+                                        info.hostAddresses.firstOrNull { it is Inet4Address }
+                                            ?: info.hostAddresses.firstOrNull()
+                                    }.getOrNull() ?: info.host
+                                } else {
+                                    info.host
+                                }
+                                val rawIp = resolvedAddr?.hostAddress ?: return
                                 val hostIp = NetworkUtils.normalizeHost(rawIp)
                                 val badge = if (NetworkUtils.isLoopbackHost(hostIp) || NetworkUtils.isEmulatorHost(hostIp)) {
                                     EndpointKind.LOCALHOST.badge

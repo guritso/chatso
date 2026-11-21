@@ -1974,4 +1974,102 @@ class ExampleRobolectricTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `wireguard full-tunnel 0_0_0_0 allows dual LAN 192_168_18_0_24 bypass and VPN discovery`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val shadowCm = org.robolectric.Shadows.shadowOf(cm)
+
+        val wifiNet = org.robolectric.shadows.ShadowNetwork.newInstance(301)
+        val vpnNet = org.robolectric.shadows.ShadowNetwork.newInstance(302)
+        val wifiCaps = org.robolectric.shadows.ShadowNetworkCapabilities.newInstance().also { caps ->
+            val sc = org.robolectric.Shadows.shadowOf(caps)
+            sc.addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+            sc.addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        val vpnCaps = org.robolectric.shadows.ShadowNetworkCapabilities.newInstance().also { caps ->
+            val sc = org.robolectric.Shadows.shadowOf(caps)
+            sc.addTransportType(android.net.NetworkCapabilities.TRANSPORT_VPN)
+            sc.addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        @Suppress("DEPRECATION")
+        val wifiInfo = org.robolectric.shadows.ShadowNetworkInfo.newInstance(
+            android.net.NetworkInfo.DetailedState.CONNECTED,
+            android.net.ConnectivityManager.TYPE_WIFI,
+            0,
+            true,
+            android.net.NetworkInfo.State.CONNECTED
+        )
+        @Suppress("DEPRECATION")
+        val vpnInfo = org.robolectric.shadows.ShadowNetworkInfo.newInstance(
+            android.net.NetworkInfo.DetailedState.CONNECTED,
+            android.net.ConnectivityManager.TYPE_VPN,
+            0,
+            true,
+            android.net.NetworkInfo.State.CONNECTED
+        )
+
+        val linkAddrCtor = android.net.LinkAddress::class.java.getConstructor(
+            java.net.InetAddress::class.java,
+            Int::class.javaPrimitiveType
+        )
+        val wifiLinkAddr = linkAddrCtor.newInstance(java.net.InetAddress.getByName("192.168.18.37"), 24)
+        val vpnLinkAddr = linkAddrCtor.newInstance(java.net.InetAddress.getByName("10.66.66.2"), 32)
+
+        val addLinkAddrMethod = android.net.LinkProperties::class.java.getMethod(
+            "addLinkAddress",
+            android.net.LinkAddress::class.java
+        )
+        val wifiLp = android.net.LinkProperties().apply {
+            interfaceName = "wlan_wg_test0"
+            addLinkAddrMethod.invoke(this, wifiLinkAddr)
+        }
+        val vpnLp = android.net.LinkProperties().apply {
+            interfaceName = "tun_wg_test0"
+            addLinkAddrMethod.invoke(this, vpnLinkAddr)
+        }
+
+        shadowCm.addNetwork(wifiNet, wifiInfo)
+        shadowCm.addNetwork(vpnNet, vpnInfo)
+        shadowCm.setNetworkCapabilities(wifiNet, wifiCaps)
+        shadowCm.setNetworkCapabilities(vpnNet, vpnCaps)
+        shadowCm.setLinkProperties(wifiNet, wifiLp)
+        shadowCm.setLinkProperties(vpnNet, vpnLp)
+
+        // Verify ConnectivityManager LinkProperties fallback discovers BOTH LAN and VPN targets
+        val targets = com.example.network.NetworkUtils.getActiveNetworkScanTargets(context)
+        val lanTarget = targets.firstOrNull { it.ipAddress == "192.168.18.37" }
+        val vpnTarget = targets.firstOrNull { it.ipAddress == "10.66.66.2" }
+        assertNotNull("Expected Wi-Fi target 192.168.18.37 from ConnectivityManager", lanTarget)
+        assertNotNull("Expected WireGuard target 10.66.66.2 from ConnectivityManager", vpnTarget)
+        assertEquals(com.example.data.EndpointKind.LAN, lanTarget!!.kind)
+        assertEquals("192.168.18.255", lanTarget.broadcastAddress)
+        assertEquals(wifiNet, lanTarget.androidNetwork)
+        assertEquals(com.example.data.EndpointKind.VPN, vpnTarget!!.kind)
+        assertEquals(vpnNet, vpnTarget.androidNetwork)
+
+        val endpoints = com.example.network.NetworkUtils.getActiveEndpoints(context)
+        assertTrue(endpoints.any { it.ipAddress == "192.168.18.37" && it.kind == com.example.data.EndpointKind.LAN })
+        assertTrue(endpoints.any { it.ipAddress == "10.66.66.2" && it.kind == com.example.data.EndpointKind.VPN })
+
+        // LAN peer (192.168.18.50) must match wifiNet and bypass WireGuard 0.0.0.0/0
+        assertEquals(wifiNet, com.example.network.NetworkUtils.findAndroidNetworkForIp(context, "192.168.18.50"))
+        assertEquals("192.168.18.37", com.example.network.NetworkUtils.findLocalIpForNetwork(context, wifiNet))
+        val lanAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "192.168.18.50")
+        assertEquals(wifiNet, lanAttempts.firstOrNull()?.androidNetwork)
+
+        // Unmatched local 192.168.x.x or mDNS IPv6 link-local (under AllowedIPs = ::/0) must also try wifiNet before default VPN route
+        val ipv6LanAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "fe80::1a2b:3c4d%wlan0")
+        assertTrue(ipv6LanAttempts.firstOrNull()?.androidNetwork != null)
+        assertTrue(ipv6LanAttempts.firstOrNull()?.androidNetwork != vpnNet)
+
+        // WireGuard VPN peer (10.66.66.5) must use default system/tun0 routing first (androidNetwork == null),
+        // never forcing wifiNet or failing on restricted TRANSPORT_VPN bindSocket
+        assertNull(com.example.network.NetworkUtils.findAndroidNetworkForIp(context, "10.66.66.5"))
+        assertTrue(com.example.network.NetworkUtils.isIpInActiveVpnSubnet(context, "10.66.66.5"))
+        val vpnAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "10.66.66.5", preferredNetwork = vpnNet)
+        assertNull("Expected default tun0 routing first for WireGuard VPN peer", vpnAttempts.firstOrNull()?.androidNetwork)
+        assertTrue(vpnAttempts.none { it.androidNetwork == wifiNet })
+    }
 }
