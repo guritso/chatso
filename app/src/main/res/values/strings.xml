@@ -174,6 +174,7 @@
     <string name="replying_to">Replying to %1$s</string>
     <string name="copy_text_action">Copy</string>
     <string name="transfers_title">Active transfers (%1$d)</string>
+    <string name="transfer_compressing">Compressing</string>
     <string name="transfer_uploading">Uploading</string>
     <string name="transfer_downloading">Downloading</string>
 
@@ -304,7 +305,6 @@
     <string name="msg_bridge_off">Bridge mode disabled.</string>
     <string name="msg_message_queued">Contact offline · Will send when reconnected.</string>
     <string name="contact_profile_title">Contact Info</string>
-    <string name="contact_tap_photo_hint">Tap photo to view</string>
     <string name="contact_network_label">Address</string>
     <string name="contact_verification_label">Encryption</string>
     <string name="contact_verified_short">Verified</string>
@@ -314,7 +314,18 @@
     <string name="chat_bridge_notice_generic">Chatting with a bridged user · E2EE</string>
     <string name="chat_bridge_notice_with_name">Chatting via bridge (%1$s) · E2EE</string>
     <string name="chat_status_via_bridge_suffix">· Via bridge</string>
-    <string name="dev_bridge_section">Bridge Diagnostics</string>
+    <string name="dev_bridge_section">Bridge Diagnostics &amp; Sandbox</string>
+    <string name="dev_bridge_mode_toggle">Enable bridge mode</string>
+    <string name="dev_create_bridged_fake_btn">Create bridged fake contact</string>
+    <string name="dev_run_bridge_test_btn">Test Bridge Connection (A ↔ Me ↔ C)</string>
+    <string name="dev_reset_bridge_stats_btn">Reset</string>
+    <string name="dev_sim_read_receipt_btn">Mark mine read</string>
+    <string name="dev_bridge_sandbox_name">Bridge Sandbox</string>
+    <string name="dev_msg_bridge_test_ok">Bridge relay test passed (A ↔ Me ↔ C · E2EE).</string>
+    <string name="dev_msg_bridge_test_fail">Bridge test failed: %1$s</string>
+    <string name="dev_msg_bridge_stats_reset">Bridge stats cleared.</string>
+    <string name="dev_msg_read_receipts_sent">Marked %1$d outgoing message(s) as read.</string>
+    <string name="dev_msg_no_outgoing_for_receipt">No unread outgoing messages for this contact.</string>
     <string name="dev_bridge_status_label">Bridge state</string>
     <string name="dev_bridge_status_active">ACTIVE</string>
     <string name="dev_bridge_status_off">DISABLED</string>

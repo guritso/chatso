@@ -111,11 +111,17 @@ class MediaStorageHelper(private val context: Context) {
 
     suspend fun saveProfileAvatar(sourceUri: Uri): String? = withContext(Dispatchers.IO) {
         try {
-            val decoded = loadBitmapForCrop(sourceUri, 512) ?: return@withContext null
-            val scaled = scaleCenterSquare(decoded, 256)
+            val decoded = loadBitmapForCrop(sourceUri, 1024) ?: return@withContext null
+            val scaled = scaleCenterSquare(decoded, 800)
+            if (scaled !== decoded && !decoded.isRecycled) {
+                decoded.recycle()
+            }
             val destFile = File(avatarsDir, "local_avatar_${System.currentTimeMillis()}.jpg")
             FileOutputStream(destFile).use { out ->
-                scaled.compress(Bitmap.CompressFormat.JPEG, 88, out)
+                scaled.compress(Bitmap.CompressFormat.JPEG, 90, out)
+            }
+            if (!scaled.isRecycled) {
+                scaled.recycle()
             }
             // Clean up older local avatar files
             avatarsDir.listFiles()?.forEach { f ->
@@ -145,13 +151,50 @@ class MediaStorageHelper(private val context: Context) {
     suspend fun encodeAvatarBase64(avatarPath: String?): String? = withContext(Dispatchers.IO) {
         if (avatarPath.isNullOrBlank()) return@withContext null
         val file = File(avatarPath)
-        if (!file.exists() || file.length() > 250_000L) return@withContext null
+        if (!file.exists() || file.length() > 8_000_000L) return@withContext null
         try {
-            val decoded = BitmapFactory.decodeFile(file.absolutePath) ?: return@withContext null
-            val thumb = scaleCenterSquare(decoded, 128)
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, boundsOpts)
+            val rawW = boundsOpts.outWidth
+            val rawH = boundsOpts.outHeight
+            if (rawW <= 0 || rawH <= 0) return@withContext null
+            var sampleSize = 1
+            while (rawW / sampleSize > 1280 || rawH / sampleSize > 1280) {
+                sampleSize *= 2
+            }
+            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            val decoded = BitmapFactory.decodeFile(file.absolutePath, decodeOpts) ?: return@withContext null
+            val hiRes = scaleCenterSquare(decoded, 640)
+            if (hiRes !== decoded && !decoded.isRecycled) {
+                decoded.recycle()
+            }
+            val maxRawBytes = 165_000
             val out = ByteArrayOutputStream()
-            thumb.compress(Bitmap.CompressFormat.JPEG, 75, out)
-            Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+            var encodedBytes: ByteArray? = null
+            for (q in intArrayOf(88, 78, 68, 58)) {
+                out.reset()
+                hiRes.compress(Bitmap.CompressFormat.JPEG, q, out)
+                if (out.size() <= maxRawBytes) {
+                    encodedBytes = out.toByteArray()
+                    break
+                }
+            }
+            if (encodedBytes == null) {
+                val fallback = scaleCenterSquare(hiRes, 512)
+                for (q in intArrayOf(72, 60, 50)) {
+                    out.reset()
+                    fallback.compress(Bitmap.CompressFormat.JPEG, q, out)
+                    encodedBytes = out.toByteArray()
+                    if (out.size() <= maxRawBytes) break
+                }
+                if (fallback !== hiRes && !fallback.isRecycled) {
+                    fallback.recycle()
+                }
+            }
+            if (!hiRes.isRecycled) {
+                hiRes.recycle()
+            }
+            encodedBytes?.let { Base64.encodeToString(it, Base64.NO_WRAP) }
         } catch (_: Exception) {
             null
         }
@@ -260,6 +303,51 @@ class MediaStorageHelper(private val context: Context) {
             null
         } finally {
             runCatching { retriever.release() }
+        }
+    }
+
+    fun readMediaDimensions(file: File, isVideo: Boolean): Pair<Int, Int> {
+        if (!file.exists() || file.length() <= 0L) return 0 to 0
+        return if (isVideo) {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(file.absolutePath)
+                val w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                val h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                if (w > 0 && h > 0) {
+                    if (rot == 90 || rot == 270) h to w else w to h
+                } else {
+                    0 to 0
+                }
+            } catch (_: Exception) {
+                0 to 0
+            } finally {
+                runCatching { retriever.release() }
+            }
+        } else {
+            try {
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeFile(file.absolutePath, opts)
+                val w = opts.outWidth
+                val h = opts.outHeight
+                if (w <= 0 || h <= 0) return 0 to 0
+                val orientation = runCatching {
+                    android.media.ExifInterface(file.absolutePath).getAttributeInt(
+                        android.media.ExifInterface.TAG_ORIENTATION,
+                        android.media.ExifInterface.ORIENTATION_NORMAL
+                    )
+                }.getOrDefault(android.media.ExifInterface.ORIENTATION_NORMAL)
+                when (orientation) {
+                    android.media.ExifInterface.ORIENTATION_ROTATE_90,
+                    android.media.ExifInterface.ORIENTATION_ROTATE_270,
+                    android.media.ExifInterface.ORIENTATION_TRANSPOSE,
+                    android.media.ExifInterface.ORIENTATION_TRANSVERSE -> h to w
+                    else -> w to h
+                }
+            } catch (_: Exception) {
+                0 to 0
+            }
         }
     }
 

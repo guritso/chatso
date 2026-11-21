@@ -174,6 +174,7 @@
     <string name="replying_to">Réponse à %1$s</string>
     <string name="copy_text_action">Copier</string>
     <string name="transfers_title">Transferts actifs (%1$d)</string>
+    <string name="transfer_compressing">Compression</string>
     <string name="transfer_uploading">Envoi</string>
     <string name="transfer_downloading">Réception</string>
 
@@ -304,7 +305,6 @@
     <string name="msg_bridge_off">Mode pont désactivé.</string>
     <string name="msg_message_queued">Contact hors ligne · Sera envoyé à la reconnexion.</string>
     <string name="contact_profile_title">Profil du Contact</string>
-    <string name="contact_tap_photo_hint">Appuyez sur la photo pour agrandir</string>
     <string name="contact_network_label">Adresse</string>
     <string name="contact_verification_label">Chiffrement</string>
     <string name="contact_verified_short">Vérifié</string>
@@ -314,7 +314,18 @@
     <string name="chat_bridge_notice_generic">Discussion avec un utilisateur via pont · E2EE</string>
     <string name="chat_bridge_notice_with_name">Discussion via pont (%1$s) · E2EE</string>
     <string name="chat_status_via_bridge_suffix">· Via pont</string>
-    <string name="dev_bridge_section">Diagnostics du Pont</string>
+    <string name="dev_bridge_section">Diagnostics et Test du Pont</string>
+    <string name="dev_bridge_mode_toggle">Activer le mode pont</string>
+    <string name="dev_create_bridged_fake_btn">Créer un faux contact via pont</string>
+    <string name="dev_run_bridge_test_btn">Tester le pont (A ↔ Moi ↔ C)</string>
+    <string name="dev_reset_bridge_stats_btn">Réinitialiser</string>
+    <string name="dev_sim_read_receipt_btn">Marquer mes messages lus</string>
+    <string name="dev_bridge_sandbox_name">Pont Sandbox</string>
+    <string name="dev_msg_bridge_test_ok">Test du pont réussi (A ↔ Moi ↔ C · E2EE).</string>
+    <string name="dev_msg_bridge_test_fail">Échec du test du pont : %1$s</string>
+    <string name="dev_msg_bridge_stats_reset">Statistiques du pont réinitialisées.</string>
+    <string name="dev_msg_read_receipts_sent">%1$d message(s) marqué(s) comme lu(s).</string>
+    <string name="dev_msg_no_outgoing_for_receipt">Aucun message envoyé non lu pour ce contact.</string>
     <string name="dev_bridge_status_label">État du pont</string>
     <string name="dev_bridge_status_active">ACTIF</string>
     <string name="dev_bridge_status_off">DÉSACTIVÉ</string>

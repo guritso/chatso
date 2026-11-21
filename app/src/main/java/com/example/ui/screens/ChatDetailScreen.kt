@@ -145,7 +145,6 @@ import com.example.ui.components.AttachmentsMenuTray
 import com.example.ui.components.ChatMessageBubbleItem
 import com.example.ui.components.ChatsoAvatar
 import com.example.ui.components.ComposerTrayMode
-import com.example.ui.components.ContactProfileDialog
 import com.example.ui.components.FloatingTransfersOverlay
 import com.example.ui.components.FullScreenImageViewerDialog
 import com.example.ui.components.FullScreenVideoPlayerDialog
@@ -302,7 +301,7 @@ fun ChatDetailScreen(
     var showMoreMenu by remember { mutableStateOf(false) }
     var showSelfDestructDialog by remember { mutableStateOf(false) }
     var showSafetyDialog by remember { mutableStateOf(false) }
-    var showContactProfileDialog by remember { mutableStateOf(false) }
+    var showContactProfile by rememberSaveable(peer.peerId) { mutableStateOf(false) }
     var viewerPayload by remember { mutableStateOf<ViewerMediaPayload?>(null) }
     var actionDialogMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var transfersExpanded by remember { mutableStateOf(false) }
@@ -594,11 +593,12 @@ fun ChatDetailScreen(
     val isConnected = presence != PeerPresence.OFFLINE
     var composerOverlayHeightDp by remember { mutableStateOf(72.dp) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+        ) {
         // Flat Header Bar matching chat canvas
         Surface(
             color = MaterialTheme.colorScheme.background,
@@ -630,7 +630,7 @@ fun ChatDetailScreen(
                         .weight(1f)
                         .clip(MaterialTheme.shapes.small)
                         .minimumInteractiveComponentSize()
-                        .clickable { showContactProfileDialog = true }
+                        .clickable { showContactProfile = true }
                         .padding(horizontal = 4.dp, vertical = 2.dp)
                         .testTag("chat_header_profile_button")
                 ) {
@@ -796,7 +796,7 @@ fun ChatDetailScreen(
                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { showContactProfileDialog = true }
+                    .clickable { showContactProfile = true }
                     .testTag("chat_bridge_notice_banner")
             ) {
                 Row(
@@ -909,6 +909,7 @@ fun ChatDetailScreen(
                                 peerUsername = peer.username,
                                 nowClockFlow = nowClockFlow,
                                 voicePlaybackState = voicePlaybackState,
+                                activeTransfer = activeTransfers.firstOrNull { it.messageId == message.messageId },
                                 onToggleVoice = onToggleVoicePlayback,
                                 onOpenImageFullscreen = { path, fileName ->
                                     viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.IMAGE, path, fileName)
@@ -1624,23 +1625,23 @@ fun ChatDetailScreen(
         )
     }
 
-    if (showContactProfileDialog) {
-        ContactProfileDialog(
-            peer = peer,
-            presence = presence,
-            selfDestructLabel = SelfDestructOption.fromSeconds(peer.selfDestructSeconds).localizedLabel(),
-            bridgePeerName = bridgePeerName,
-            onDismiss = { showContactProfileDialog = false },
-            onViewAvatar = { path ->
-                showContactProfileDialog = false
-                viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.IMAGE, path, peer.username)
-            },
-            onOpenSafetyNumber = {
-                showContactProfileDialog = false
-                showSafetyDialog = true
-            },
-            onNotify = onNotify
-        )
+        if (showContactProfile) {
+            ContactProfileScreen(
+                peer = peer,
+                presence = presence,
+                selfDestructLabel = SelfDestructOption.fromSeconds(peer.selfDestructSeconds).localizedLabel(),
+                bridgePeerName = bridgePeerName,
+                onBack = { showContactProfile = false },
+                onViewAvatar = { path ->
+                    viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.IMAGE, path, peer.username)
+                },
+                onOpenSafetyNumber = {
+                    showContactProfile = false
+                    showSafetyDialog = true
+                },
+                onNotify = onNotify
+            )
+        }
     }
 
     viewerPayload?.let { payload ->

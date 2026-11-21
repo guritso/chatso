@@ -16,10 +16,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.PeerPresence
 import com.example.ui.theme.OnlineEmerald
 import com.example.ui.theme.WarningAmber
@@ -35,9 +38,19 @@ fun ChatsoAvatar(
     showPresenceDot: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
+    val density = LocalDensity.current
+    val targetPx = with(density) { size.roundToPx().coerceAtLeast(1) }
     val resolvedModel = when (avatarModel) {
         is String -> avatarModel.takeIf { it.isNotBlank() }?.let { File(it) }?.takeIf { it.exists() }
         else -> avatarModel
+    }
+    val sizedRequest = resolvedModel?.let { model ->
+        ImageRequest.Builder(context)
+            .data(model)
+            .size(targetPx)
+            .crossfade(false)
+            .build()
     }
     val initials = name.trim()
         .split(" ", "_", "-")
@@ -54,9 +67,9 @@ fun ChatsoAvatar(
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center
         ) {
-            if (resolvedModel != null) {
+            if (sizedRequest != null) {
                 AsyncImage(
-                    model = resolvedModel,
+                    model = sizedRequest,
                     contentDescription = "Profile photo of $name",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()

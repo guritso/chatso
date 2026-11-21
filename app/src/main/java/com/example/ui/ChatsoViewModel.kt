@@ -398,12 +398,57 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    private val _isRunningBridgeTest = MutableStateFlow(false)
+    val isRunningBridgeTest: StateFlow<Boolean> = _isRunningBridgeTest.asStateFlow()
+
     fun devCreateFakePeer(username: String, onCreated: (PeerEntity) -> Unit = {}) {
         viewModelScope.launch {
             val peer = repository.devCreateFakePeer(username)
             _snackbarMessage.value = str(R.string.dev_msg_fake_created, peer.username)
             onCreated(peer)
         }
+    }
+
+    fun devCreateBridgedFakePeer(username: String = "", onCreated: (PeerEntity) -> Unit = {}) {
+        viewModelScope.launch {
+            val peer = repository.devCreateBridgedFakePeer(username)
+            _snackbarMessage.value = str(R.string.dev_msg_fake_created, peer.username)
+            onCreated(peer)
+        }
+    }
+
+    fun devMarkOutgoingMessagesRead(peerId: String) {
+        viewModelScope.launch {
+            val count = repository.devMarkOutgoingMessagesRead(peerId)
+            _snackbarMessage.value = if (count > 0) {
+                str(R.string.dev_msg_read_receipts_sent, count)
+            } else {
+                str(R.string.dev_msg_no_outgoing_for_receipt)
+            }
+        }
+    }
+
+    fun devRunLoopbackBridgeTest() {
+        if (_isRunningBridgeTest.value) return
+        viewModelScope.launch {
+            _isRunningBridgeTest.value = true
+            try {
+                val res = repository.devRunLoopbackBridgeTest()
+                _snackbarMessage.value = res.fold(
+                    onSuccess = { str(R.string.dev_msg_bridge_test_ok) },
+                    onFailure = { err ->
+                        str(R.string.dev_msg_bridge_test_fail, err.message ?: "Error")
+                    }
+                )
+            } finally {
+                _isRunningBridgeTest.value = false
+            }
+        }
+    }
+
+    fun devResetBridgeTelemetry() {
+        repository.devResetBridgeTelemetry()
+        _snackbarMessage.value = str(R.string.dev_msg_bridge_stats_reset)
     }
 
     fun devSendFakeIncomingMessage(peerId: String, text: String, delaySeconds: Int = 0) {

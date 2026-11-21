@@ -22,9 +22,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.filled.ScheduleSend
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Hub
@@ -33,7 +35,8 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.MarkChatUnread
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PersonAdd
-import androidx.compose.material.icons.filled.ScheduleSend
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.SentimentSatisfied
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
@@ -41,6 +44,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -51,6 +55,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -91,16 +96,22 @@ fun DevModeScreen(
     devAutoReplyEnabled: Boolean,
     scheduledDelayRemainingSec: Int?,
     bridgeTelemetry: BridgeTelemetry = BridgeTelemetry(),
+    isRunningBridgeTest: Boolean = false,
     onBack: () -> Unit,
     onCreateFakePeer: (String, onCreated: (PeerEntity) -> Unit) -> Unit,
+    onCreateBridgedFakePeer: (String, onCreated: (PeerEntity) -> Unit) -> Unit = { _, _ -> },
     onSendFakeIncomingText: (peerId: String, text: String, delaySeconds: Int) -> Unit,
     onSendFakeUnreadBurst: (peerId: String, baseText: String, count: Int) -> Unit,
     onSendFakeMedia: (peerId: String, asSticker: Boolean) -> Unit,
     onSimulateTyping: (peerId: String) -> Unit,
     onSimulateReaction: (peerId: String) -> Unit,
+    onSimulateReadReceipt: (peerId: String) -> Unit = {},
     onTriggerKeyWarning: (PeerEntity) -> Unit,
     onTogglePeerSimulatedOnline: (peerId: String, online: Boolean) -> Unit,
     onToggleAutoReply: (Boolean) -> Unit,
+    onToggleBridgeMode: (Boolean) -> Unit = {},
+    onRunLoopbackBridgeTest: () -> Unit = {},
+    onResetBridgeStats: () -> Unit = {},
     onOpenPeerChat: (peerId: String) -> Unit,
     onClearFakePeers: () -> Unit,
     onNotify: (String) -> Unit
@@ -228,6 +239,30 @@ fun DevModeScreen(
                     Text(stringResource(R.string.dev_create_fake_peer_btn))
                 }
 
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        val name = fakeNameInput
+                        fakeNameInput = ""
+                        onCreateBridgedFakePeer(name) { created ->
+                            selectedPeerId = created.peerId
+                        }
+                    },
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("dev_create_bridged_fake_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Hub,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.dev_create_bridged_fake_btn))
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Spacer(modifier = Modifier.height(10.dp))
@@ -253,12 +288,13 @@ fun DevModeScreen(
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         fakePeers.forEach { peer ->
+                            val chipSuffix = if (peer.viaBridgePeerId.isNotBlank()) " · FAKE · BRIDGE" else " · FAKE"
                             FilterChip(
                                 selected = peer.peerId == selectedPeerId,
                                 onClick = { selectedPeerId = peer.peerId },
                                 label = {
                                     Text(
-                                        text = "${peer.username} · FAKE",
+                                        text = "${peer.username}$chipSuffix",
                                         maxLines = 1,
                                         softWrap = false,
                                         overflow = TextOverflow.Ellipsis
@@ -392,7 +428,7 @@ fun DevModeScreen(
                                 .testTag("dev_send_delayed_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.ScheduleSend,
+                                imageVector = Icons.AutoMirrored.Filled.ScheduleSend,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -549,6 +585,21 @@ fun DevModeScreen(
                         }
 
                         OutlinedButton(
+                            onClick = { onSimulateReadReceipt(selectedPeer.peerId) },
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.testTag("dev_sim_read_receipt_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.DoneAll,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(stringResource(R.string.dev_sim_read_receipt_btn))
+                        }
+
+                        OutlinedButton(
                             onClick = { onTriggerKeyWarning(selectedPeer) },
                             shape = MaterialTheme.shapes.small,
                             modifier = Modifier.testTag("dev_key_warning_button")
@@ -639,14 +690,18 @@ fun DevModeScreen(
             }
         }
 
-        // 5. Bridge Relay Diagnostics Card (shown when bridge mode is enabled or bridge activity exists)
-        if (identity.bridgeEnabled || bridgeTelemetry.relayedFramesTotal > 0 || bridgeTelemetry.activeRoutes.isNotEmpty()) {
-            Card(
-                shape = MaterialTheme.shapes.large,
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                modifier = Modifier.testTag("dev_bridge_section_card")
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+        // 5. Bridge Sandbox Testing & Live Relay Diagnostics Card
+        Card(
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier.testTag("dev_bridge_section_card")
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Filled.Hub,
@@ -660,71 +715,149 @@ fun DevModeScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                     }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    val isBridgeActive = identity.bridgeEnabled || bridgeTelemetry.isEnabled
-                    DiagnosticRow(
-                        label = stringResource(R.string.dev_bridge_status_label),
-                        value = stringResource(
-                            if (isBridgeActive) R.string.dev_bridge_status_active else R.string.dev_bridge_status_off
-                        ),
-                        valueColor = if (isBridgeActive) OnlineEmerald else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    DiagnosticRow(
-                        label = stringResource(R.string.dev_bridge_direct_peers),
-                        value = if (bridgeTelemetry.directPeerNames.isNotEmpty()) {
-                            "${bridgeTelemetry.directSessionCount} (${bridgeTelemetry.directPeerNames.joinToString(", ")})"
-                        } else {
-                            bridgeTelemetry.directSessionCount.toString()
+                    if (bridgeTelemetry.relayedFramesTotal > 0L || bridgeTelemetry.failedRelaysTotal > 0L || bridgeTelemetry.activeRoutes.isNotEmpty()) {
+                        TextButton(
+                            onClick = onResetBridgeStats,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.testTag("dev_reset_bridge_stats_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.RestartAlt,
+                                contentDescription = null,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = stringResource(R.string.dev_reset_bridge_stats_btn),
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                softWrap = false
+                            )
                         }
-                    )
-                    DiagnosticRow(
-                        label = stringResource(R.string.dev_bridge_advertised_peers),
-                        value = if (bridgeTelemetry.advertisedPeerNames.isNotEmpty()) {
-                            "${bridgeTelemetry.advertisedPeerCount} (${bridgeTelemetry.advertisedPeerNames.joinToString(", ")})"
-                        } else {
-                            bridgeTelemetry.advertisedPeerCount.toString()
-                        }
-                    )
-                    DiagnosticRow(
-                        label = stringResource(R.string.dev_bridge_relayed_frames),
-                        value = bridgeTelemetry.relayedFramesTotal.toString()
-                    )
-                    DiagnosticRow(
-                        label = stringResource(R.string.dev_bridge_relayed_bytes),
-                        value = NetworkUtils.formatBytes(bridgeTelemetry.relayedBytesTotal)
-                    )
-                    DiagnosticRow(
-                        label = stringResource(R.string.dev_bridge_failed_relays),
-                        value = bridgeTelemetry.failedRelaysTotal.toString(),
-                        valueColor = if (bridgeTelemetry.failedRelaysTotal > 0L) WarningAmber else MaterialTheme.colorScheme.onSurface
-                    )
+                    }
+                }
 
-                    Spacer(modifier = Modifier.height(8.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
-                    Text(
-                        text = stringResource(R.string.dev_bridge_routes_label),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    if (bridgeTelemetry.activeRoutes.isEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = stringResource(R.string.dev_bridge_no_routes),
+                            text = stringResource(R.string.dev_bridge_mode_toggle),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            text = stringResource(R.string.bridge_mode_desc),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = identity.bridgeEnabled,
+                        onCheckedChange = onToggleBridgeMode,
+                        modifier = Modifier.testTag("dev_bridge_mode_switch")
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Button(
+                    onClick = onRunLoopbackBridgeTest,
+                    enabled = !isRunningBridgeTest,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("dev_run_bridge_test_button")
+                ) {
+                    if (isRunningBridgeTest) {
+                        CircularProgressIndicator(
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(16.dp)
+                        )
                     } else {
-                        bridgeTelemetry.activeRoutes.forEach { route ->
-                            DiagnosticRow(
-                                label = "${route.fromName} → ${route.toName}",
-                                value = "${route.relayedFrames} · ${NetworkUtils.formatBytes(route.relayedBytes)}"
-                            )
-                        }
+                        Icon(
+                            imageVector = Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.dev_run_bridge_test_btn),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(modifier = Modifier.height(10.dp))
+
+                val isBridgeActive = identity.bridgeEnabled || bridgeTelemetry.isEnabled
+                DiagnosticRow(
+                    label = stringResource(R.string.dev_bridge_status_label),
+                    value = stringResource(
+                        if (isBridgeActive) R.string.dev_bridge_status_active else R.string.dev_bridge_status_off
+                    ),
+                    valueColor = if (isBridgeActive) OnlineEmerald else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                DiagnosticRow(
+                    label = stringResource(R.string.dev_bridge_direct_peers),
+                    value = if (bridgeTelemetry.directPeerNames.isNotEmpty()) {
+                        "${bridgeTelemetry.directSessionCount} (${bridgeTelemetry.directPeerNames.joinToString(", ")})"
+                    } else {
+                        bridgeTelemetry.directSessionCount.toString()
+                    }
+                )
+                DiagnosticRow(
+                    label = stringResource(R.string.dev_bridge_advertised_peers),
+                    value = if (bridgeTelemetry.advertisedPeerNames.isNotEmpty()) {
+                        "${bridgeTelemetry.advertisedPeerCount} (${bridgeTelemetry.advertisedPeerNames.joinToString(", ")})"
+                    } else {
+                        bridgeTelemetry.advertisedPeerCount.toString()
+                    }
+                )
+                DiagnosticRow(
+                    label = stringResource(R.string.dev_bridge_relayed_frames),
+                    value = bridgeTelemetry.relayedFramesTotal.toString()
+                )
+                DiagnosticRow(
+                    label = stringResource(R.string.dev_bridge_relayed_bytes),
+                    value = NetworkUtils.formatBytes(bridgeTelemetry.relayedBytesTotal)
+                )
+                DiagnosticRow(
+                    label = stringResource(R.string.dev_bridge_failed_relays),
+                    value = bridgeTelemetry.failedRelaysTotal.toString(),
+                    valueColor = if (bridgeTelemetry.failedRelaysTotal > 0L) WarningAmber else MaterialTheme.colorScheme.onSurface
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = stringResource(R.string.dev_bridge_routes_label),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+
+                if (bridgeTelemetry.activeRoutes.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.dev_bridge_no_routes),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    bridgeTelemetry.activeRoutes.forEach { route ->
+                        DiagnosticRow(
+                            label = "${route.fromName} → ${route.toName}",
+                            value = "${route.relayedFrames} · ${NetworkUtils.formatBytes(route.relayedBytes)}"
+                        )
                     }
                 }
             }

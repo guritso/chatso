@@ -169,12 +169,12 @@ class DiscoveryManager(
     }
 
     fun scanNetworkNow(knownTargets: List<Pair<String, Int>> = emptyList()) {
-        if (_isScanning.value) return
         val identity = latestIdentity
         if (!identity.isInitialized) return
+        if (!_isScanning.compareAndSet(false, true)) return
+        _discoveredPeers.value = emptyMap()
 
         scope.launch(Dispatchers.IO) {
-            _isScanning.value = true
             try {
                 startNsdBrowse()
                 kotlinx.coroutines.withTimeoutOrNull(2500L) {
@@ -193,7 +193,7 @@ class DiscoveryManager(
                             launch {
                                 knownTargets.distinct().forEach { (ip, port) ->
                                     if (ip.isNotBlank()) {
-                                        launch { probeSingleHost(ip, port, "Saved", connectTimeoutMs = 400, readTimeoutMs = 500) }
+                                        launch { probeSingleHost(ip, port, "Saved", connectTimeoutMs = 800, readTimeoutMs = 1000) }
                                     }
                                 }
                             }

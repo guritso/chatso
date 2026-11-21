@@ -4,6 +4,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
+import android.os.Build
+import android.util.LruCache
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
@@ -82,6 +84,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -98,6 +101,7 @@ import com.example.data.MessageEntity
 import com.example.data.MessageType
 import com.example.data.ReactionCodec
 import com.example.data.ReplySenderTags
+import com.example.data.TransferPhase
 import com.example.media.VoicePlaybackState
 import com.example.network.NetworkUtils
 import com.example.ui.theme.DangerCoral
@@ -116,6 +120,7 @@ fun ChatMessageBubbleItem(
     peerUsername: String,
     nowClockFlow: StateFlow<Long>,
     voicePlaybackState: VoicePlaybackState,
+    activeTransfer: ActiveTransferInfo? = null,
     onToggleVoice: (String, String) -> Unit,
     onOpenImageFullscreen: (path: String, fileName: String?) -> Unit,
     onOpenVideoFullscreen: (path: String, fileName: String?) -> Unit,
@@ -131,7 +136,7 @@ fun ChatMessageBubbleItem(
     val isSticker = message.type == MessageType.STICKER.name
     val isTransferActive = message.type != MessageType.TEXT.name &&
         message.status == DeliveryStatus.SENDING.name &&
-        message.transferProgress in 1..99
+        (activeTransfer != null || message.transferProgress in 1..99)
     val isIncomingCancelled = !isOutgoing &&
         message.type != MessageType.TEXT.name &&
         message.status == DeliveryStatus.CANCELLED.name
@@ -157,17 +162,22 @@ fun ChatMessageBubbleItem(
     val formattedTimestamp = remember(message.createdAt) {
         NetworkUtils.formatTimestamp(message.createdAt)
     }
-    val mediaFileReady = remember(message.type, message.mediaLocalPath, message.transferProgress, message.status) {
+    val hasLocalMediaFile = remember(message.type, message.mediaLocalPath, message.status) {
         (message.type == MessageType.IMAGE.name ||
             message.type == MessageType.VIDEO.name ||
             message.type == MessageType.STICKER.name) &&
             message.status != DeliveryStatus.CANCELLED.name &&
             !message.mediaLocalPath.isNullOrBlank() &&
-            message.transferProgress >= 100 &&
             File(message.mediaLocalPath).exists()
     }
-    val effectiveBubbleColor = if (isSticker && mediaFileReady) Color.Transparent else bubbleColor
-    val effectiveSurfaceShape = if (isSticker && mediaFileReady) RoundedCornerShape(12.dp) else bubbleShape
+    val isMediaCompleted = hasLocalMediaFile && message.transferProgress >= 100
+    val isVisualMediaBubble = !isIncomingCancelled && (
+        (message.type == MessageType.IMAGE.name || message.type == MessageType.VIDEO.name) &&
+            (isMediaCompleted || isOutgoing && hasLocalMediaFile || isTransferActive) ||
+            (isSticker && isMediaCompleted)
+        )
+    val effectiveBubbleColor = if (isSticker && isMediaCompleted) Color.Transparent else bubbleColor
+    val effectiveSurfaceShape = if (isSticker && isMediaCompleted) RoundedCornerShape(12.dp) else bubbleShape
 
     val density = LocalDensity.current
     val maxSwipePx = remember(density) { with(density) { 64.dp.toPx() } }
@@ -241,7 +251,7 @@ fun ChatMessageBubbleItem(
                     )
                     .testTag("message_bubble_${message.messageId}")
             ) {
-                val outerPad = if (mediaFileReady) {
+                val outerPad = if (isVisualMediaBubble) {
                     PaddingValues(2.dp)
                 } else {
                     PaddingValues(horizontal = 10.dp, vertical = 6.dp)
@@ -254,7 +264,7 @@ fun ChatMessageBubbleItem(
                         }
                         Surface(
                             shape = RoundedCornerShape(10.dp),
-                            color = if (isSticker && mediaFileReady) {
+                            color = if (isSticker && isMediaCompleted) {
                                 bubbleColor.copy(alpha = 0.92f)
                             } else {
                                 MaterialTheme.colorScheme.surface.copy(alpha = if (isOutgoing) 0.45f else 0.7f)
@@ -262,9 +272,9 @@ fun ChatMessageBubbleItem(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(
-                                    start = if (mediaFileReady) 4.dp else 0.dp,
-                                    end = if (mediaFileReady) 4.dp else 0.dp,
-                                    top = if (mediaFileReady) 4.dp else 0.dp,
+                                    start = if (isVisualMediaBubble) 4.dp else 0.dp,
+                                    end = if (isVisualMediaBubble) 4.dp else 0.dp,
+                                    top = if (isVisualMediaBubble) 4.dp else 0.dp,
                                     bottom = 4.dp
                                 )
                                 .clip(RoundedCornerShape(10.dp))
@@ -302,7 +312,7 @@ fun ChatMessageBubbleItem(
 
                     when (message.type) {
                         MessageType.STICKER.name -> {
-                            if (mediaFileReady && message.mediaLocalPath != null) {
+                            if (isMediaCompleted && message.mediaLocalPath != null) {
                                 Box(
                                     modifier = Modifier
                                         .size(144.dp)
@@ -347,7 +357,7 @@ fun ChatMessageBubbleItem(
                                 Spacer(modifier = Modifier.height(6.dp))
                                 BubbleTransferCancelRow(
                                     messageId = message.messageId,
-                                    progress = message.transferProgress,
+                                    progress = activeTransfer?.progress ?: message.transferProgress,
                                     contentColor = contentColor,
                                     onCancel = { onCancelTransfer(message.messageId) }
                                 )
@@ -355,10 +365,34 @@ fun ChatMessageBubbleItem(
                         }
 
                         MessageType.IMAGE.name -> {
-                            if (mediaFileReady && message.mediaLocalPath != null) {
-                                val aspectRatio by produceState(initialValue = 4f / 3f, message.mediaLocalPath) {
-                                    value = withContext(Dispatchers.IO) {
-                                        readImageAspectRatio(message.mediaLocalPath) ?: (4f / 3f)
+                            val localPath = message.mediaLocalPath
+                            val canShowPreview = !isIncomingCancelled && (
+                                isMediaCompleted || (isOutgoing && hasLocalMediaFile) || isTransferActive
+                                )
+                            if (canShowPreview) {
+                                val canDecodeImageFile = !localPath.isNullOrBlank() && (isOutgoing || isMediaCompleted) && File(localPath).exists()
+                                val initialAspect = remember(localPath, message.mediaWidth, message.mediaHeight, canDecodeImageFile) {
+                                    resolveInitialMediaAspectRatio(
+                                        path = localPath,
+                                        mediaWidth = message.mediaWidth,
+                                        mediaHeight = message.mediaHeight,
+                                        probeImageFile = canDecodeImageFile
+                                    )
+                                }
+                                val aspectRatio by produceState(
+                                    initialValue = initialAspect,
+                                    key1 = localPath,
+                                    key2 = canDecodeImageFile,
+                                    key3 = message.mediaWidth to message.mediaHeight
+                                ) {
+                                    value = if (canDecodeImageFile && localPath != null) {
+                                        MediaPreviewCache.get(localPath)?.aspectRatio ?: withContext(Dispatchers.IO) {
+                                            val computed = readImageAspectRatio(localPath) ?: initialAspect
+                                            MediaPreviewCache.putAspectRatio(localPath, computed)
+                                            computed
+                                        }
+                                    } else {
+                                        initialAspect
                                     }
                                 }
                                 val (mediaWidth, mediaHeight) = computeWhatsAppMediaSize(aspectRatio)
@@ -366,19 +400,34 @@ fun ChatMessageBubbleItem(
                                     modifier = Modifier
                                         .size(width = mediaWidth, height = mediaHeight)
                                         .clip(RoundedCornerShape(14.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
                                         .combinedClickable(
                                             onClick = {
-                                                onOpenImageFullscreen(message.mediaLocalPath, message.fileName)
+                                                if (canDecodeImageFile && localPath != null) {
+                                                    onOpenImageFullscreen(localPath, message.fileName)
+                                                }
                                             },
                                             onLongClick = { onLongPressMessage(message) }
                                         )
                                 ) {
-                                    AsyncImage(
-                                        model = File(message.mediaLocalPath),
-                                        contentDescription = message.fileName,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                                    if (canDecodeImageFile && localPath != null) {
+                                        AsyncImage(
+                                            model = File(localPath),
+                                            contentDescription = message.fileName,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
+                                    if (isTransferActive) {
+                                        CenteredMediaTransferOverlay(
+                                            messageId = message.messageId,
+                                            progress = activeTransfer?.progress ?: message.transferProgress,
+                                            phase = activeTransfer?.phase ?: if (isOutgoing) TransferPhase.UPLOADING else TransferPhase.DOWNLOADING,
+                                            etaSeconds = activeTransfer?.etaSeconds,
+                                            onCancel = { onCancelTransfer(message.messageId) },
+                                            modifier = Modifier.align(Alignment.Center)
+                                        )
+                                    }
                                     MediaTimestampOverlayPill(
                                         message = message,
                                         formattedTimestamp = formattedTimestamp,
@@ -402,57 +451,49 @@ fun ChatMessageBubbleItem(
                                     color = contentColor
                                 )
                             }
-                            if (isTransferActive) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                BubbleTransferCancelRow(
-                                    messageId = message.messageId,
-                                    progress = message.transferProgress,
-                                    contentColor = contentColor,
-                                    onCancel = { onCancelTransfer(message.messageId) }
-                                )
-                            }
                         }
 
                         MessageType.VIDEO.name -> {
-                            if (mediaFileReady && message.mediaLocalPath != null) {
+                            val localPath = message.mediaLocalPath
+                            val canShowVideoContainer = !isIncomingCancelled && (
+                                isMediaCompleted || (isOutgoing && hasLocalMediaFile) || isTransferActive
+                                )
+                            if (canShowVideoContainer) {
+                                val canDecodeVideoFile = !localPath.isNullOrBlank() && (isOutgoing || isMediaCompleted) && File(localPath).exists()
+                                val cachedEntry = remember(localPath) {
+                                    localPath?.let { MediaPreviewCache.get(it) }
+                                }
+                                val initialAspect = remember(localPath, cachedEntry, message.mediaWidth, message.mediaHeight) {
+                                    resolveInitialMediaAspectRatio(
+                                        path = localPath,
+                                        mediaWidth = message.mediaWidth,
+                                        mediaHeight = message.mediaHeight,
+                                        probeImageFile = false
+                                    )
+                                }
                                 val videoMeta by produceState(
-                                    initialValue = VideoBubbleMediaMeta(null, 4f / 3f),
-                                    message.mediaLocalPath
+                                    initialValue = VideoBubbleMediaMeta(
+                                        thumbnail = cachedEntry?.videoThumbnail,
+                                        aspectRatio = initialAspect
+                                    ),
+                                    key1 = localPath,
+                                    key2 = canDecodeVideoFile,
+                                    key3 = message.mediaWidth to message.mediaHeight
                                 ) {
+                                    if (!canDecodeVideoFile || localPath == null) {
+                                        value = VideoBubbleMediaMeta(
+                                            thumbnail = cachedEntry?.videoThumbnail,
+                                            aspectRatio = initialAspect
+                                        )
+                                        return@produceState
+                                    }
+                                    val cached = MediaPreviewCache.get(localPath)
+                                    if (cached?.videoThumbnail != null) {
+                                        value = VideoBubbleMediaMeta(cached.videoThumbnail, cached.aspectRatio)
+                                        return@produceState
+                                    }
                                     value = withContext(Dispatchers.IO) {
-                                        val retriever = MediaMetadataRetriever()
-                                        try {
-                                            retriever.setDataSource(message.mediaLocalPath)
-                                            val rawW = retriever.extractMetadata(
-                                                MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH
-                                            )?.toIntOrNull() ?: 0
-                                            val rawH = retriever.extractMetadata(
-                                                MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT
-                                            )?.toIntOrNull() ?: 0
-                                            val rot = retriever.extractMetadata(
-                                                MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION
-                                            )?.toIntOrNull() ?: 0
-                                            val thumb = retriever.getFrameAtTime(
-                                                0L,
-                                                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-                                            )
-                                            val ratio = if (rawW > 0 && rawH > 0) {
-                                                if (rot == 90 || rot == 270) {
-                                                    rawH.toFloat() / rawW.toFloat()
-                                                } else {
-                                                    rawW.toFloat() / rawH.toFloat()
-                                                }
-                                            } else if (thumb != null && thumb.width > 0 && thumb.height > 0) {
-                                                thumb.width.toFloat() / thumb.height.toFloat()
-                                            } else {
-                                                4f / 3f
-                                            }
-                                            VideoBubbleMediaMeta(thumb, ratio)
-                                        } catch (_: Exception) {
-                                            VideoBubbleMediaMeta(null, 4f / 3f)
-                                        } finally {
-                                            runCatching { retriever.release() }
-                                        }
+                                        extractAndCacheVideoMeta(localPath, initialAspect)
                                     }
                                 }
                                 val (mediaWidth, mediaHeight) = computeWhatsAppMediaSize(videoMeta.aspectRatio)
@@ -463,7 +504,9 @@ fun ChatMessageBubbleItem(
                                         .background(Color.Black.copy(alpha = 0.85f))
                                         .combinedClickable(
                                             onClick = {
-                                                onOpenVideoFullscreen(message.mediaLocalPath, message.fileName)
+                                                if (canDecodeVideoFile && localPath != null) {
+                                                    onOpenVideoFullscreen(localPath, message.fileName)
+                                                }
                                             },
                                             onLongClick = { onLongPressMessage(message) }
                                         )
@@ -476,20 +519,31 @@ fun ChatMessageBubbleItem(
                                             modifier = Modifier.fillMaxSize()
                                         )
                                     }
-                                    Box(
-                                        modifier = Modifier
-                                            .size(46.dp)
-                                            .align(Alignment.Center)
-                                            .clip(CircleShape)
-                                            .background(Color.Black.copy(alpha = 0.58f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Filled.PlayArrow,
-                                            contentDescription = stringResource(R.string.video_label),
-                                            tint = Color.White,
-                                            modifier = Modifier.size(28.dp)
+                                    if (isTransferActive) {
+                                        CenteredMediaTransferOverlay(
+                                            messageId = message.messageId,
+                                            progress = activeTransfer?.progress ?: message.transferProgress,
+                                            phase = activeTransfer?.phase ?: if (isOutgoing) TransferPhase.UPLOADING else TransferPhase.DOWNLOADING,
+                                            etaSeconds = activeTransfer?.etaSeconds,
+                                            onCancel = { onCancelTransfer(message.messageId) },
+                                            modifier = Modifier.align(Alignment.Center)
                                         )
+                                    } else {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(46.dp)
+                                                .align(Alignment.Center)
+                                                .clip(CircleShape)
+                                                .background(Color.Black.copy(alpha = 0.58f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.PlayArrow,
+                                                contentDescription = stringResource(R.string.video_label),
+                                                tint = Color.White,
+                                                modifier = Modifier.size(28.dp)
+                                            )
+                                        }
                                     }
                                     Surface(
                                         shape = CircleShape,
@@ -542,15 +596,6 @@ fun ChatMessageBubbleItem(
                                     text = message.textContent,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = contentColor
-                                )
-                            }
-                            if (isTransferActive) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                BubbleTransferCancelRow(
-                                    messageId = message.messageId,
-                                    progress = message.transferProgress,
-                                    contentColor = contentColor,
-                                    onCancel = { onCancelTransfer(message.messageId) }
                                 )
                             }
                         }
@@ -726,7 +771,7 @@ fun ChatMessageBubbleItem(
                         }
                     }
 
-                    if (!mediaFileReady) {
+                    if (!isVisualMediaBubble) {
                         Spacer(modifier = Modifier.height(2.dp))
 
                         Row(
@@ -1326,14 +1371,14 @@ fun FloatingTransfersOverlay(
                                         )
                                     }
                                 }
+                                val phaseLabel = when (tr.phase) {
+                                    TransferPhase.COMPRESSING -> stringResource(R.string.transfer_compressing)
+                                    TransferPhase.UPLOADING -> stringResource(R.string.transfer_uploading)
+                                    TransferPhase.DOWNLOADING -> stringResource(R.string.transfer_downloading)
+                                }
+                                val etaPart = NetworkUtils.formatEtaSeconds(tr.etaSeconds)?.let { " · $it" }.orEmpty()
                                 Text(
-                                    text = "${
-                                        if (tr.isOutgoing) {
-                                            stringResource(R.string.transfer_uploading)
-                                        } else {
-                                            stringResource(R.string.transfer_downloading)
-                                        }
-                                    } · ${NetworkUtils.formatBytes(tr.totalBytes)}",
+                                    text = "$phaseLabel$etaPart · ${NetworkUtils.formatBytes(tr.totalBytes)}",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1351,10 +1396,168 @@ fun FloatingTransfersOverlay(
     }
 }
 
+@Composable
+private fun CenteredMediaTransferOverlay(
+    messageId: String,
+    progress: Int,
+    phase: TransferPhase,
+    etaSeconds: Long?,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val cleanProgress = progress.coerceIn(0, 99)
+    val phaseLabel = when (phase) {
+        TransferPhase.COMPRESSING -> stringResource(R.string.transfer_compressing)
+        TransferPhase.UPLOADING -> stringResource(R.string.transfer_uploading)
+        TransferPhase.DOWNLOADING -> stringResource(R.string.transfer_downloading)
+    }
+    val etaText = NetworkUtils.formatEtaSeconds(etaSeconds)
+    val statusLine = if (etaText != null) {
+        "$phaseLabel $cleanProgress% · $etaText"
+    } else {
+        "$phaseLabel $cleanProgress%"
+    }
+
+    Column(
+        modifier = modifier.padding(horizontal = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(60.dp)
+                .clip(CircleShape)
+                .background(Color.Black.copy(alpha = 0.66f)),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(
+                progress = { (cleanProgress / 100f).coerceIn(0.02f, 1f) },
+                color = Color.White,
+                trackColor = Color.White.copy(alpha = 0.24f),
+                strokeWidth = 3.5.dp,
+                modifier = Modifier.size(52.dp)
+            )
+            IconButton(
+                onClick = onCancel,
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("chat_cancel_transfer_$messageId")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.cancel_transfer_cd),
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+        }
+
+        Surface(
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.72f),
+            modifier = Modifier
+                .semantics(mergeDescendants = true) {}
+                .testTag("chat_transfer_status_$messageId")
+        ) {
+            Text(
+                text = statusLine,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = JetBrainsMonoFontFamily,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
 private data class VideoBubbleMediaMeta(
     val thumbnail: Bitmap?,
     val aspectRatio: Float
 )
+
+private data class CachedMediaPreview(
+    val aspectRatio: Float,
+    val videoThumbnail: Bitmap? = null
+)
+
+private object MediaPreviewCache {
+    private val cache = LruCache<String, CachedMediaPreview>(80)
+
+    fun get(path: String): CachedMediaPreview? = cache.get(path)
+
+    fun putAspectRatio(path: String, aspectRatio: Float) {
+        val existing = cache.get(path)
+        cache.put(path, CachedMediaPreview(aspectRatio, existing?.videoThumbnail))
+    }
+
+    fun putVideo(path: String, aspectRatio: Float, thumbnail: Bitmap?) {
+        cache.put(path, CachedMediaPreview(aspectRatio, thumbnail))
+    }
+}
+
+private fun resolveInitialMediaAspectRatio(
+    path: String?,
+    mediaWidth: Int,
+    mediaHeight: Int,
+    probeImageFile: Boolean
+): Float {
+    if (!path.isNullOrBlank()) {
+        MediaPreviewCache.get(path)?.let { return it.aspectRatio }
+    }
+    if (mediaWidth > 0 && mediaHeight > 0) {
+        val ratio = mediaWidth.toFloat() / mediaHeight.toFloat()
+        if (!path.isNullOrBlank()) {
+            MediaPreviewCache.putAspectRatio(path, ratio)
+        }
+        return ratio
+    }
+    if (probeImageFile && !path.isNullOrBlank()) {
+        readImageAspectRatio(path)?.let { ratio ->
+            MediaPreviewCache.putAspectRatio(path, ratio)
+            return ratio
+        }
+    }
+    return 4f / 3f
+}
+
+private fun extractAndCacheVideoMeta(path: String, fallbackAspect: Float): VideoBubbleMediaMeta {
+    val retriever = MediaMetadataRetriever()
+    return try {
+        retriever.setDataSource(path)
+        val rawW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+        val rawH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+        val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+        val thumb = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            retriever.getScaledFrameAtTime(
+                0L,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                512,
+                512
+            )
+        } else {
+            retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        }
+        val ratio = if (rawW > 0 && rawH > 0) {
+            if (rot == 90 || rot == 270) {
+                rawH.toFloat() / rawW.toFloat()
+            } else {
+                rawW.toFloat() / rawH.toFloat()
+            }
+        } else if (thumb != null && thumb.width > 0 && thumb.height > 0) {
+            thumb.width.toFloat() / thumb.height.toFloat()
+        } else {
+            fallbackAspect
+        }
+        MediaPreviewCache.putVideo(path, ratio, thumb)
+        VideoBubbleMediaMeta(thumb, ratio)
+    } catch (_: Exception) {
+        VideoBubbleMediaMeta(null, fallbackAspect)
+    } finally {
+        runCatching { retriever.release() }
+    }
+}
 
 private fun readImageAspectRatio(path: String): Float? {
     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }

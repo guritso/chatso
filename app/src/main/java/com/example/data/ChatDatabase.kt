@@ -61,7 +61,9 @@ data class MessageEntity(
     val replyToMessageId: String? = null,
     val replyToSenderTag: String? = null,
     val replyToPreview: String? = null,
-    val reactionsJson: String = ""
+    val reactionsJson: String = "",
+    val mediaWidth: Int = 0,
+    val mediaHeight: Int = 0
 )
 
 @Dao
@@ -151,6 +153,9 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 1 AND status IN ('SENDING', 'FAILED') ORDER BY createdAt ASC, messageId ASC")
     suspend fun getPendingOutgoingMessagesChronological(peerId: String): List<MessageEntity>
 
+    @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 1 AND status IN ('SENDING', 'SENT', 'DELIVERED')")
+    suspend fun getUnreadOutgoingMessages(peerId: String): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE expiresAt IS NOT NULL AND expiresAt <= :now")
     suspend fun getExpiredMessages(now: Long): List<MessageEntity>
 
@@ -193,7 +198,7 @@ data class FavoriteStickerEntity(
 
 @Database(
     entities = [PeerEntity::class, MessageEntity::class, FavoriteStickerEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {
@@ -241,6 +246,13 @@ abstract class ChatDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN mediaWidth INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN mediaHeight INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         @Volatile
         private var INSTANCE: ChatDatabase? = null
 
@@ -251,7 +263,13 @@ abstract class ChatDatabase : RoomDatabase() {
                     ChatDatabase::class.java,
                     "chatso_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6
+                    )
                     .fallbackToDestructiveMigration(true)
                     .build()
                     .also { INSTANCE = it }

@@ -31,9 +31,11 @@ import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.SettingsScreen
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.toArgb
+import com.example.data.ActiveTransferInfo
 import com.example.data.BridgeRouteInfo
 import com.example.data.BridgeTelemetry
 import com.example.data.ThemePalette
+import com.example.data.TransferPhase
 import com.example.network.ChatsoNotificationHelper
 import com.example.ui.theme.ChatsoTheme
 import com.example.ui.theme.spec
@@ -608,7 +610,13 @@ class SettingsProfileDevModeRobolectricTest {
 
             composeTestRule.onNodeWithTag("chat_header_profile_button").performClick()
             composeTestRule.waitForIdle()
-            composeTestRule.onNodeWithTag("contact_profile_dialog").assertIsDisplayed()
+            composeTestRule.onNodeWithTag("contact_profile_screen").assertIsDisplayed()
+            assertTrue(
+                composeTestRule.onAllNodes(hasTestTag("contact_profile_dialog")).fetchSemanticsNodes().isEmpty()
+            )
+            assertTrue(
+                composeTestRule.onAllNodes(androidx.compose.ui.test.hasText("Tap photo to view")).fetchSemanticsNodes().isEmpty()
+            )
             composeTestRule.onNodeWithText("10.8.0.5:42850").performScrollTo().assertIsDisplayed()
             composeTestRule.onNodeWithText("AA:11:BB:22").performScrollTo().assertIsDisplayed()
 
@@ -617,6 +625,120 @@ class SettingsProfileDevModeRobolectricTest {
             composeTestRule.onNodeWithTag("fullscreen_image_viewer").assertIsDisplayed()
         } finally {
             avatarFile.delete()
+        }
+    }
+
+    @Test
+    fun chatDetailVideoBubbleShowsCenteredCircularTransferPhaseAndEta() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val videoFile = java.io.File.createTempFile("vid_transfer", ".mp4", context.cacheDir).apply {
+            writeBytes(byteArrayOf(0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70))
+        }
+        try {
+            val nowClock = MutableStateFlow(System.currentTimeMillis())
+            val msgId = "vid_msg_1"
+            val msg = MessageEntity(
+                messageId = msgId,
+                peerId = "peer_video",
+                isOutgoing = true,
+                type = MessageType.VIDEO.name,
+                textContent = "Sending video…",
+                mediaLocalPath = videoFile.absolutePath,
+                fileName = "clip.mp4",
+                transferProgress = 42,
+                status = DeliveryStatus.SENDING.name,
+                mediaWidth = 1080,
+                mediaHeight = 1920
+            )
+            val transferState = mutableStateOf(
+                listOf(
+                    ActiveTransferInfo(
+                        messageId = msgId,
+                        peerId = "peer_video",
+                        fileName = "clip.mp4",
+                        progress = 42,
+                        isOutgoing = true,
+                        totalBytes = 1_500_000L,
+                        phase = TransferPhase.COMPRESSING,
+                        etaSeconds = 12L
+                    )
+                )
+            )
+            var cancelledId: String? = null
+
+            composeTestRule.setContent {
+                ChatsoTheme {
+                    ChatDetailScreen(
+                        identity = LocalIdentity(isInitialized = true, username = "Me", peerId = "me"),
+                        peer = PeerEntity(
+                            peerId = "peer_video",
+                            username = "Peer",
+                            publicKeyBase64 = "KEY",
+                            fingerprint = "FP"
+                        ),
+                        messages = listOf(msg),
+                        currentMessageLimit = 150,
+                        presence = PeerPresence.ONLINE,
+                        isPeerTyping = false,
+                        activeTransfers = transferState.value,
+                        favoriteStickers = emptyList(),
+                        nowClockFlow = nowClock,
+                        voiceRecordingState = VoiceRecordingState(),
+                        voicePlaybackState = VoicePlaybackState(),
+                        showBackButton = true,
+                        onBack = {},
+                        onLoadMoreMessages = {},
+                        onSendText = { _, _ -> },
+                        onToggleReaction = { _, _ -> },
+                        onTypingChanged = {},
+                        onSendPhotoUri = { _, _ -> },
+                        onSendVideoUri = { _, _ -> },
+                        onSendDocumentUri = { _, _ -> },
+                        onSendStickerStream = { _, _, _, _ -> },
+                        onCheckStickerFavorited = { false },
+                        onToggleFavoriteSticker = {},
+                        onRemoveFavoriteSticker = {},
+                        onSendFavoriteSticker = { _, _ -> },
+                        onStartVoiceRecording = {},
+                        onCancelVoiceRecording = {},
+                        onSendVoiceRecording = {},
+                        onToggleVoicePlayback = { _, _ -> },
+                        onOpenAttachment = { _, _ -> },
+                        onCancelTransfer = { cancelledId = it },
+                        onRetryDownload = {},
+                        onSetSelfDestruct = {},
+                        onVerifyPeerKey = {},
+                        onReconnect = {},
+                        onDeleteMessage = {},
+                        onDeleteConversation = {},
+                        onNotify = {}
+                    )
+                }
+            }
+
+            composeTestRule.onNodeWithTag("chat_cancel_transfer_$msgId").assertIsDisplayed()
+            composeTestRule.onNodeWithTag("chat_transfer_status_$msgId").assertIsDisplayed()
+            composeTestRule.onNodeWithText("Compressing 42% · ~12s").assertIsDisplayed()
+
+            transferState.value = listOf(
+                ActiveTransferInfo(
+                    messageId = msgId,
+                    peerId = "peer_video",
+                    fileName = "clip.mp4",
+                    progress = 68,
+                    isOutgoing = true,
+                    totalBytes = 800_000L,
+                    phase = TransferPhase.UPLOADING,
+                    etaSeconds = 4L
+                )
+            )
+            composeTestRule.waitForIdle()
+            composeTestRule.onNodeWithText("Uploading 68% · ~4s").assertIsDisplayed()
+
+            composeTestRule.onNodeWithTag("chat_cancel_transfer_$msgId").performClick()
+            assertEquals(msgId, cancelledId)
+        } finally {
+            videoFile.delete()
         }
     }
 
@@ -946,6 +1068,10 @@ class SettingsProfileDevModeRobolectricTest {
         }
 
         composeTestRule.onNodeWithTag("dev_bridge_section_card").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("dev_bridge_mode_switch").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("dev_create_bridged_fake_button").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("dev_run_bridge_test_button").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("dev_reset_bridge_stats_button").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("ACTIVE").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("2 (Alice, Charlie)").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("1 (Charlie)").performScrollTo().assertIsDisplayed()

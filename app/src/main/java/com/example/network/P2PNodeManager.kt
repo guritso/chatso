@@ -75,7 +75,9 @@ interface P2PEventListener {
         createdAt: Long,
         replyToMessageId: String? = null,
         replyToSenderTag: String? = null,
-        replyToPreview: String? = null
+        replyToPreview: String? = null,
+        mediaWidth: Int = 0,
+        mediaHeight: Int = 0
     ): File
     suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int)
     suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File)
@@ -103,7 +105,7 @@ class P2PNodeManager(
         private const val KIND_ENCRYPTED_CONTROL: Byte = 0x10
         private const val KIND_ENCRYPTED_CHUNK: Byte = 0x11
         private const val CHUNK_SIZE = 48 * 1024 // 48 KB encrypted streaming chunks
-        private const val MAX_FRAME_BYTES = 256 * 1024
+        private const val MAX_FRAME_BYTES = 512 * 1024
     }
 
     private inner class ActivePeerSession(
@@ -1074,6 +1076,8 @@ class P2PNodeManager(
                 val replyId = json.optString("replyId").takeIf { it.isNotBlank() }
                 val replySenderTag = invertWireAuthorType(json.optString("replyAuthorType"))
                 val replyPreview = json.optString("replyPreview").takeIf { it.isNotBlank() }
+                val mediaW = json.optInt("mediaW", 0).coerceAtLeast(0)
+                val mediaH = json.optInt("mediaH", 0).coerceAtLeast(0)
 
                 val outFile = listener.onIncomingFileStart(
                     peerId = session.peerId,
@@ -1087,7 +1091,9 @@ class P2PNodeManager(
                     createdAt = ts,
                     replyToMessageId = replyId,
                     replyToSenderTag = replySenderTag,
-                    replyToPreview = replyPreview
+                    replyToPreview = replyPreview,
+                    mediaWidth = mediaW,
+                    mediaHeight = mediaH
                 )
                 session.incomingTransfers[msgId] = IncomingTransfer(
                     file = outFile,
@@ -1501,6 +1507,26 @@ class P2PNodeManager(
         )
     }
 
+    fun resetBridgeTelemetry() {
+        bridgeRelayedFrames.set(0L)
+        bridgeRelayedBytes.set(0L)
+        bridgeFailedRelays.set(0L)
+        bridgeRouteStats.clear()
+        refreshBridgeTelemetry()
+    }
+
+    fun getActiveDirectEndpoints(): List<Pair<String, Int>> {
+        return sessions.values
+            .filter {
+                it.bridgePeerId == null &&
+                    !it.isClosed &&
+                    !it.peerId.startsWith("loopback_") &&
+                    it.remoteIp.isNotBlank() &&
+                    it.remoteListenPort > 0
+            }
+            .map { it.remoteIp to it.remoteListenPort }
+    }
+
     private suspend fun sendProfileSync(session: ActivePeerSession, identity: LocalIdentity) {
         val avatarB64 = localAvatarBase64Provider()
         val verifiedPeer = listener.isPeerVerifiedByMe(session.peerId)
@@ -1681,6 +1707,8 @@ class P2PNodeManager(
         replyToMessageId: String? = null,
         replyToAuthorType: String? = null,
         replyToPreview: String? = null,
+        mediaWidth: Int = 0,
+        mediaHeight: Int = 0,
         isCancelled: () -> Boolean = { false },
         onProgress: suspend (Int) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
@@ -1702,6 +1730,10 @@ class P2PNodeManager(
                 put("audioMs", audioDurationMs)
                 put("sd", selfDestructSec)
                 put("ts", createdAt)
+                if (mediaWidth > 0 && mediaHeight > 0) {
+                    put("mediaW", mediaWidth)
+                    put("mediaH", mediaHeight)
+                }
                 if (!replyToMessageId.isNullOrBlank()) {
                     put("replyId", replyToMessageId)
                     if (!replyToAuthorType.isNullOrBlank()) put("replyAuthorType", replyToAuthorType)

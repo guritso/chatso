@@ -174,6 +174,7 @@
     <string name="replying_to">Antwort an %1$s</string>
     <string name="copy_text_action">Kopieren</string>
     <string name="transfers_title">Aktive Übertragungen (%1$d)</string>
+    <string name="transfer_compressing">Komprimierung</string>
     <string name="transfer_uploading">Wird gesendet</string>
     <string name="transfer_downloading">Wird empfangen</string>
 
@@ -304,7 +305,6 @@
     <string name="msg_bridge_off">Brückenmodus deaktiviert.</string>
     <string name="msg_message_queued">Kontakt offline · Wird beim Neuverbinden gesendet.</string>
     <string name="contact_profile_title">Kontaktprofil</string>
-    <string name="contact_tap_photo_hint">Zum Vergrößern auf Foto tippen</string>
     <string name="contact_network_label">Adresse</string>
     <string name="contact_verification_label">Verschlüsselung</string>
     <string name="contact_verified_short">Verifiziert</string>
@@ -314,7 +314,18 @@
     <string name="chat_bridge_notice_generic">Chat mit einem Brücken-Nutzer · E2EE</string>
     <string name="chat_bridge_notice_with_name">Chat über Brücke (%1$s) · E2EE</string>
     <string name="chat_status_via_bridge_suffix">· Über Brücke</string>
-    <string name="dev_bridge_section">Brücken-Diagnose</string>
+    <string name="dev_bridge_section">Brücken-Diagnose &amp; Sandbox</string>
+    <string name="dev_bridge_mode_toggle">Brückenmodus aktivieren</string>
+    <string name="dev_create_bridged_fake_btn">Fake-Kontakt über Brücke erstellen</string>
+    <string name="dev_run_bridge_test_btn">Brückenverbindung testen (A ↔ Ich ↔ C)</string>
+    <string name="dev_reset_bridge_stats_btn">Zurücksetzen</string>
+    <string name="dev_sim_read_receipt_btn">Meine als gelesen markieren</string>
+    <string name="dev_bridge_sandbox_name">Brücken-Sandbox</string>
+    <string name="dev_msg_bridge_test_ok">Brückentest bestanden (A ↔ Ich ↔ C · E2EE).</string>
+    <string name="dev_msg_bridge_test_fail">Brückentest fehlgeschlagen: %1$s</string>
+    <string name="dev_msg_bridge_stats_reset">Brückenstatistiken gelöscht.</string>
+    <string name="dev_msg_read_receipts_sent">%1$d ausgehende Nachricht(en) als gelesen markiert.</string>
+    <string name="dev_msg_no_outgoing_for_receipt">Keine ungelesenen ausgehenden Nachrichten.</string>
     <string name="dev_bridge_status_label">Brückenstatus</string>
     <string name="dev_bridge_status_active">AKTIV</string>
     <string name="dev_bridge_status_off">DEAKTIVIERT</string>

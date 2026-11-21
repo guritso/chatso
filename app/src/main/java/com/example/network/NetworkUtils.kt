@@ -100,6 +100,23 @@ object NetworkUtils {
         return "%d:%02d".format(minutes, seconds)
     }
 
+    fun formatEtaSeconds(seconds: Long?): String? {
+        if (seconds == null || seconds <= 0L) return null
+        return when {
+            seconds < 60L -> "~${seconds}s"
+            seconds < 3600L -> {
+                val mins = seconds / 60L
+                val remSecs = seconds % 60L
+                if (remSecs == 0L) "~${mins}m" else "~${mins}m ${remSecs}s"
+            }
+            else -> {
+                val hours = seconds / 3600L
+                val remMins = (seconds % 3600L) / 60L
+                if (remMins == 0L) "~${hours}h" else "~${hours}h ${remMins}m"
+            }
+        }
+    }
+
     fun formatTimestamp(epochMs: Long): String {
         val now = System.currentTimeMillis()
         val diff = now - epochMs

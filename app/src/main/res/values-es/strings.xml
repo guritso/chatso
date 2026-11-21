@@ -174,6 +174,7 @@
     <string name="replying_to">Respondiendo a %1$s</string>
     <string name="copy_text_action">Copiar</string>
     <string name="transfers_title">Transferencias activas (%1$d)</string>
+    <string name="transfer_compressing">Comprimiendo</string>
     <string name="transfer_uploading">Enviando</string>
     <string name="transfer_downloading">Descargando</string>
 
@@ -304,7 +305,6 @@
     <string name="msg_bridge_off">Modo puente desactivado.</string>
     <string name="msg_message_queued">Contacto sin conexión · Se enviará al reconectar.</string>
     <string name="contact_profile_title">Perfil del Contacto</string>
-    <string name="contact_tap_photo_hint">Toca la foto para ampliar</string>
     <string name="contact_network_label">Dirección</string>
     <string name="contact_verification_label">Cifrado</string>
     <string name="contact_verified_short">Verificado</string>
@@ -314,7 +314,18 @@
     <string name="chat_bridge_notice_generic">Chateando con un usuario vía puente · E2EE</string>
     <string name="chat_bridge_notice_with_name">Chateando vía puente (%1$s) · E2EE</string>
     <string name="chat_status_via_bridge_suffix">· Vía puente</string>
-    <string name="dev_bridge_section">Diagnóstico del Puente</string>
+    <string name="dev_bridge_section">Diagnóstico y Prueba del Puente</string>
+    <string name="dev_bridge_mode_toggle">Activar modo puente</string>
+    <string name="dev_create_bridged_fake_btn">Crear contacto fake vía puente</string>
+    <string name="dev_run_bridge_test_btn">Probar conexión puente (A ↔ Yo ↔ C)</string>
+    <string name="dev_reset_bridge_stats_btn">Reiniciar</string>
+    <string name="dev_sim_read_receipt_btn">Marcar los míos leídos</string>
+    <string name="dev_bridge_sandbox_name">Puente Sandbox</string>
+    <string name="dev_msg_bridge_test_ok">Prueba de puente exitosa (A ↔ Yo ↔ C · E2EE).</string>
+    <string name="dev_msg_bridge_test_fail">Error en prueba de puente: %1$s</string>
+    <string name="dev_msg_bridge_stats_reset">Estadísticas del puente borradas.</string>
+    <string name="dev_msg_read_receipts_sent">%1$d mensaje(s) marcado(s) como leído(s).</string>
+    <string name="dev_msg_no_outgoing_for_receipt">No hay mensajes enviados sin leer para este contacto.</string>
     <string name="dev_bridge_status_label">Estado del puente</string>
     <string name="dev_bridge_status_active">ACTIVO</string>
     <string name="dev_bridge_status_off">DESACTIVADO</string>

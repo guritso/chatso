@@ -379,6 +379,7 @@ private fun ChatsoAuthenticatedShell(
     val devAutoReplyEnabled by viewModel.devAutoReplyEnabled.collectAsStateWithLifecycle()
     val scheduledFakeDelay by viewModel.scheduledFakeDelayRemainingSec.collectAsStateWithLifecycle()
     val bridgeTelemetry by viewModel.bridgeTelemetry.collectAsStateWithLifecycle()
+    val isRunningBridgeTest by viewModel.isRunningBridgeTest.collectAsStateWithLifecycle()
 
     var showDevTools by rememberSaveable { mutableStateOf(false) }
 
@@ -545,7 +546,12 @@ private fun ChatsoAuthenticatedShell(
                                     voicePlaybackState = voicePlaybackState,
                                     unreadDividerAnchorId = unreadDivider?.takeIf { it.peerId == peer.peerId }?.anchorMessageId,
                                     unreadDividerCount = unreadDivider?.takeIf { it.peerId == peer.peerId }?.unreadCount ?: 0,
-                                    bridgePeerName = peers.firstOrNull { it.peerId == peer.viaBridgePeerId }?.username,
+                                    bridgePeerName = peers.firstOrNull { it.peerId == peer.viaBridgePeerId }?.username
+                                        ?: if (peer.viaBridgePeerId == "dev_bridge_sandbox") {
+                                            stringResource(R.string.dev_bridge_sandbox_name)
+                                        } else {
+                                            null
+                                        },
                                     showBackButton = false,
                                     onBack = viewModel::closeConversation,
                                     onAtBottomChanged = viewModel::setActiveChatAtBottom,
@@ -630,16 +636,22 @@ private fun ChatsoAuthenticatedShell(
                                     devAutoReplyEnabled = devAutoReplyEnabled,
                                     scheduledDelayRemainingSec = scheduledFakeDelay,
                                     bridgeTelemetry = bridgeTelemetry,
+                                    isRunningBridgeTest = isRunningBridgeTest,
                                     onBack = { showDevTools = false },
                                     onCreateFakePeer = viewModel::devCreateFakePeer,
+                                    onCreateBridgedFakePeer = viewModel::devCreateBridgedFakePeer,
                                     onSendFakeIncomingText = viewModel::devSendFakeIncomingMessage,
                                     onSendFakeUnreadBurst = viewModel::devSendFakeUnreadBurst,
                                     onSendFakeMedia = viewModel::devSendFakeIncomingMedia,
                                     onSimulateTyping = viewModel::devSimulateTyping,
                                     onSimulateReaction = { peerId -> viewModel.devSimulateReaction(peerId) },
+                                    onSimulateReadReceipt = viewModel::devMarkOutgoingMessagesRead,
                                     onTriggerKeyWarning = viewModel::devTriggerKeyChangeWarning,
                                     onTogglePeerSimulatedOnline = viewModel::devSetPeerSimulatedOnline,
                                     onToggleAutoReply = viewModel::devSetAutoReplyEnabled,
+                                    onToggleBridgeMode = viewModel::toggleBridgeMode,
+                                    onRunLoopbackBridgeTest = viewModel::devRunLoopbackBridgeTest,
+                                    onResetBridgeStats = viewModel::devResetBridgeTelemetry,
                                     onOpenPeerChat = { peerId ->
                                         showDevTools = false
                                         viewModel.selectTab(HomeTab.CHATS)
@@ -705,7 +717,12 @@ private fun ChatsoAuthenticatedShell(
                             voicePlaybackState = voicePlaybackState,
                             unreadDividerAnchorId = unreadDivider?.takeIf { it.peerId == currentOpenPeer.peerId }?.anchorMessageId,
                             unreadDividerCount = unreadDivider?.takeIf { it.peerId == currentOpenPeer.peerId }?.unreadCount ?: 0,
-                            bridgePeerName = peers.firstOrNull { it.peerId == currentOpenPeer.viaBridgePeerId }?.username,
+                            bridgePeerName = peers.firstOrNull { it.peerId == currentOpenPeer.viaBridgePeerId }?.username
+                                ?: if (currentOpenPeer.viaBridgePeerId == "dev_bridge_sandbox") {
+                                    stringResource(R.string.dev_bridge_sandbox_name)
+                                } else {
+                                    null
+                                },
                             showBackButton = true,
                             onBack = viewModel::closeConversation,
                             onAtBottomChanged = viewModel::setActiveChatAtBottom,
@@ -881,16 +898,22 @@ private fun ChatsoAuthenticatedShell(
                                         devAutoReplyEnabled = devAutoReplyEnabled,
                                         scheduledDelayRemainingSec = scheduledFakeDelay,
                                         bridgeTelemetry = bridgeTelemetry,
+                                        isRunningBridgeTest = isRunningBridgeTest,
                                         onBack = { showDevTools = false },
                                         onCreateFakePeer = viewModel::devCreateFakePeer,
+                                        onCreateBridgedFakePeer = viewModel::devCreateBridgedFakePeer,
                                         onSendFakeIncomingText = viewModel::devSendFakeIncomingMessage,
                                         onSendFakeUnreadBurst = viewModel::devSendFakeUnreadBurst,
                                         onSendFakeMedia = viewModel::devSendFakeIncomingMedia,
                                         onSimulateTyping = viewModel::devSimulateTyping,
                                         onSimulateReaction = { peerId -> viewModel.devSimulateReaction(peerId) },
+                                        onSimulateReadReceipt = viewModel::devMarkOutgoingMessagesRead,
                                         onTriggerKeyWarning = viewModel::devTriggerKeyChangeWarning,
                                         onTogglePeerSimulatedOnline = viewModel::devSetPeerSimulatedOnline,
                                         onToggleAutoReply = viewModel::devSetAutoReplyEnabled,
+                                        onToggleBridgeMode = viewModel::toggleBridgeMode,
+                                        onRunLoopbackBridgeTest = viewModel::devRunLoopbackBridgeTest,
+                                        onResetBridgeStats = viewModel::devResetBridgeTelemetry,
                                         onOpenPeerChat = { peerId ->
                                             showDevTools = false
                                             viewModel.selectTab(HomeTab.CHATS)

@@ -377,7 +377,7 @@ private fun renderCroppedAvatarUri(
     offsetY: Float
 ): Uri? {
     return try {
-        val outPx = 512
+        val outPx = 1024
         // Circle radius in preview is 0.46 * boxSize (92% of box); map that circle to fill the square avatar cleanly
         val circleScaleFactor = 1f / 0.92f
         val bw = source.width.toFloat()

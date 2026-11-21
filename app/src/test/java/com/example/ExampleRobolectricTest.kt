@@ -289,7 +289,9 @@ class ExampleRobolectricTest {
                     createdAt: Long,
                     replyToMessageId: String?,
                     replyToSenderTag: String?,
-                    replyToPreview: String?
+                    replyToPreview: String?,
+                    mediaWidth: Int,
+                    mediaHeight: Int
                 ): File = File.createTempFile("chatso_test", ".bin")
                 override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
                 override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
@@ -760,7 +762,8 @@ class ExampleRobolectricTest {
                 override suspend fun onIncomingFileStart(
                     peerId: String, messageId: String, messageType: MessageType, fileName: String,
                     mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
-                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                    mediaWidth: Int, mediaHeight: Int
                 ): File = File.createTempFile("retry_in", ".webp")
                 override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
                 override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {
@@ -790,7 +793,8 @@ class ExampleRobolectricTest {
                 override suspend fun onIncomingFileStart(
                     peerId: String, messageId: String, messageType: MessageType, fileName: String,
                     mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
-                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                    mediaWidth: Int, mediaHeight: Int
                 ): File = File.createTempFile("unused", ".bin")
                 override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
                 override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
@@ -1161,7 +1165,8 @@ class ExampleRobolectricTest {
             override suspend fun onIncomingFileStart(
                 peerId: String, messageId: String, messageType: MessageType, fileName: String,
                 mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
-                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
             ): File = File.createTempFile("unused_q", ".bin")
             override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
             override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
@@ -1281,7 +1286,8 @@ class ExampleRobolectricTest {
             override suspend fun onIncomingFileStart(
                 peerId: String, messageId: String, messageType: MessageType, fileName: String,
                 mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
-                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
             ): File = File.createTempFile("bridge_unused", ".bin")
             override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
             override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
@@ -1521,6 +1527,184 @@ class ExampleRobolectricTest {
             repo.shutdown()
             dao.deleteAllMessagesForPeer(peerId)
             dao.deletePeer(peerId)
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `migration 5 to 6 adds mediaWidth and mediaHeight columns to messages`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val dbName = "migration_5_6_test.db"
+        context.deleteDatabase(dbName)
+        val sqliteHelper = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(
+            androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(5) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS messages (messageId TEXT NOT NULL PRIMARY KEY, textContent TEXT NOT NULL DEFAULT '')")
+                        db.execSQL("INSERT INTO messages (messageId, textContent) VALUES ('m1', 'hello')")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+                })
+                .build()
+        )
+        val writable = sqliteHelper.writableDatabase
+        ChatDatabase.MIGRATION_5_6.migrate(writable)
+        writable.query("SELECT mediaWidth, mediaHeight FROM messages WHERE messageId = 'm1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals(0, c.getInt(0))
+            assertEquals(0, c.getInt(1))
+        }
+        sqliteHelper.close()
+        context.deleteDatabase(dbName)
+    }
+
+    @Test
+    fun `discovery scan clears stale offline peers from search results`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val discAlice = DiscoveryManager(context, scope)
+        val discScanner = DiscoveryManager(context, scope)
+
+        val aliceMat = CryptoEngine.createIdentityMaterial()
+        val scannerMat = CryptoEngine.createIdentityMaterial()
+        val listener = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
+            ): File = File.createTempFile("unused_disc", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val nodeAlice = P2PNodeManager(scope, discAlice, listener)
+
+        try {
+            val aliceId = LocalIdentity(
+                isInitialized = true, username = "Alice",
+                publicKeyBase64 = aliceMat.publicKeyBase64, wrappedPrivateKeyBase64 = aliceMat.wrappedPrivateKeyBase64,
+                peerId = aliceMat.peerId, fingerprint = aliceMat.fingerprint,
+                listenPort = 43961, isDiscoverable = true
+            )
+            nodeAlice.updateIdentityAndEnsureServer(aliceId)
+            delay(200)
+
+            discScanner.applyIdentityPolicy(
+                LocalIdentity(
+                    isInitialized = true, username = "Scanner",
+                    publicKeyBase64 = scannerMat.publicKeyBase64, wrappedPrivateKeyBase64 = scannerMat.wrappedPrivateKeyBase64,
+                    peerId = scannerMat.peerId, fingerprint = scannerMat.fingerprint,
+                    listenPort = 43962, isDiscoverable = true
+                )
+            )
+            discScanner.scanNetworkNow(listOf("127.0.0.1" to nodeAlice.boundPort.value))
+            while (discScanner.isScanning.value) {
+                delay(50)
+            }
+            assertTrue(discScanner.discoveredPeers.value.containsKey(aliceId.peerId))
+
+            // Alice goes offline; scanning again with no target must clear Alice from discoveredPeers
+            nodeAlice.disconnectAll()
+            discAlice.shutdown()
+            delay(100)
+
+            discScanner.scanNetworkNow(knownTargets = emptyList())
+            while (discScanner.isScanning.value) {
+                delay(50)
+            }
+            assertFalse(discScanner.discoveredPeers.value.containsKey(aliceId.peerId))
+        } finally {
+            nodeAlice.disconnectAll()
+            discAlice.shutdown()
+            discScanner.shutdown()
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `profile avatar saves and encodes at high resolution`(): Unit = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val mediaStorage = MediaStorageHelper(context)
+        val srcFile = File.createTempFile("hi_res_src", ".png", context.cacheDir)
+        try {
+            val bmp = android.graphics.Bitmap.createBitmap(1200, 1200, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bmp)
+            canvas.drawColor(android.graphics.Color.rgb(32, 96, 200))
+            srcFile.outputStream().use { out ->
+                bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            }
+            bmp.recycle()
+
+            val savedPath = mediaStorage.saveProfileAvatar(android.net.Uri.fromFile(srcFile))
+            assertNotNull(savedPath)
+            val savedBounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(savedPath, savedBounds)
+            assertTrue("Expected saved avatar >= 800px, got ${savedBounds.outWidth}", savedBounds.outWidth >= 800)
+
+            val wireB64 = mediaStorage.encodeAvatarBase64(savedPath)
+            assertNotNull(wireB64)
+            val wireBytes = Base64.decode(wireB64, Base64.NO_WRAP)
+            val wireBounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(wireBytes, 0, wireBytes.size, wireBounds)
+            assertTrue("Expected wire avatar >= 512px, got ${wireBounds.outWidth}", wireBounds.outWidth >= 512)
+
+            savedPath?.let { File(it).delete() }
+            Unit
+        } finally {
+            srcFile.delete()
+        }
+    }
+
+    @Test
+    fun `dev loopback bridge test relays encrypted traffic and updates bridge telemetry`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        val store = LocalIdentityStore(context)
+        store.createIdentity("BridgeHost", null, true)
+
+        val repo = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = store,
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { true }
+        )
+
+        try {
+            repeat(25) {
+                if (repo.nodeManager.serverRunning.value) return@repeat
+                delay(50)
+            }
+            assertTrue(repo.nodeManager.serverRunning.value)
+
+            val res = repo.devRunLoopbackBridgeTest()
+            assertTrue("Expected bridge sandbox loopback test to succeed: ${res.exceptionOrNull()}", res.isSuccess)
+            val telemetry = repo.bridgeTelemetry.value
+            assertTrue(telemetry.relayedFramesTotal >= 1L)
+            assertTrue(telemetry.activeRoutes.isNotEmpty())
+
+            repo.devResetBridgeTelemetry()
+            assertEquals(0L, repo.bridgeTelemetry.value.relayedFramesTotal)
+            assertTrue(repo.bridgeTelemetry.value.activeRoutes.isEmpty())
+        } finally {
+            repo.shutdown()
             scope.cancel()
         }
     }

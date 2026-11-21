@@ -186,6 +186,7 @@
     <string name="replying_to">Respondendo a %1$s</string>
     <string name="copy_text_action">Copiar</string>
     <string name="transfers_title">Transferências ativas (%1$d)</string>
+    <string name="transfer_compressing">Comprimindo</string>
     <string name="transfer_uploading">Enviando</string>
     <string name="transfer_downloading">Recebendo</string>
 
@@ -316,7 +317,6 @@
     <string name="msg_bridge_off">Modo ponte desativado.</string>
     <string name="msg_message_queued">Contato offline · Será enviada ao reconectar.</string>
     <string name="contact_profile_title">Perfil do Contato</string>
-    <string name="contact_tap_photo_hint">Toque na foto para ampliar</string>
     <string name="contact_network_label">Endereço</string>
     <string name="contact_verification_label">Criptografia</string>
     <string name="contact_verified_short">Verificado</string>
@@ -326,7 +326,18 @@
     <string name="chat_bridge_notice_generic">Você está conversando com um usuário via ponte · E2EE</string>
     <string name="chat_bridge_notice_with_name">Conversando via ponte (%1$s) · E2EE</string>
     <string name="chat_status_via_bridge_suffix">· Via ponte</string>
-    <string name="dev_bridge_section">Diagnóstico da Ponte</string>
+    <string name="dev_bridge_section">Diagnóstico e Teste da Ponte</string>
+    <string name="dev_bridge_mode_toggle">Ativar modo ponte</string>
+    <string name="dev_create_bridged_fake_btn">Criar usuário fake via ponte</string>
+    <string name="dev_run_bridge_test_btn">Testar conexão via ponte (A ↔ Eu ↔ C)</string>
+    <string name="dev_reset_bridge_stats_btn">Zerar</string>
+    <string name="dev_sim_read_receipt_btn">Marcar minhas lidas</string>
+    <string name="dev_bridge_sandbox_name">Ponte Sandbox</string>
+    <string name="dev_msg_bridge_test_ok">Teste da ponte aprovado (A ↔ Eu ↔ C · E2EE).</string>
+    <string name="dev_msg_bridge_test_fail">Falha no teste da ponte: %1$s</string>
+    <string name="dev_msg_bridge_stats_reset">Estatísticas da ponte zeradas.</string>
+    <string name="dev_msg_read_receipts_sent">%1$d mensagem(ns) marcada(s) como lida(s).</string>
+    <string name="dev_msg_no_outgoing_for_receipt">Nenhuma mensagem enviada sem leitura para este contato.</string>
     <string name="dev_bridge_status_label">Estado da ponte</string>
     <string name="dev_bridge_status_active">ATIVA</string>
     <string name="dev_bridge_status_off">DESATIVADA</string>

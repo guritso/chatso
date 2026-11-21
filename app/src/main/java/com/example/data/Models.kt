@@ -79,13 +79,21 @@ enum class SelfDestructOption(val seconds: Int) {
     }
 }
 
+enum class TransferPhase {
+    COMPRESSING,
+    UPLOADING,
+    DOWNLOADING
+}
+
 data class ActiveTransferInfo(
     val messageId: String,
     val peerId: String,
     val fileName: String,
     val progress: Int,
     val isOutgoing: Boolean,
-    val totalBytes: Long
+    val totalBytes: Long,
+    val phase: TransferPhase = if (isOutgoing) TransferPhase.UPLOADING else TransferPhase.DOWNLOADING,
+    val etaSeconds: Long? = null
 )
 
 data class ReactionChipInfo(
