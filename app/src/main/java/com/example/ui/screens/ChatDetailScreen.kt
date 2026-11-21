@@ -240,12 +240,18 @@ fun ChatDetailScreen(
     // Key LazyListState per peer to eliminate any flash/position bleed across chats
     val listState = key(peer.peerId) { rememberLazyListState() }
     var scrollToBottomPending by remember(peer.peerId) { mutableStateOf(false) }
+    var isAutoScrollingToBottom by remember(peer.peerId) { mutableStateOf(false) }
 
     suspend fun scrollToBottomSmooth() {
-        if (listState.firstVisibleItemIndex > 20) {
-            listState.scrollToItem(15)
+        isAutoScrollingToBottom = true
+        try {
+            if (listState.firstVisibleItemIndex > 20) {
+                listState.scrollToItem(15)
+            }
+            listState.animateScrollToItem(0)
+        } finally {
+            isAutoScrollingToBottom = false
         }
-        listState.animateScrollToItem(0)
     }
 
     fun markSendingAndScroll() {
@@ -329,13 +335,29 @@ fun ChatDetailScreen(
         if (activeTransfers.isEmpty()) transfersExpanded = false
     }
 
+    var prevNewestMessageId by remember(peer.peerId) { mutableStateOf<String?>(null) }
+    val newestMessage = messages.firstOrNull()
+    val newestMessageId = newestMessage?.messageId
+
     val isAtBottom by remember {
         derivedStateOf {
             listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 140
         }
     }
-    LaunchedEffect(peer.peerId, isAtBottom) {
-        onAtBottomChanged(isAtBottom)
+    val isAnchoredAtPreviousBottom by remember(newestMessageId) {
+        derivedStateOf {
+            val previous = prevNewestMessageId
+            val anchoredKey = listState.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.index == listState.firstVisibleItemIndex }
+                ?.key as? String
+            previous != null &&
+                previous != newestMessageId &&
+                anchoredKey == previous &&
+                listState.firstVisibleItemScrollOffset <= 140
+        }
+    }
+    LaunchedEffect(peer.peerId, isAtBottom, isAutoScrollingToBottom, isAnchoredAtPreviousBottom) {
+        onAtBottomChanged(isAtBottom || isAutoScrollingToBottom || isAnchoredAtPreviousBottom)
     }
 
     val visibleMessageIds by remember {
@@ -372,9 +394,6 @@ fun ChatDetailScreen(
         }
     }
 
-    val newestMessage = messages.firstOrNull()
-    val newestMessageId = newestMessage?.messageId
-    var prevNewestMessageId by remember(peer.peerId) { mutableStateOf<String?>(null) }
     var lastAutoScrolledAnchor by remember(peer.peerId) { mutableStateOf<String?>(null) }
     LaunchedEffect(peer.peerId, unreadDividerAnchorId, messages.size) {
         if (unreadDividerAnchorId != null && lastAutoScrolledAnchor != unreadDividerAnchorId) {
@@ -390,21 +409,29 @@ fun ChatDetailScreen(
     }
     LaunchedEffect(newestMessageId) {
         val previous = prevNewestMessageId
-        prevNewestMessageId = newestMessageId
         val isOutgoingNewest = newestMessage?.isOutgoing == true
+        val wasAnchored = isAnchoredAtPreviousBottom
         val shouldScroll = newestMessageId != null && (
             scrollToBottomPending ||
-                (previous != null && previous != newestMessageId && (isOutgoingNewest || isAtBottom))
+                (previous != null &&
+                    previous != newestMessageId &&
+                    (isOutgoingNewest || isAtBottom || isAutoScrollingToBottom || wasAnchored))
             )
         if (shouldScroll) {
+            isAutoScrollingToBottom = true
+            prevNewestMessageId = newestMessageId
             scrollToBottomPending = false
             scrollToBottomSmooth()
+        } else {
+            prevNewestMessageId = newestMessageId
         }
     }
 
     val showScrollToBottom by remember {
         derivedStateOf {
-            listState.firstVisibleItemIndex >= 1 || listState.firstVisibleItemScrollOffset > 240
+            !isAutoScrollingToBottom &&
+                !isAnchoredAtPreviousBottom &&
+                (listState.firstVisibleItemIndex >= 1 || listState.firstVisibleItemScrollOffset > 240)
         }
     }
 

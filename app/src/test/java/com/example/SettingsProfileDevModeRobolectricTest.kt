@@ -1080,6 +1080,143 @@ class SettingsProfileDevModeRobolectricTest {
         composeTestRule.onNodeWithText("14").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithText("Alice → Charlie").performScrollTo().assertIsDisplayed()
     }
+
+    @Test
+    fun incomingMessagesAutoScrollWhenAtBottomAndStayPutWhenScrolledUp() {
+        val now = System.currentTimeMillis()
+        val initialMessages = (0 until 30).map { idx ->
+            MessageEntity(
+                messageId = "base_$idx",
+                peerId = "peer_autoscroll",
+                isOutgoing = idx % 2 == 0,
+                type = MessageType.TEXT.name,
+                textContent = "Base message #$idx",
+                status = DeliveryStatus.READ.name,
+                createdAt = now - (idx * 1000L)
+            )
+        }
+        val messagesState = mutableStateOf(initialMessages)
+        val atBottomHistory = mutableListOf<Boolean>()
+        val nowClock = MutableStateFlow(now)
+
+        composeTestRule.setContent {
+            ChatsoTheme {
+                ChatDetailScreen(
+                    identity = LocalIdentity(isInitialized = true, username = "Me", peerId = "me"),
+                    peer = PeerEntity(
+                        peerId = "peer_autoscroll",
+                        username = "Peer",
+                        publicKeyBase64 = "KEY",
+                        fingerprint = "FP"
+                    ),
+                    messages = messagesState.value,
+                    currentMessageLimit = 150,
+                    presence = PeerPresence.ONLINE,
+                    isPeerTyping = false,
+                    activeTransfers = emptyList(),
+                    favoriteStickers = emptyList(),
+                    nowClockFlow = nowClock,
+                    voiceRecordingState = VoiceRecordingState(),
+                    voicePlaybackState = VoicePlaybackState(),
+                    showBackButton = true,
+                    onBack = {},
+                    onAtBottomChanged = { atBottomHistory.add(it) },
+                    onLoadMoreMessages = {},
+                    onSendText = { _, _ -> },
+                    onToggleReaction = { _, _ -> },
+                    onTypingChanged = {},
+                    onSendPhotoUri = { _, _ -> },
+                    onSendVideoUri = { _, _ -> },
+                    onSendDocumentUri = { _, _ -> },
+                    onSendStickerStream = { _, _, _, _ -> },
+                    onCheckStickerFavorited = { false },
+                    onToggleFavoriteSticker = {},
+                    onRemoveFavoriteSticker = {},
+                    onSendFavoriteSticker = { _, _ -> },
+                    onStartVoiceRecording = {},
+                    onCancelVoiceRecording = {},
+                    onSendVoiceRecording = {},
+                    onToggleVoicePlayback = { _, _ -> },
+                    onOpenAttachment = { _, _ -> },
+                    onCancelTransfer = {},
+                    onRetryDownload = {},
+                    onSetSelfDestruct = {},
+                    onVerifyPeerKey = {},
+                    onReconnect = {},
+                    onDeleteMessage = {},
+                    onDeleteConversation = {},
+                    onNotify = {}
+                )
+            }
+        }
+
+        composeTestRule.waitForIdle()
+        assertTrue(atBottomHistory.lastOrNull() == true)
+
+        // Incoming short message 1 arrives while user is at the bottom -> must scroll to bottom automatically
+        messagesState.value = listOf(
+            MessageEntity(
+                messageId = "incoming_live_1",
+                peerId = "peer_autoscroll",
+                isOutgoing = false,
+                type = MessageType.TEXT.name,
+                textContent = "Oi",
+                status = DeliveryStatus.READ.name,
+                createdAt = now + 1000L
+            )
+        ) + messagesState.value
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("message_bubble_incoming_live_1").assertIsDisplayed()
+        assertTrue(atBottomHistory.none { !it })
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("chat_scroll_to_bottom_button")).fetchSemanticsNodes().isEmpty()
+        )
+
+        // Incoming message 2 arrives right after -> must also scroll to bottom automatically
+        messagesState.value = listOf(
+            MessageEntity(
+                messageId = "incoming_live_2",
+                peerId = "peer_autoscroll",
+                isOutgoing = false,
+                type = MessageType.TEXT.name,
+                textContent = "Tudo bem por aí?",
+                status = DeliveryStatus.READ.name,
+                createdAt = now + 2000L
+            )
+        ) + messagesState.value
+        composeTestRule.waitForIdle()
+
+        composeTestRule.onNodeWithTag("message_bubble_incoming_live_2").assertIsDisplayed()
+        assertTrue(atBottomHistory.none { !it })
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("chat_scroll_to_bottom_button")).fetchSemanticsNodes().isEmpty()
+        )
+
+        // Now user scrolls up to older messages -> incoming message must NOT yank viewport to bottom
+        composeTestRule.onNodeWithTag("chat_messages_list").performScrollToIndex(20)
+        composeTestRule.waitForIdle()
+        assertTrue(atBottomHistory.lastOrNull() == false)
+
+        messagesState.value = listOf(
+            MessageEntity(
+                messageId = "incoming_live_3",
+                peerId = "peer_autoscroll",
+                isOutgoing = false,
+                type = MessageType.TEXT.name,
+                textContent = "Nova mensagem enquanto voce esta la em cima",
+                status = DeliveryStatus.DELIVERED.name,
+                createdAt = now + 3000L
+            )
+        ) + messagesState.value
+        composeTestRule.waitForIdle()
+
+        assertTrue(atBottomHistory.lastOrNull() == false)
+        composeTestRule.onNodeWithTag("chat_new_messages_alert").assertIsDisplayed()
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("message_bubble_incoming_live_3")).fetchSemanticsNodes().isEmpty()
+        )
+    }
 }
 
 private val Float.dpValueCheck: androidx.compose.ui.unit.Dp
