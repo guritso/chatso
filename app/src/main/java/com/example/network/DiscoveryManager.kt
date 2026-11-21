@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
+import com.example.R
 import com.example.crypto.CryptoEngine
 import com.example.data.DiscoveredPeer
 import com.example.data.EndpointKind
@@ -31,6 +32,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -43,6 +45,13 @@ class DiscoveryManager(
     private val context: Context,
     private val scope: CoroutineScope
 ) {
+    data class BridgedPeerInfo(
+        val peerId: String,
+        val username: String,
+        val publicKeyBase64: String,
+        val listenPort: Int
+    )
+
     companion object {
         private const val NSD_SERVICE_TYPE = "_chatso._tcp."
         private const val UDP_MAGIC = "CHATSO_DISC_V1"
@@ -62,6 +71,13 @@ class DiscoveryManager(
 
     @Volatile
     private var latestIdentity: LocalIdentity = LocalIdentity()
+
+    @Volatile
+    private var bridgedPeersProvider: () -> List<BridgedPeerInfo> = { emptyList() }
+
+    fun setBridgedPeersProvider(provider: () -> List<BridgedPeerInfo>) {
+        bridgedPeersProvider = provider
+    }
 
     private var udpResponderJob: Job? = null
     private var udpSocket: DatagramSocket? = null
@@ -163,7 +179,16 @@ class DiscoveryManager(
                 startNsdBrowse()
                 kotlinx.coroutines.withTimeoutOrNull(2500L) {
                     coroutineScope {
-                        // 1. Immediately probe known peers (<150ms)
+                        // 1. Immediately probe known peers & localhost (<150ms)
+                        val localhostTargets = listOf(
+                            "127.0.0.1" to identity.listenPort,
+                            "127.0.0.1" to LocalIdentity.DEFAULT_TCP_PORT
+                        ).distinct()
+                        launch {
+                            localhostTargets.forEach { (ip, port) ->
+                                launch { probeSingleHost(ip, port, EndpointKind.LOCALHOST.badge) }
+                            }
+                        }
                         if (knownTargets.isNotEmpty()) {
                             launch {
                                 knownTargets.distinct().forEach { (ip, port) ->
@@ -277,7 +302,7 @@ class DiscoveryManager(
                 val replyKind = inp.readByte()
                 if (replyKind != KIND_DISCOVERY_REPLY) return
                 val len = inp.readInt()
-                if (len <= 0 || len > 16_384) return
+                if (len <= 0 || len > 65_536) return
                 val bytes = ByteArray(len)
                 inp.readFully(bytes)
                 val json = JSONObject(String(bytes, Charsets.UTF_8))
@@ -305,6 +330,92 @@ class DiscoveryManager(
             source = sourceLabel
         )
         _discoveredPeers.update { it + (peerId to peer) }
+
+        val bridgedArr = json.optJSONArray("bridgedPeers")
+        if (bridgedArr != null) {
+            val entries = buildList {
+                for (i in 0 until bridgedArr.length()) {
+                    val obj = bridgedArr.optJSONObject(i) ?: continue
+                    val bPub = obj.optString("pub")
+                    if (bPub.isBlank()) continue
+                    val bPeerId = CryptoEngine.computePeerIdFromBase64(bPub)
+                    if (bPeerId == latestIdentity.peerId || bPeerId == peerId) continue
+                    add(
+                        BridgedPeerInfo(
+                            peerId = bPeerId,
+                            username = obj.optString("name", "Chatso User"),
+                            publicKeyBase64 = bPub,
+                            listenPort = obj.optInt("port", LocalIdentity.DEFAULT_TCP_PORT)
+                        )
+                    )
+                }
+            }
+            updateBridgedPeers(
+                bridgePeerId = peerId,
+                bridgeName = name,
+                bridgeHost = sourceIp,
+                bridgePort = port,
+                entries = entries
+            )
+        }
+    }
+
+    fun updateBridgedPeers(
+        bridgePeerId: String,
+        bridgeName: String,
+        bridgeHost: String,
+        bridgePort: Int,
+        entries: List<BridgedPeerInfo>
+    ) {
+        val bridgeBadge = context.getString(R.string.bridge_badge)
+        val cleanBridgeName = bridgeName.ifBlank { bridgeHost.ifBlank { bridgeBadge } }
+        val sourceText = "$bridgeBadge ($cleanBridgeName)"
+        val validEntries = entries.filter {
+            it.peerId != latestIdentity.peerId &&
+                it.peerId != bridgePeerId &&
+                it.publicKeyBase64.isNotBlank()
+        }
+        val activeIds = validEntries.map { it.peerId }.toSet()
+        _discoveredPeers.update { current ->
+            val mutable = current.toMutableMap()
+            val iterator = mutable.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                if (entry.value.viaBridgePeerId == bridgePeerId && !activeIds.contains(entry.key)) {
+                    iterator.remove()
+                }
+            }
+            for (item in validEntries) {
+                val existing = mutable[item.peerId]
+                if (existing == null || existing.viaBridgePeerId != null) {
+                    mutable[item.peerId] = DiscoveredPeer(
+                        peerId = item.peerId,
+                        username = item.username.ifBlank { "Chatso User" },
+                        ipAddress = bridgeHost.ifBlank { "127.0.0.1" },
+                        port = item.listenPort,
+                        publicKeyBase64 = item.publicKeyBase64,
+                        fingerprint = CryptoEngine.formatFingerprintFromBase64(item.publicKeyBase64),
+                        source = sourceText,
+                        viaBridgePeerId = bridgePeerId,
+                        bridgeHost = bridgeHost.ifBlank { "127.0.0.1" },
+                        bridgePort = bridgePort
+                    )
+                }
+            }
+            mutable
+        }
+    }
+
+    fun clearBridgedPeersFromBridge(bridgePeerId: String) {
+        _discoveredPeers.update { current ->
+            current.filterValues { it.viaBridgePeerId != bridgePeerId }
+        }
+    }
+
+    fun clearAllBridgedPeers() {
+        _discoveredPeers.update { current ->
+            current.filterValues { it.viaBridgePeerId == null }
+        }
     }
 
     fun buildDiscoveryReplyBytes(identity: LocalIdentity): ByteArray {
@@ -319,6 +430,24 @@ class DiscoveryManager(
             put("name", identity.username)
             put("port", identity.listenPort)
             put("pub", identity.publicKeyBase64)
+            if (identity.bridgeEnabled && type == "ANNOUNCE") {
+                val bridged = bridgedPeersProvider()
+                    .filter { it.peerId != identity.peerId && it.publicKeyBase64.isNotBlank() }
+                if (bridged.isNotEmpty()) {
+                    val arr = JSONArray()
+                    bridged.forEach { p ->
+                        arr.put(
+                            JSONObject().apply {
+                                put("peerId", p.peerId)
+                                put("name", p.username)
+                                put("pub", p.publicKeyBase64)
+                                put("port", p.listenPort)
+                            }
+                        )
+                    }
+                    put("bridgedPeers", arr)
+                }
+            }
         }.toString()
     }
 

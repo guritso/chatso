@@ -323,11 +323,12 @@ private fun LanDiscoveryPane(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${peer.ipAddress}:${peer.port}",
+                                    text = "${peer.ipAddress}:${peer.port} · ${peer.source}",
                                     fontFamily = JetBrainsMonoFontFamily,
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Spacer(modifier = Modifier.width(8.dp))

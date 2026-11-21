@@ -84,6 +84,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -142,6 +143,7 @@ import com.example.ui.components.AttachmentsMenuTray
 import com.example.ui.components.ChatMessageBubbleItem
 import com.example.ui.components.ChatsoAvatar
 import com.example.ui.components.ComposerTrayMode
+import com.example.ui.components.ContactProfileDialog
 import com.example.ui.components.FloatingTransfersOverlay
 import com.example.ui.components.FullScreenImageViewerDialog
 import com.example.ui.components.FullScreenVideoPlayerDialog
@@ -295,6 +297,7 @@ fun ChatDetailScreen(
     var showMoreMenu by remember { mutableStateOf(false) }
     var showSelfDestructDialog by remember { mutableStateOf(false) }
     var showSafetyDialog by remember { mutableStateOf(false) }
+    var showContactProfileDialog by remember { mutableStateOf(false) }
     var viewerPayload by remember { mutableStateOf<ViewerMediaPayload?>(null) }
     var actionDialogMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var transfersExpanded by remember { mutableStateOf(false) }
@@ -572,55 +575,62 @@ fun ChatDetailScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                 }
 
-                ChatsoAvatar(
-                    name = peer.username,
-                    avatarModel = peer.avatarPath,
-                    size = 40.dp,
-                    presence = presence,
-                    showPresenceDot = true
-                )
-
-                Spacer(modifier = Modifier.width(10.dp))
-
-                Column(
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { if (!isConnected) onReconnect() }
+                        .clip(MaterialTheme.shapes.small)
+                        .minimumInteractiveComponentSize()
+                        .clickable { showContactProfileDialog = true }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                        .testTag("chat_header_profile_button")
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    ChatsoAvatar(
+                        name = peer.username,
+                        avatarModel = peer.avatarPath,
+                        size = 40.dp,
+                        presence = presence,
+                        showPresenceDot = true
+                    )
+
+                    Spacer(modifier = Modifier.width(10.dp))
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = peer.username,
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (peer.isMutuallyVerified) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(
+                                    imageVector = Icons.Filled.VerifiedUser,
+                                    contentDescription = stringResource(R.string.safety_title),
+                                    tint = OnlineEmerald,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
                         Text(
-                            text = peer.username,
-                            style = MaterialTheme.typography.titleMedium,
+                            text = when {
+                                isPeerTyping -> stringResource(R.string.status_typing)
+                                presence == PeerPresence.ONLINE -> stringResource(R.string.status_online)
+                                presence == PeerPresence.BACKGROUND -> stringResource(R.string.status_background)
+                                else -> stringResource(R.string.status_offline_tap)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = when {
+                                isPeerTyping -> MaterialTheme.colorScheme.primary
+                                presence == PeerPresence.ONLINE -> OnlineEmerald
+                                presence == PeerPresence.BACKGROUND -> WarningAmber
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (peer.isMutuallyVerified) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(
-                                imageVector = Icons.Filled.VerifiedUser,
-                                contentDescription = stringResource(R.string.safety_title),
-                                tint = OnlineEmerald,
-                                modifier = Modifier.size(15.dp)
-                            )
-                        }
                     }
-                    Text(
-                        text = when {
-                            isPeerTyping -> stringResource(R.string.status_typing)
-                            presence == PeerPresence.ONLINE -> stringResource(R.string.status_online)
-                            presence == PeerPresence.BACKGROUND -> stringResource(R.string.status_background)
-                            else -> stringResource(R.string.status_offline_tap)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = when {
-                            isPeerTyping -> MaterialTheme.colorScheme.primary
-                            presence == PeerPresence.ONLINE -> OnlineEmerald
-                            presence == PeerPresence.BACKGROUND -> WarningAmber
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
                 }
 
                 if (!isConnected) {
@@ -1470,6 +1480,24 @@ fun ChatDetailScreen(
                     Text(stringResource(R.string.close_btn))
                 }
             }
+        )
+    }
+
+    if (showContactProfileDialog) {
+        ContactProfileDialog(
+            peer = peer,
+            presence = presence,
+            selfDestructLabel = SelfDestructOption.fromSeconds(peer.selfDestructSeconds).localizedLabel(),
+            onDismiss = { showContactProfileDialog = false },
+            onViewAvatar = { path ->
+                showContactProfileDialog = false
+                viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.IMAGE, path, peer.username)
+            },
+            onOpenSafetyNumber = {
+                showContactProfileDialog = false
+                showSafetyDialog = true
+            },
+            onNotify = onNotify
         )
     }
 

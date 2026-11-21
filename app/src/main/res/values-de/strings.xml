@@ -266,8 +266,8 @@
     <string name="dev_fake_name_label">Name des Fake-Kontakts</string>
     <string name="dev_fake_name_hint">Leer lassen für Zufallsnamen</string>
     <string name="dev_create_fake_peer_btn">Fake-Kontakt erstellen</string>
-    <string name="dev_target_peer_label">Zielkontakt</string>
-    <string name="dev_no_peers_hint">Erstelle oben einen Fake-Kontakt oder verbinde dich zuerst.</string>
+    <string name="dev_target_peer_label">Fake-Zielkontakt</string>
+    <string name="dev_no_peers_hint">Erstelle zuerst oben einen Fake-Kontakt.</string>
     <string name="dev_incoming_sim_section">Simulator für eingehende Nachrichten</string>
     <string name="dev_fake_msg_label">Eingehender Nachrichtentext</string>
     <string name="dev_fake_msg_default">Hallo! Test einer eingehenden Nachricht in chatso.</string>
@@ -296,4 +296,19 @@
     <string name="dev_msg_key_warning">Schlüsselwechsel-Warnung für %1$s simuliert.</string>
     <string name="dev_msg_no_message_for_reaction">Sende oder simuliere zuerst eine Nachricht.</string>
     <string name="cd_scroll_to_bottom">Nach unten scrollen</string>
+
+    <string name="bridge_mode_title">Brückenmodus</string>
+    <string name="bridge_mode_desc">Verbindet Localhost- und VPN/LAN-Kontakte, sodass sie sich über dein Gerät finden und schreiben können</string>
+    <string name="bridge_badge">Brücke</string>
+    <string name="msg_bridge_on">Brückenmodus aktiviert.</string>
+    <string name="msg_bridge_off">Brückenmodus deaktiviert.</string>
+    <string name="msg_message_queued">Kontakt offline · Wird beim Neuverbinden gesendet.</string>
+    <string name="contact_profile_title">Kontaktprofil</string>
+    <string name="contact_tap_photo_hint">Zum Vergrößern auf Foto tippen</string>
+    <string name="contact_network_label">Adresse</string>
+    <string name="contact_verification_label">Verschlüsselung</string>
+    <string name="contact_verified_short">Verifiziert</string>
+    <string name="contact_unverified_short">Nicht verifiziert</string>
+    <string name="contact_self_destruct_label">Selbstzerstörung</string>
+    <string name="contact_via_bridge">Über Brücke</string>
 </resources>

@@ -257,7 +257,8 @@ class ExampleRobolectricTest {
                     remoteIp: String,
                     remoteListenPort: Int,
                     username: String,
-                    avatarBase64: String?
+                    avatarBase64: String?,
+                    viaBridgePeerId: String
                 ) {}
                 override suspend fun onPeerDisconnected(peerId: String) {}
                 override suspend fun onPeerForegroundChanged(peerId: String, inForeground: Boolean) {
@@ -711,7 +712,7 @@ class ExampleRobolectricTest {
             assertEquals(0, cancelledMsg.transferProgress)
             assertEquals(MessageType.STICKER.name, cancelledMsg.type)
 
-            // Test outgoing sticker stream fails cleanly when peer is unreachable and can be cancelled out of DB
+            // Test outgoing sticker stream queues cleanly as SENDING when peer is offline and can be cancelled out of DB
             val fakeWebp = byteArrayOf(0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00)
             val sent = repoA.sendStickerStream(
                 peerId = peerReceiverId,
@@ -719,13 +720,13 @@ class ExampleRobolectricTest {
                 mimeType = "image/webp",
                 fileNameHint = "emoji.webp"
             )
-            assertFalse(sent) // offline peer
+            assertFalse(sent) // offline peer -> queued as SENDING
             val latestOutgoing = dao.getLatestMessageForPeer(peerReceiverId)
             assertNotNull(latestOutgoing)
             assertEquals(MessageType.STICKER.name, latestOutgoing!!.type)
-            assertEquals(DeliveryStatus.FAILED.name, latestOutgoing.status)
+            assertEquals(DeliveryStatus.SENDING.name, latestOutgoing.status)
 
-            // Cancelling an outgoing transfer removes the message completely
+            // Cancelling an outgoing queued transfer removes the message completely
             repoA.cancelTransfer(latestOutgoing.messageId)
             assertNull(dao.getMessageById(latestOutgoing.messageId))
 
@@ -743,7 +744,8 @@ class ExampleRobolectricTest {
                 override suspend fun isKnownPeer(peerId: String) = true
                 override suspend fun onPeerHandshaked(
                     peerId: String, publicKeyBase64: String, remoteIp: String,
-                    remoteListenPort: Int, username: String, avatarBase64: String?
+                    remoteListenPort: Int, username: String, avatarBase64: String?,
+                    viaBridgePeerId: String
                 ) {}
                 override suspend fun onPeerDisconnected(peerId: String) {}
                 override suspend fun onIncomingTextMessage(
@@ -772,7 +774,8 @@ class ExampleRobolectricTest {
                 override suspend fun isKnownPeer(peerId: String) = true
                 override suspend fun onPeerHandshaked(
                     peerId: String, publicKeyBase64: String, remoteIp: String,
-                    remoteListenPort: Int, username: String, avatarBase64: String?
+                    remoteListenPort: Int, username: String, avatarBase64: String?,
+                    viaBridgePeerId: String
                 ) {}
                 override suspend fun onPeerDisconnected(peerId: String) {}
                 override suspend fun onIncomingTextMessage(
@@ -1082,5 +1085,310 @@ class ExampleRobolectricTest {
         }
         sqliteHelper.close()
         context.deleteDatabase(dbName)
+    }
+
+    @Test
+    fun `migration 4 to 5 adds viaBridgePeerId column to peers`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val dbName = "migration_4_5_test.db"
+        context.deleteDatabase(dbName)
+        val sqliteHelper = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(
+            androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(4) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS peers (peerId TEXT NOT NULL PRIMARY KEY, username TEXT NOT NULL DEFAULT '')")
+                        db.execSQL("INSERT INTO peers (peerId, username) VALUES ('p1', 'Alice')")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+                })
+                .build()
+        )
+        val writable = sqliteHelper.writableDatabase
+        ChatDatabase.MIGRATION_4_5.migrate(writable)
+        writable.query("SELECT viaBridgePeerId FROM peers WHERE peerId = 'p1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("", c.getString(0))
+        }
+        sqliteHelper.close()
+        context.deleteDatabase(dbName)
+    }
+
+    @Test
+    fun `offline queued messages automatically send in order upon peer reconnect`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        val peerId = "peer_offline_queue_test"
+        dao.deleteAllMessagesForPeer(peerId)
+        dao.deletePeer(peerId)
+
+        val repo = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = LocalIdentityStore(context),
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { true }
+        )
+
+        val discRemote = DiscoveryManager(context, scope)
+        val remoteMat = CryptoEngine.createIdentityMaterial()
+        val receivedOrder = java.util.concurrent.CopyOnWriteArrayList<String>()
+        val allDeliveredFuture = CompletableFuture<Boolean>()
+        val remoteListener = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {
+                receivedOrder.add(text)
+                if (receivedOrder.size >= 2) {
+                    allDeliveredFuture.complete(true)
+                }
+            }
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ): File = File.createTempFile("unused_q", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val remoteNode = P2PNodeManager(scope, discRemote, remoteListener)
+
+        try {
+            val localStore = LocalIdentityStore(context)
+            localStore.createIdentity("Sender", null, true)
+            repeat(20) {
+                if (repo.nodeManager.serverRunning.value) return@repeat
+                delay(50)
+            }
+            assertTrue(repo.nodeManager.serverRunning.value)
+
+            remoteNode.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true,
+                    username = "RemotePeer",
+                    publicKeyBase64 = remoteMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = remoteMat.wrappedPrivateKeyBase64,
+                    peerId = remoteMat.peerId,
+                    fingerprint = remoteMat.fingerprint,
+                    listenPort = 43931,
+                    isDiscoverable = false
+                )
+            )
+            delay(200)
+
+            // Save remote peer in DB as currently offline (unreachable port 1)
+            dao.upsertPeer(
+                com.example.data.PeerEntity(
+                    peerId = remoteMat.peerId,
+                    username = "RemotePeer",
+                    publicKeyBase64 = remoteMat.publicKeyBase64,
+                    fingerprint = remoteMat.fingerprint,
+                    lastIp = "127.0.0.1",
+                    lastPort = 1
+                )
+            )
+
+            assertFalse(repo.sendText(remoteMat.peerId, "Queued First"))
+            delay(15)
+            assertFalse(repo.sendText(remoteMat.peerId, "Queued Second"))
+
+            val queued = dao.getPendingOutgoingMessagesChronological(remoteMat.peerId)
+            assertEquals(2, queued.size)
+            assertEquals(DeliveryStatus.SENDING.name, queued[0].status)
+            assertEquals(DeliveryStatus.SENDING.name, queued[1].status)
+
+            // Now remote peer connects to sender (handshake completes on reconnect)
+            val senderId = localStore.getSnapshot()
+            assertTrue(
+                remoteNode.connectToPeer("127.0.0.1", repo.nodeManager.boundPort.value, senderId.publicKeyBase64).isSuccess
+            )
+
+            assertTrue(allDeliveredFuture.get(5, TimeUnit.SECONDS))
+            assertEquals(listOf("Queued First", "Queued Second"), receivedOrder.toList())
+
+            // Pending queue is now empty because both messages transitioned out of SENDING
+            delay(300)
+            assertTrue(dao.getPendingOutgoingMessagesChronological(remoteMat.peerId).isEmpty())
+        } finally {
+            remoteNode.disconnectAll()
+            discRemote.shutdown()
+            repo.shutdown()
+            dao.deleteAllMessagesForPeer(remoteMat.peerId)
+            dao.deletePeer(remoteMat.peerId)
+            dao.deleteAllMessagesForPeer(peerId)
+            dao.deletePeer(peerId)
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `three node bridge mode relays discovery and e2ee chat between isolated peers`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        val discA = DiscoveryManager(context, scope)
+        val discB = DiscoveryManager(context, scope)
+        val discC = DiscoveryManager(context, scope)
+
+        val matA = CryptoEngine.createIdentityMaterial()
+        val matB = CryptoEngine.createIdentityMaterial()
+        val matC = CryptoEngine.createIdentityMaterial()
+
+        val cHandshakedWithAViaBridge = CompletableFuture<String>()
+        val cReceivedTextFromA = CompletableFuture<String>()
+        val aReceivedTextFromC = CompletableFuture<String>()
+        val aDisconnectedFromC = CompletableFuture<Boolean>()
+
+        fun makeListener(
+            onHandshake: (peerId: String, viaBridgePeerId: String) -> Unit = { _, _ -> },
+            onDisconnect: (peerId: String) -> Unit = {},
+            onText: (peerId: String, text: String) -> Unit = { _, _ -> }
+        ) = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {
+                onHandshake(peerId, viaBridgePeerId)
+            }
+            override suspend fun onPeerDisconnected(peerId: String) {
+                onDisconnect(peerId)
+            }
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {
+                onText(peerId, text)
+            }
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ): File = File.createTempFile("bridge_unused", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+
+        val nodeA = P2PNodeManager(
+            scope,
+            discA,
+            makeListener(
+                onDisconnect = { peerId ->
+                    if (peerId == matC.peerId) aDisconnectedFromC.complete(true)
+                },
+                onText = { peerId, text ->
+                    if (peerId == matC.peerId) aReceivedTextFromC.complete(text)
+                }
+            )
+        )
+        val nodeB = P2PNodeManager(scope, discB, makeListener())
+        val nodeC = P2PNodeManager(
+            scope,
+            discC,
+            makeListener(
+                onHandshake = { peerId, viaBridge ->
+                    if (peerId == matA.peerId && viaBridge.isNotBlank()) {
+                        cHandshakedWithAViaBridge.complete(viaBridge)
+                    }
+                },
+                onText = { peerId, text ->
+                    if (peerId == matA.peerId) cReceivedTextFromA.complete(text)
+                }
+            )
+        )
+
+        try {
+            val idA = LocalIdentity(
+                isInitialized = true, username = "Alice",
+                publicKeyBase64 = matA.publicKeyBase64, wrappedPrivateKeyBase64 = matA.wrappedPrivateKeyBase64,
+                peerId = matA.peerId, fingerprint = matA.fingerprint,
+                listenPort = 43941, isDiscoverable = true, bridgeEnabled = false
+            )
+            val idB = LocalIdentity(
+                isInitialized = true, username = "BridgeB",
+                publicKeyBase64 = matB.publicKeyBase64, wrappedPrivateKeyBase64 = matB.wrappedPrivateKeyBase64,
+                peerId = matB.peerId, fingerprint = matB.fingerprint,
+                listenPort = 43942, isDiscoverable = true, bridgeEnabled = true
+            )
+            val idC = LocalIdentity(
+                isInitialized = true, username = "Charlie",
+                publicKeyBase64 = matC.publicKeyBase64, wrappedPrivateKeyBase64 = matC.wrappedPrivateKeyBase64,
+                peerId = matC.peerId, fingerprint = matC.fingerprint,
+                listenPort = 43943, isDiscoverable = true, bridgeEnabled = false
+            )
+
+            nodeA.updateIdentityAndEnsureServer(idA)
+            nodeB.updateIdentityAndEnsureServer(idB)
+            nodeC.updateIdentityAndEnsureServer(idC)
+            delay(250)
+
+            // Both Alice and Charlie connect directly to BridgeB (e.g. A on localhost, C on VPN)
+            assertTrue(nodeA.connectToPeer("127.0.0.1", nodeB.boundPort.value, matB.publicKeyBase64).isSuccess)
+            assertTrue(nodeC.connectToPeer("127.0.0.1", nodeB.boundPort.value, matB.publicKeyBase64).isSuccess)
+            delay(250)
+
+            // When Alice probes BridgeB's beacon port, Alice discovers Charlie via BridgeB
+            discA.applyIdentityPolicy(idA)
+            discA.scanNetworkNow(listOf("127.0.0.1" to nodeB.boundPort.value))
+            delay(400)
+            val discoveredC = discA.discoveredPeers.value[matC.peerId]
+            assertNotNull(discoveredC)
+            assertEquals(matB.peerId, discoveredC!!.viaBridgePeerId)
+
+            // Alice connects to Charlie via BridgeB and both exchange E2EE messages
+            val bridgedId = nodeA.connectViaBridge(matB.peerId, matC.peerId, matC.publicKeyBase64).getOrThrow()
+            assertEquals(matC.peerId, bridgedId)
+            assertEquals(matB.peerId, cHandshakedWithAViaBridge.get(3, TimeUnit.SECONDS))
+
+            assertTrue(
+                nodeA.sendTextMessage(
+                    peerId = matC.peerId,
+                    messageId = "bridge-msg-1",
+                    text = "Hello Charlie across BridgeB!",
+                    selfDestructSec = 0,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            assertEquals("Hello Charlie across BridgeB!", cReceivedTextFromA.get(3, TimeUnit.SECONDS))
+
+            assertTrue(
+                nodeC.sendTextMessage(
+                    peerId = matA.peerId,
+                    messageId = "bridge-msg-2",
+                    text = "Hi Alice back via BridgeB!",
+                    selfDestructSec = 0,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            assertEquals("Hi Alice back via BridgeB!", aReceivedTextFromC.get(3, TimeUnit.SECONDS))
+
+            // Stopping BridgeB cascades disconnect to Alice's bridged session with Charlie
+            nodeB.disconnectAll()
+            assertTrue(aDisconnectedFromC.get(3, TimeUnit.SECONDS))
+        } finally {
+            nodeA.disconnectAll()
+            nodeB.disconnectAll()
+            nodeC.disconnectAll()
+            discA.shutdown()
+            discB.shutdown()
+            discC.shutdown()
+            scope.cancel()
+        }
     }
 }

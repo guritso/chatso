@@ -92,17 +92,7 @@ object ChatsoNotificationHelper {
             }.getOrNull()
             ThemePalette.fromName(savedName).also { cachedPalette = it }
         }
-        val fullTheme = cachedThemeAdvanced ?: run {
-            runCatching {
-                context.getSharedPreferences(PREFS_NOTIF_THEME, Context.MODE_PRIVATE)
-                    .getBoolean(KEY_THEME_ADVANCED, false)
-            }.getOrDefault(false).also { cachedThemeAdvanced = it }
-        }
-        return if (fullTheme) {
-            palette.spec().light.primary.toArgb()
-        } else {
-            DEFAULT_APP_ICON_COLOR
-        }
+        return palette.spec().light.primary.toArgb()
     }
 
     private data class CachedBubbleLine(

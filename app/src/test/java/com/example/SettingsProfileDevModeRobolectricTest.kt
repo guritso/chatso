@@ -116,6 +116,17 @@ class SettingsProfileDevModeRobolectricTest {
         composeTestRule.onNodeWithTag("settings_language_expand_button").performScrollTo().performClick()
         composeTestRule.onNodeWithTag("settings_lang_pt").performScrollTo().assertIsDisplayed()
 
+        // Network & Port + Bridge mode are collapsed initially and visible after expanding
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("settings_bridge_switch")).fetchSemanticsNodes().isEmpty()
+        )
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("settings_port_input")).fetchSemanticsNodes().isEmpty()
+        )
+        composeTestRule.onNodeWithTag("settings_network_expand_button").performScrollTo().performClick()
+        composeTestRule.onNodeWithTag("settings_bridge_switch").performScrollTo().assertIsDisplayed()
+        composeTestRule.onNodeWithTag("settings_port_input").performScrollTo().assertIsDisplayed()
+
         // Updates, About, Licenses, and discreet Developer Mode live inside one unified card
         composeTestRule.onNodeWithTag("settings_about_section_card").performScrollTo().assertIsDisplayed()
         composeTestRule.onNodeWithTag("settings_about_card").performScrollTo().assertIsDisplayed()
@@ -128,7 +139,7 @@ class SettingsProfileDevModeRobolectricTest {
     }
 
     @Test
-    fun notificationAccentColorFollowsDefaultIconOrActiveFullTheme() {
+    fun notificationAccentColorAlwaysFollowsThemePalette() {
         val context = ApplicationProvider.getApplicationContext<Context>()
 
         ChatsoNotificationHelper.syncThemeConfig(
@@ -136,7 +147,10 @@ class SettingsProfileDevModeRobolectricTest {
             palette = ThemePalette.BLUE,
             fullThemeEnabled = false
         )
-        assertEquals(0xFF222634.toInt(), ChatsoNotificationHelper.resolveAccentColor(context))
+        assertEquals(
+            ThemePalette.BLUE.spec().light.primary.toArgb(),
+            ChatsoNotificationHelper.resolveAccentColor(context)
+        )
 
         ChatsoNotificationHelper.syncThemeConfig(
             context = context,
@@ -361,19 +375,25 @@ class SettingsProfileDevModeRobolectricTest {
     }
 
     @Test
-    fun devModeScreenRendersAllSimulatorControls() {
+    fun devModeScreenRendersAllSimulatorControlsAndExcludesRealPeers() {
         val fakePeer = PeerEntity(
             peerId = "${ChatRepository.DEV_FAKE_PEER_PREFIX}1",
             username = "Alice Fake",
             publicKeyBase64 = "K",
             fingerprint = "F"
         )
+        val realPeer = PeerEntity(
+            peerId = "real_peer_123",
+            username = "Real Bob",
+            publicKeyBase64 = "K2",
+            fingerprint = "F2"
+        )
         var sentDelay = -1
         composeTestRule.setContent {
             ChatsoTheme {
                 DevModeScreen(
                     identity = LocalIdentity(isInitialized = true, username = "Me", peerId = "local_id_1234567890", devModeEnabled = true),
-                    peers = listOf(fakePeer),
+                    peers = listOf(realPeer, fakePeer),
                     endpoints = emptyList(),
                     boundPort = 42850,
                     serverRunning = true,
@@ -398,6 +418,11 @@ class SettingsProfileDevModeRobolectricTest {
             }
         }
 
+        // Only fake contacts appear as Dev Mode targets, never real users
+        composeTestRule.onNodeWithTag("dev_target_chip_${fakePeer.peerId}").assertIsDisplayed()
+        assertTrue(
+            composeTestRule.onAllNodes(hasTestTag("dev_target_chip_${realPeer.peerId}")).fetchSemanticsNodes().isEmpty()
+        )
         composeTestRule.onNodeWithTag("dev_create_fake_peer_button").assertIsDisplayed()
         composeTestRule.onNodeWithTag("dev_send_delayed_button").performScrollTo().performClick()
         assertEquals(5, sentDelay)
@@ -513,6 +538,84 @@ class SettingsProfileDevModeRobolectricTest {
         assertTrue(
             composeTestRule.onAllNodes(hasTestTag("chat_scroll_to_bottom_button")).fetchSemanticsNodes().isEmpty()
         )
+    }
+
+    @Test
+    fun chatHeaderOpensContactProfileAndEnlargedAvatarOpensFullscreenViewer() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val avatarFile = java.io.File.createTempFile("peer_avatar", ".png", context.cacheDir).apply {
+            writeBytes(byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
+        }
+        try {
+            val nowClock = MutableStateFlow(System.currentTimeMillis())
+            val peer = PeerEntity(
+                peerId = "peer_profile_view",
+                username = "Carla VPN",
+                publicKeyBase64 = "CARLA_KEY",
+                fingerprint = "AA:11:BB:22",
+                avatarPath = avatarFile.absolutePath,
+                lastIp = "10.8.0.5",
+                lastPort = 42850,
+                viaBridgePeerId = "bridge_node_b"
+            )
+
+            composeTestRule.setContent {
+                ChatsoTheme {
+                    ChatDetailScreen(
+                        identity = LocalIdentity(isInitialized = true, username = "Me", peerId = "me"),
+                        peer = peer,
+                        messages = emptyList(),
+                        currentMessageLimit = 150,
+                        presence = PeerPresence.ONLINE,
+                        isPeerTyping = false,
+                        activeTransfers = emptyList(),
+                        favoriteStickers = emptyList(),
+                        nowClockFlow = nowClock,
+                        voiceRecordingState = VoiceRecordingState(),
+                        voicePlaybackState = VoicePlaybackState(),
+                        showBackButton = true,
+                        onBack = {},
+                        onLoadMoreMessages = {},
+                        onSendText = { _, _ -> },
+                        onToggleReaction = { _, _ -> },
+                        onTypingChanged = {},
+                        onSendPhotoUri = { _, _ -> },
+                        onSendVideoUri = { _, _ -> },
+                        onSendDocumentUri = { _, _ -> },
+                        onSendStickerStream = { _, _, _, _ -> },
+                        onCheckStickerFavorited = { false },
+                        onToggleFavoriteSticker = {},
+                        onRemoveFavoriteSticker = {},
+                        onSendFavoriteSticker = { _, _ -> },
+                        onStartVoiceRecording = {},
+                        onCancelVoiceRecording = {},
+                        onSendVoiceRecording = {},
+                        onToggleVoicePlayback = { _, _ -> },
+                        onOpenAttachment = { _, _ -> },
+                        onCancelTransfer = {},
+                        onRetryDownload = {},
+                        onSetSelfDestruct = {},
+                        onVerifyPeerKey = {},
+                        onReconnect = {},
+                        onDeleteMessage = {},
+                        onDeleteConversation = {},
+                        onNotify = {}
+                    )
+                }
+            }
+
+            composeTestRule.onNodeWithTag("chat_header_profile_button").performClick()
+            composeTestRule.waitForIdle()
+            composeTestRule.onNodeWithTag("contact_profile_dialog").assertIsDisplayed()
+            composeTestRule.onNodeWithText("10.8.0.5:42850").performScrollTo().assertIsDisplayed()
+            composeTestRule.onNodeWithText("AA:11:BB:22").performScrollTo().assertIsDisplayed()
+
+            composeTestRule.onNodeWithTag("contact_profile_avatar_button").performScrollTo().performClick()
+            composeTestRule.waitForIdle()
+            composeTestRule.onNodeWithTag("fullscreen_image_viewer").assertIsDisplayed()
+        } finally {
+            avatarFile.delete()
+        }
     }
 }
 

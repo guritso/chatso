@@ -659,7 +659,8 @@ private fun ChatsoAuthenticatedShell(
                                     onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
                                     isCheckingUpdates = updateUiState is UpdateUiState.Checking,
                                     onToggleDevMode = viewModel::setDevModeEnabled,
-                                    onOpenDevTools = { showDevTools = true }
+                                    onOpenDevTools = { showDevTools = true },
+                                    onToggleBridgeMode = viewModel::toggleBridgeMode
                                 )
                             }
                         }
@@ -905,7 +906,8 @@ private fun ChatsoAuthenticatedShell(
                                         onCheckUpdates = { viewModel.checkForUpdates(manual = true) },
                                         isCheckingUpdates = updateUiState is UpdateUiState.Checking,
                                         onToggleDevMode = viewModel::setDevModeEnabled,
-                                        onOpenDevTools = { showDevTools = true }
+                                        onOpenDevTools = { showDevTools = true },
+                                        onToggleBridgeMode = viewModel::toggleBridgeMode
                                     )
                                 }
                             }

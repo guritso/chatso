@@ -310,6 +310,15 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun toggleBridgeMode(enabled: Boolean) {
+        viewModelScope.launch {
+            identityStore.setBridgeEnabled(enabled)
+            _snackbarMessage.value = str(
+                if (enabled) R.string.msg_bridge_on else R.string.msg_bridge_off
+            )
+        }
+    }
+
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch {
             identityStore.setThemeMode(mode)
@@ -520,7 +529,42 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun connectToDiscoveredPeer(peer: DiscoveredPeer) {
-        connectInternal(peer.ipAddress, peer.port, peer.publicKeyBase64, "")
+        val bridgeId = peer.viaBridgePeerId?.takeIf { it.isNotBlank() }
+        if (bridgeId != null) {
+            connectViaBridgeInternal(peer, bridgeId)
+        } else {
+            connectInternal(peer.ipAddress, peer.port, peer.publicKeyBase64, "")
+        }
+    }
+
+    private fun connectViaBridgeInternal(peer: DiscoveredPeer, bridgePeerId: String) {
+        if (_isConnecting.value) return
+        viewModelScope.launch {
+            _isConnecting.value = true
+            val result = try {
+                val alreadyConnectedToBridge =
+                    repository.nodeManager.connectedPeers.value.contains(bridgePeerId)
+                if (!alreadyConnectedToBridge && !peer.bridgeHost.isNullOrBlank()) {
+                    repository.connectDirect(peer.bridgeHost, peer.bridgePort)
+                }
+                repository.connectViaBridge(
+                    bridgePeerId = bridgePeerId,
+                    targetPeerId = peer.peerId,
+                    expectedPubKeyBase64 = peer.publicKeyBase64
+                )
+            } finally {
+                _isConnecting.value = false
+            }
+            result.fold(
+                onSuccess = { peerId ->
+                    _selectedTab.value = HomeTab.CHATS
+                    openConversation(peerId)
+                },
+                onFailure = { err ->
+                    _snackbarMessage.value = err.message ?: peer.username
+                }
+            )
+        }
     }
 
     fun connectFromQrString(rawQr: String) {
@@ -583,7 +627,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
             repository.nodeManager.sendTyping(peerId, false)
             val ok = repository.sendText(peerId, text, replyTo)
             if (!ok) {
-                _snackbarMessage.value = str(R.string.msg_peer_offline)
+                _snackbarMessage.value = str(R.string.msg_message_queued)
             }
         }
     }
@@ -614,7 +658,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val ok = repository.sendFavoriteSticker(peerId, sticker, replyTo)
             if (!ok) {
-                _snackbarMessage.value = str(R.string.msg_peer_offline)
+                _snackbarMessage.value = str(R.string.msg_message_queued)
             }
         }
     }
@@ -637,7 +681,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
                 replyTo = replyTo
             )
             if (!ok) {
-                _snackbarMessage.value = str(R.string.msg_peer_offline)
+                _snackbarMessage.value = str(R.string.msg_message_queued)
             }
         }
     }
@@ -668,7 +712,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val ok = repository.sendUriAttachment(peerId, uri, forceImage = true, replyTo = replyTo)
             if (!ok) {
-                _snackbarMessage.value = str(R.string.msg_peer_offline)
+                _snackbarMessage.value = str(R.string.msg_message_queued)
             }
         }
     }
@@ -678,7 +722,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val ok = repository.sendUriAttachment(peerId, uri, forceImage = false, replyTo = replyTo)
             if (!ok) {
-                _snackbarMessage.value = str(R.string.msg_peer_offline)
+                _snackbarMessage.value = str(R.string.msg_message_queued)
             }
         }
     }
@@ -688,7 +732,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val ok = repository.sendUriAttachment(peerId, uri, forceImage = false, replyTo = replyTo)
             if (!ok) {
-                _snackbarMessage.value = str(R.string.msg_peer_offline)
+                _snackbarMessage.value = str(R.string.msg_message_queued)
             }
         }
     }
@@ -713,7 +757,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
                 replyTo = replyTo
             )
             if (!ok) {
-                _snackbarMessage.value = str(R.string.msg_peer_offline)
+                _snackbarMessage.value = str(R.string.msg_message_queued)
             }
         }
     }
@@ -745,7 +789,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val ok = repository.sendVoiceRecording(peerId, finalized.first, finalized.second, replyTo)
             if (!ok) {
-                _snackbarMessage.value = str(R.string.msg_peer_offline)
+                _snackbarMessage.value = str(R.string.msg_message_queued)
             }
         }
     }

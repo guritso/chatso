@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class ChatRepository(
     context: Context,
@@ -70,6 +72,8 @@ class ChatRepository(
 
     private val outgoingTransferJobs = ConcurrentHashMap<String, Job>()
     private val cancelledTransferIds = ConcurrentHashMap.newKeySet<String>()
+    private val outboxMutexByPeer = ConcurrentHashMap<String, Mutex>()
+    private val sendingInFlightIds = ConcurrentHashMap.newKeySet<String>()
 
     private val _transferAlertResIds = MutableSharedFlow<Int>(extraBufferCapacity = 8)
     val transferAlertResIds: SharedFlow<Int> = _transferAlertResIds.asSharedFlow()
@@ -191,19 +195,62 @@ class ChatRepository(
         return nodeManager.connectToPeer(ip, port, expectedPubKeyBase64, inviteToken)
     }
 
+    suspend fun connectViaBridge(
+        bridgePeerId: String,
+        targetPeerId: String,
+        expectedPubKeyBase64: String = "",
+        inviteToken: String = ""
+    ): Result<String> {
+        return nodeManager.connectViaBridge(bridgePeerId, targetPeerId, expectedPubKeyBase64, inviteToken)
+    }
+
     fun isDevSimulatedOnline(peerId: String): Boolean =
         peerId.startsWith(DEV_FAKE_PEER_PREFIX) && _devOnlineFakePeers.value.contains(peerId)
 
     suspend fun ensurePeerConnected(peerId: String): Boolean {
         if (isDevSimulatedOnline(peerId)) return true
         if (nodeManager.connectedPeers.value.contains(peerId)) return true
-        val peer = chatDao.getPeerById(peerId) ?: return false
-        if (peer.lastIp.isBlank()) return false
-        return nodeManager.connectToPeer(
-            host = peer.lastIp,
-            port = peer.lastPort,
-            expectedPubKeyBase64 = peer.publicKeyBase64
-        ).isSuccess
+        val peer = chatDao.getPeerById(peerId)
+        val discoveredBridged = discoveryManager.discoveredPeers.value[peerId]
+            ?.takeIf { !it.viaBridgePeerId.isNullOrBlank() }
+
+        if (peer != null && peer.lastIp.isNotBlank() && peer.viaBridgePeerId.isBlank() && discoveredBridged == null) {
+            if (nodeManager.connectToPeer(
+                    host = peer.lastIp,
+                    port = peer.lastPort,
+                    expectedPubKeyBase64 = peer.publicKeyBase64
+                ).isSuccess
+            ) {
+                return true
+            }
+        }
+
+        val bridgeId = discoveredBridged?.viaBridgePeerId
+            ?: peer?.viaBridgePeerId?.takeIf { it.isNotBlank() }
+        val targetPub = discoveredBridged?.publicKeyBase64 ?: peer?.publicKeyBase64.orEmpty()
+        if (!bridgeId.isNullOrBlank()) {
+            if (!nodeManager.connectedPeers.value.contains(bridgeId)) {
+                val bridgePeer = chatDao.getPeerById(bridgeId)
+                val bridgeIp = discoveredBridged?.bridgeHost ?: bridgePeer?.lastIp.orEmpty()
+                val bridgePort = discoveredBridged?.bridgePort ?: bridgePeer?.lastPort ?: LocalIdentity.DEFAULT_TCP_PORT
+                val bridgePub = bridgePeer?.publicKeyBase64.orEmpty()
+                if (bridgeIp.isNotBlank()) {
+                    nodeManager.connectToPeer(bridgeIp, bridgePort, bridgePub)
+                }
+            }
+            if (nodeManager.connectViaBridge(bridgeId, peerId, targetPub).isSuccess) {
+                return true
+            }
+        }
+
+        if (peer != null && peer.lastIp.isNotBlank() && peer.viaBridgePeerId.isNotBlank()) {
+            return nodeManager.connectToPeer(
+                host = peer.lastIp,
+                port = peer.lastPort,
+                expectedPubKeyBase64 = peer.publicKeyBase64
+            ).isSuccess
+        }
+        return false
     }
 
     private fun buildReplyMeta(replyTo: MessageEntity?): Triple<String?, String?, String?> {
@@ -273,25 +320,11 @@ class ChatRepository(
             return true
         }
 
-        var connected = ensurePeerConnected(peerId)
-        var ok = if (connected) {
-            nodeManager.sendTextMessage(
-                peerId = peerId,
-                messageId = msgId,
-                text = text,
-                selfDestructSec = sdSec,
-                createdAt = now,
-                replyToMessageId = replyId,
-                replyToAuthorType = wireAuthorType,
-                replyToPreview = replyPreview
-            )
-        } else {
-            false
-        }
-        if (!ok) {
-            connected = ensurePeerConnected(peerId)
-            if (connected) {
-                ok = nodeManager.sendTextMessage(
+        sendingInFlightIds.add(msgId)
+        val ok = try {
+            var connected = ensurePeerConnected(peerId)
+            var sent = if (connected) {
+                nodeManager.sendTextMessage(
                     peerId = peerId,
                     messageId = msgId,
                     text = text,
@@ -301,11 +334,31 @@ class ChatRepository(
                     replyToAuthorType = wireAuthorType,
                     replyToPreview = replyPreview
                 )
+            } else {
+                false
             }
+            if (!sent) {
+                connected = ensurePeerConnected(peerId)
+                if (connected) {
+                    sent = nodeManager.sendTextMessage(
+                        peerId = peerId,
+                        messageId = msgId,
+                        text = text,
+                        selfDestructSec = sdSec,
+                        createdAt = now,
+                        replyToMessageId = replyId,
+                        replyToAuthorType = wireAuthorType,
+                        replyToPreview = replyPreview
+                    )
+                }
+            }
+            sent
+        } finally {
+            sendingInFlightIds.remove(msgId)
         }
         chatDao.updateMessageStatus(
             msgId,
-            if (ok) DeliveryStatus.SENT.name else DeliveryStatus.FAILED.name
+            if (ok) DeliveryStatus.SENT.name else DeliveryStatus.SENDING.name
         )
         return ok
     }
@@ -572,8 +625,10 @@ class ChatRepository(
         if (currentJob != null) {
             outgoingTransferJobs[msgId] = currentJob
         }
+        sendingInFlightIds.add(msgId)
 
         var compressedCandidate: File? = null
+        var simOnlineHandled = false
         val ok = try {
             var fileToSend = file
             var sendFileName = fileName
@@ -653,6 +708,7 @@ class ChatRepository(
             if (cancelledTransferIds.contains(msgId)) {
                 false
             } else if (isDevSimulatedOnline(peerId)) {
+                simOnlineHandled = true
                 chatDao.updateTransferProgress(msgId, 100, DeliveryStatus.DELIVERED.name)
                 true
             } else {
@@ -702,6 +758,7 @@ class ChatRepository(
             compressedCandidate?.let { runCatching { if (it.exists()) it.delete() } }
             false
         } finally {
+            sendingInFlightIds.remove(msgId)
             if (currentJob != null) {
                 outgoingTransferJobs.remove(msgId, currentJob)
             } else {
@@ -710,11 +767,11 @@ class ChatRepository(
             removeTransferEntry(msgId)
         }
 
-        if (!cancelledTransferIds.remove(msgId)) {
+        if (!cancelledTransferIds.remove(msgId) && !simOnlineHandled) {
             chatDao.updateTransferProgress(
                 msgId,
-                if (ok) 100 else 0,
-                if (ok) DeliveryStatus.SENT.name else DeliveryStatus.FAILED.name
+                100,
+                if (ok) DeliveryStatus.SENT.name else DeliveryStatus.SENDING.name
             )
         }
         return ok
@@ -848,7 +905,8 @@ class ChatRepository(
         remoteIp: String,
         remoteListenPort: Int,
         username: String,
-        avatarBase64: String?
+        avatarBase64: String?,
+        viaBridgePeerId: String
     ) {
         val existing = chatDao.getPeerById(peerId)
         val avatarPath = if (!avatarBase64.isNullOrBlank()) {
@@ -881,9 +939,162 @@ class ChatRepository(
             lastMessagePreview = existing?.lastMessagePreview?.ifBlank { "E2EE channel established" }
                 ?: "E2EE channel established",
             lastActivityAt = existing?.lastActivityAt ?: System.currentTimeMillis(),
-            unreadCount = existing?.unreadCount ?: 0
+            unreadCount = existing?.unreadCount ?: 0,
+            viaBridgePeerId = viaBridgePeerId
         )
         chatDao.upsertPeer(updated)
+        if (!peerId.startsWith(DEV_FAKE_PEER_PREFIX)) {
+            scope.launch(Dispatchers.IO) {
+                flushPendingOutgoingMessages(peerId)
+            }
+        }
+    }
+
+    override suspend fun onBridgeDirectoryUpdated(bridgePeerId: String, availablePeerIds: Set<String>) {
+        if (availablePeerIds.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            for (targetPeerId in availablePeerIds) {
+                val peer = chatDao.getPeerById(targetPeerId) ?: continue
+                if (peer.viaBridgePeerId != bridgePeerId && !nodeManager.connectedPeers.value.contains(targetPeerId)) {
+                    chatDao.upsertPeer(peer.copy(viaBridgePeerId = bridgePeerId))
+                }
+                val hasPending = chatDao.getPendingOutgoingMessagesChronological(targetPeerId).isNotEmpty()
+                if ((hasPending || currentlyOpenPeerId == targetPeerId) &&
+                    !nodeManager.connectedPeers.value.contains(targetPeerId)
+                ) {
+                    if (ensurePeerConnected(targetPeerId)) {
+                        flushPendingOutgoingMessages(targetPeerId)
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun flushPendingOutgoingMessages(peerId: String) {
+        val mutex = outboxMutexByPeer.computeIfAbsent(peerId) { Mutex() }
+        mutex.withLock {
+            val isSim = isDevSimulatedOnline(peerId)
+            val isRealConnected = nodeManager.connectedPeers.value.contains(peerId)
+            if (!isSim && !isRealConnected) return
+
+            val pending = chatDao.getPendingOutgoingMessagesChronological(peerId)
+            for (msg in pending) {
+                if (sendingInFlightIds.contains(msg.messageId) ||
+                    outgoingTransferJobs.containsKey(msg.messageId) ||
+                    cancelledTransferIds.contains(msg.messageId)
+                ) {
+                    continue
+                }
+                if (!isDevSimulatedOnline(peerId) && !nodeManager.connectedPeers.value.contains(peerId)) {
+                    break
+                }
+                sendingInFlightIds.add(msg.messageId)
+                var abortLoop = false
+                try {
+                    if (isDevSimulatedOnline(peerId)) {
+                        chatDao.updateTransferProgress(msg.messageId, 100, DeliveryStatus.DELIVERED.name)
+                        if (msg.type == MessageType.TEXT.name) {
+                            scope.launch(Dispatchers.IO) {
+                                delay(450L)
+                                onDeliveryReceipt(peerId, msg.messageId, DeliveryStatus.READ)
+                            }
+                        }
+                    } else if (msg.type == MessageType.TEXT.name) {
+                        val wireAuthor = msg.replyToSenderTag?.let {
+                            if (it == ReplySenderTags.ME) "ME" else "PEER"
+                        }
+                        val ok = nodeManager.sendTextMessage(
+                            peerId = peerId,
+                            messageId = msg.messageId,
+                            text = msg.textContent,
+                            selfDestructSec = msg.selfDestructSeconds,
+                            createdAt = msg.createdAt,
+                            replyToMessageId = msg.replyToMessageId,
+                            replyToAuthorType = wireAuthor,
+                            replyToPreview = msg.replyToPreview
+                        )
+                        if (ok) {
+                            chatDao.updateMessageStatus(msg.messageId, DeliveryStatus.SENT.name)
+                        } else {
+                            chatDao.updateMessageStatus(msg.messageId, DeliveryStatus.SENDING.name)
+                            abortLoop = true
+                        }
+                    } else {
+                        val file = msg.mediaLocalPath?.let { File(it) }
+                        if (file == null || !file.exists()) {
+                            chatDao.updateMessageStatus(msg.messageId, DeliveryStatus.FAILED.name)
+                        } else {
+                            val msgType = MessageType.entries.firstOrNull { it.name == msg.type } ?: MessageType.FILE
+                            val wireAuthor = msg.replyToSenderTag?.let {
+                                if (it == ReplySenderTags.ME) "ME" else "PEER"
+                            }
+                            val flushJob = coroutineContext[Job]
+                            if (flushJob != null) {
+                                outgoingTransferJobs[msg.messageId] = flushJob
+                            }
+                            updateTransferEntry(
+                                ActiveTransferInfo(
+                                    messageId = msg.messageId,
+                                    peerId = peerId,
+                                    fileName = msg.fileName ?: file.name,
+                                    progress = 1,
+                                    isOutgoing = true,
+                                    totalBytes = file.length()
+                                )
+                            )
+                            val ok = try {
+                                nodeManager.sendMediaOrFile(
+                                    peerId = peerId,
+                                    messageId = msg.messageId,
+                                    messageType = msgType,
+                                    file = file,
+                                    fileName = msg.fileName ?: file.name,
+                                    mimeType = msg.mimeType ?: "application/octet-stream",
+                                    audioDurationMs = msg.audioDurationMs,
+                                    selfDestructSec = msg.selfDestructSeconds,
+                                    createdAt = msg.createdAt,
+                                    replyToMessageId = msg.replyToMessageId,
+                                    replyToAuthorType = wireAuthor,
+                                    replyToPreview = msg.replyToPreview,
+                                    isCancelled = { cancelledTransferIds.contains(msg.messageId) },
+                                    onProgress = { pct ->
+                                        if (cancelledTransferIds.contains(msg.messageId)) return@sendMediaOrFile
+                                        updateTransferEntry(
+                                            ActiveTransferInfo(
+                                                messageId = msg.messageId,
+                                                peerId = peerId,
+                                                fileName = msg.fileName ?: file.name,
+                                                progress = pct,
+                                                isOutgoing = true,
+                                                totalBytes = file.length()
+                                            )
+                                        )
+                                    }
+                                )
+                            } finally {
+                                if (flushJob != null) {
+                                    outgoingTransferJobs.remove(msg.messageId, flushJob)
+                                } else {
+                                    outgoingTransferJobs.remove(msg.messageId)
+                                }
+                                removeTransferEntry(msg.messageId)
+                            }
+                            if (cancelledTransferIds.remove(msg.messageId)) {
+                                Unit
+                            } else if (ok) {
+                                chatDao.updateTransferProgress(msg.messageId, 100, DeliveryStatus.SENT.name)
+                            } else {
+                                chatDao.updateTransferProgress(msg.messageId, 100, DeliveryStatus.SENDING.name)
+                                abortLoop = true
+                            }
+                        }
+                    }
+                } finally {
+                    sendingInFlightIds.remove(msg.messageId)
+                }
+                if (abortLoop) break
+            }
+        }
     }
 
     override suspend fun onPeerDisconnected(peerId: String) {
@@ -1387,6 +1598,11 @@ class ChatRepository(
     fun devSetPeerSimulatedOnline(peerId: String, online: Boolean) {
         _devOnlineFakePeers.update { current ->
             if (online) current + peerId else current - peerId
+        }
+        if (online) {
+            scope.launch(Dispatchers.IO) {
+                flushPendingOutgoingMessages(peerId)
+            }
         }
     }
 

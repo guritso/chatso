@@ -168,7 +168,8 @@ data class LocalIdentity(
     val language: AppLanguage = AppLanguage.SYSTEM,
     val backgroundConnectionEnabled: Boolean = true,
     val batteryPromptDismissed: Boolean = false,
-    val devModeEnabled: Boolean = false
+    val devModeEnabled: Boolean = false,
+    val bridgeEnabled: Boolean = false
 ) {
     companion object {
         const val DEFAULT_TCP_PORT = 42850
@@ -202,5 +203,8 @@ data class DiscoveredPeer(
     val publicKeyBase64: String,
     val fingerprint: String,
     val source: String,
-    val lastSeenAt: Long = System.currentTimeMillis()
+    val lastSeenAt: Long = System.currentTimeMillis(),
+    val viaBridgePeerId: String? = null,
+    val bridgeHost: String? = null,
+    val bridgePort: Int = LocalIdentity.DEFAULT_TCP_PORT
 )

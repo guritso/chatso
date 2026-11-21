@@ -266,8 +266,8 @@
     <string name="dev_fake_name_label">Nom du faux contact</string>
     <string name="dev_fake_name_hint">Laissez vide pour aléatoire</string>
     <string name="dev_create_fake_peer_btn">Créer un faux contact</string>
-    <string name="dev_target_peer_label">Contact cible</string>
-    <string name="dev_no_peers_hint">Créez un faux contact ci-dessus ou connectez-vous d\'abord.</string>
+    <string name="dev_target_peer_label">Faux contact cible</string>
+    <string name="dev_no_peers_hint">Créez d\'abord un faux contact ci-dessus.</string>
     <string name="dev_incoming_sim_section">Simulateur de Messages Reçus</string>
     <string name="dev_fake_msg_label">Texte du message reçu</string>
     <string name="dev_fake_msg_default">Salut ! Test d\'un message entrant sur chatso.</string>
@@ -296,4 +296,19 @@
     <string name="dev_msg_key_warning">Alerte de clé simulée pour %1$s.</string>
     <string name="dev_msg_no_message_for_reaction">Envoyez ou simulez d\'abord un message pour réagir.</string>
     <string name="cd_scroll_to_bottom">Aller en bas</string>
+
+    <string name="bridge_mode_title">Mode pont</string>
+    <string name="bridge_mode_desc">Relie les contacts sur localhost et VPN/LAN pour qu\'ils se découvrent et communiquent via votre appareil</string>
+    <string name="bridge_badge">Pont</string>
+    <string name="msg_bridge_on">Mode pont activé.</string>
+    <string name="msg_bridge_off">Mode pont désactivé.</string>
+    <string name="msg_message_queued">Contact hors ligne · Sera envoyé à la reconnexion.</string>
+    <string name="contact_profile_title">Profil du Contact</string>
+    <string name="contact_tap_photo_hint">Appuyez sur la photo pour agrandir</string>
+    <string name="contact_network_label">Adresse</string>
+    <string name="contact_verification_label">Chiffrement</string>
+    <string name="contact_verified_short">Vérifié</string>
+    <string name="contact_unverified_short">Non vérifié</string>
+    <string name="contact_self_destruct_label">Auto-destruction</string>
+    <string name="contact_via_bridge">Via pont</string>
 </resources>

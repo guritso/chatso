@@ -266,8 +266,8 @@
     <string name="dev_fake_name_label">Fake contact name</string>
     <string name="dev_fake_name_hint">Leave blank for random</string>
     <string name="dev_create_fake_peer_btn">Create fake contact</string>
-    <string name="dev_target_peer_label">Target contact</string>
-    <string name="dev_no_peers_hint">Create a fake contact above or connect to a peer first.</string>
+    <string name="dev_target_peer_label">Target fake contact</string>
+    <string name="dev_no_peers_hint">Create a fake contact above first.</string>
     <string name="dev_incoming_sim_section">Incoming Message Simulator</string>
     <string name="dev_fake_msg_label">Incoming message text</string>
     <string name="dev_fake_msg_default">Hey! Testing incoming message in chatso.</string>
@@ -296,4 +296,19 @@
     <string name="dev_msg_key_warning">Simulated key change warning for %1$s.</string>
     <string name="dev_msg_no_message_for_reaction">Send or simulate a message first to react.</string>
     <string name="cd_scroll_to_bottom">Scroll to bottom</string>
+
+    <string name="bridge_mode_title">Bridge mode</string>
+    <string name="bridge_mode_desc">Bridge localhost and VPN/LAN contacts so peers on separate networks discover and chat through your device</string>
+    <string name="bridge_badge">Bridge</string>
+    <string name="msg_bridge_on">Bridge mode enabled.</string>
+    <string name="msg_bridge_off">Bridge mode disabled.</string>
+    <string name="msg_message_queued">Contact offline · Will send when reconnected.</string>
+    <string name="contact_profile_title">Contact Info</string>
+    <string name="contact_tap_photo_hint">Tap photo to view</string>
+    <string name="contact_network_label">Address</string>
+    <string name="contact_verification_label">Encryption</string>
+    <string name="contact_verified_short">Verified</string>
+    <string name="contact_unverified_short">Not verified</string>
+    <string name="contact_self_destruct_label">Self-destruct</string>
+    <string name="contact_via_bridge">Via bridge</string>
 </resources>

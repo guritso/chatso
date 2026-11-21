@@ -161,6 +161,7 @@ fun FullScreenImageViewerDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .testTag("fullscreen_image_viewer")
                 .pointerInput(Unit) {
                     detectTapGestures(
                         onTap = { showControls = !showControls },

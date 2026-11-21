@@ -114,16 +114,18 @@ fun DevModeScreen(
     var fakeMsgInput by rememberSaveable { mutableStateOf(defaultFakeMsg) }
     var selectedPeerId by rememberSaveable { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(peers) {
-        if (selectedPeerId == null || peers.none { it.peerId == selectedPeerId }) {
-            selectedPeerId = peers.firstOrNull {
-                it.peerId.startsWith(ChatRepository.DEV_FAKE_PEER_PREFIX)
-            }?.peerId ?: peers.firstOrNull()?.peerId
+    val fakePeers = remember(peers) {
+        peers.filter { it.peerId.startsWith(ChatRepository.DEV_FAKE_PEER_PREFIX) }
+    }
+
+    LaunchedEffect(fakePeers) {
+        if (selectedPeerId == null || fakePeers.none { it.peerId == selectedPeerId }) {
+            selectedPeerId = fakePeers.firstOrNull()?.peerId
         }
     }
 
-    val selectedPeer = peers.firstOrNull { it.peerId == selectedPeerId }
-    val fakePeerCount = peers.count { it.peerId.startsWith(ChatRepository.DEV_FAKE_PEER_PREFIX) }
+    val selectedPeer = fakePeers.firstOrNull { it.peerId == selectedPeerId }
+    val fakePeerCount = fakePeers.size
 
     Column(
         modifier = Modifier
@@ -234,7 +236,7 @@ fun DevModeScreen(
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                if (peers.isEmpty()) {
+                if (fakePeers.isEmpty()) {
                     Text(
                         text = stringResource(R.string.dev_no_peers_hint),
                         style = MaterialTheme.typography.bodySmall,
@@ -246,14 +248,13 @@ fun DevModeScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        peers.forEach { peer ->
-                            val isFake = peer.peerId.startsWith(ChatRepository.DEV_FAKE_PEER_PREFIX)
+                        fakePeers.forEach { peer ->
                             FilterChip(
                                 selected = peer.peerId == selectedPeerId,
                                 onClick = { selectedPeerId = peer.peerId },
                                 label = {
                                     Text(
-                                        text = if (isFake) "${peer.username} · FAKE" else peer.username,
+                                        text = "${peer.username} · FAKE",
                                         maxLines = 1,
                                         softWrap = false,
                                         overflow = TextOverflow.Ellipsis

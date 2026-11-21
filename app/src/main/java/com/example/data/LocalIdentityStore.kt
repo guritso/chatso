@@ -38,6 +38,7 @@ class LocalIdentityStore(private val context: Context) {
         val BACKGROUND_CONN_ENABLED = booleanPreferencesKey("background_connection_enabled")
         val BATTERY_PROMPT_DISMISSED = booleanPreferencesKey("battery_prompt_dismissed")
         val DEV_MODE_ENABLED = booleanPreferencesKey("dev_mode_enabled")
+        val BRIDGE_ENABLED = booleanPreferencesKey("bridge_enabled")
     }
 
     val identityFlow: Flow<LocalIdentity> = context.identityDataStore.data.map { prefs ->
@@ -63,7 +64,8 @@ class LocalIdentityStore(private val context: Context) {
             language = lang,
             backgroundConnectionEnabled = prefs[Keys.BACKGROUND_CONN_ENABLED] ?: true,
             batteryPromptDismissed = prefs[Keys.BATTERY_PROMPT_DISMISSED] ?: false,
-            devModeEnabled = prefs[Keys.DEV_MODE_ENABLED] ?: false
+            devModeEnabled = prefs[Keys.DEV_MODE_ENABLED] ?: false,
+            bridgeEnabled = prefs[Keys.BRIDGE_ENABLED] ?: false
         )
     }
 
@@ -181,6 +183,12 @@ class LocalIdentityStore(private val context: Context) {
     suspend fun setDevModeEnabled(enabled: Boolean) {
         context.identityDataStore.edit { prefs ->
             prefs[Keys.DEV_MODE_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setBridgeEnabled(enabled: Boolean) {
+        context.identityDataStore.edit { prefs ->
+            prefs[Keys.BRIDGE_ENABLED] = enabled
         }
     }
 

@@ -266,8 +266,8 @@
     <string name="dev_fake_name_label">Nombre del usuario fake</string>
     <string name="dev_fake_name_hint">Déjalo vacío para aleatorio</string>
     <string name="dev_create_fake_peer_btn">Crear usuario fake</string>
-    <string name="dev_target_peer_label">Contacto destino</string>
-    <string name="dev_no_peers_hint">Crea un usuario fake arriba o conéctate a alguien primero.</string>
+    <string name="dev_target_peer_label">Contacto fake destino</string>
+    <string name="dev_no_peers_hint">Crea un usuario fake arriba primero.</string>
     <string name="dev_incoming_sim_section">Simulador de Mensajes Entrantes</string>
     <string name="dev_fake_msg_label">Texto del mensaje entrante</string>
     <string name="dev_fake_msg_default">¡Hola! Probando mensaje entrante en chatso.</string>
@@ -296,4 +296,19 @@
     <string name="dev_msg_key_warning">Aviso de cambio de clave simulado para %1$s.</string>
     <string name="dev_msg_no_message_for_reaction">Envía o simula un mensaje primero para reaccionar.</string>
     <string name="cd_scroll_to_bottom">Bajar al final</string>
+
+    <string name="bridge_mode_title">Modo puente</string>
+    <string name="bridge_mode_desc">Actúa como puente entre contactos en localhost y VPN/LAN para que se encuentren y chateen a través de ti</string>
+    <string name="bridge_badge">Puente</string>
+    <string name="msg_bridge_on">Modo puente activado.</string>
+    <string name="msg_bridge_off">Modo puente desactivado.</string>
+    <string name="msg_message_queued">Contacto sin conexión · Se enviará al reconectar.</string>
+    <string name="contact_profile_title">Perfil del Contacto</string>
+    <string name="contact_tap_photo_hint">Toca la foto para ampliar</string>
+    <string name="contact_network_label">Dirección</string>
+    <string name="contact_verification_label">Cifrado</string>
+    <string name="contact_verified_short">Verificado</string>
+    <string name="contact_unverified_short">No verificado</string>
+    <string name="contact_self_destruct_label">Autodestrucción</string>
+    <string name="contact_via_bridge">Vía puente</string>
 </resources>

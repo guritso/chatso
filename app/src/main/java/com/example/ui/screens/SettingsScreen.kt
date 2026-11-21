@@ -124,12 +124,14 @@ fun SettingsScreen(
     onCheckUpdates: () -> Unit,
     isCheckingUpdates: Boolean,
     onToggleDevMode: (Boolean) -> Unit,
-    onOpenDevTools: () -> Unit
+    onOpenDevTools: () -> Unit,
+    onToggleBridgeMode: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     var showLicensesDialog by remember { mutableStateOf(false) }
     var themeExpanded by rememberSaveable { mutableStateOf(false) }
     var languageExpanded by rememberSaveable { mutableStateOf(false) }
+    var networkExpanded by rememberSaveable { mutableStateOf(false) }
     var portInput by rememberSaveable(identity.listenPort) {
         mutableStateOf(identity.listenPort.toString())
     }
@@ -738,13 +740,25 @@ fun SettingsScreen(
             }
         }
 
-        // 5. Network Interfaces & TCP Port Card
+        // 5. Network Interfaces, Bridge Mode & TCP Port Card (Expandable)
         Card(
             shape = MaterialTheme.shapes.large,
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                val networkChevronRotation by animateFloatAsState(
+                    targetValue = if (networkExpanded) 180f else 0f,
+                    label = "networkChevronRotation"
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(MaterialTheme.shapes.small)
+                        .minimumInteractiveComponentSize()
+                        .clickable { networkExpanded = !networkExpanded }
+                        .testTag("settings_network_expand_button")
+                ) {
                     Icon(
                         imageVector = Icons.Filled.Lan,
                         contentDescription = null,
@@ -754,66 +768,139 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = stringResource(R.string.network_section),
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f)
                     )
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                endpoints.forEach { ep ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 3.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (identity.bridgeEnabled) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHigh
+                        }
                     ) {
                         Text(
-                            text = ep.kind.badge,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = "${ep.ipAddress}:$boundPort",
+                            text = if (identity.bridgeEnabled) {
+                                "${stringResource(R.string.bridge_badge)} · :$boundPort"
+                            } else {
+                                ":$boundPort"
+                            },
                             fontFamily = JetBrainsMonoFontFamily,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (identity.bridgeEnabled) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        imageVector = Icons.Filled.KeyboardArrowDown,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .rotate(networkChevronRotation)
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                AnimatedVisibility(
+                    visible = networkExpanded,
+                    enter = expandVertically() + fadeIn(),
+                    exit = shrinkVertically() + fadeOut()
                 ) {
-                    OutlinedTextField(
-                        value = portInput,
-                        onValueChange = { portInput = it.filter { ch -> ch.isDigit() }.take(5) },
-                        label = { Text(stringResource(R.string.tcp_port_label)) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        shape = MaterialTheme.shapes.medium,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("settings_port_input")
-                    )
-                    Button(
-                        onClick = { onUpdateListenPort(portInput) },
-                        shape = MaterialTheme.shapes.medium,
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                        modifier = Modifier
-                            .defaultMinSize(minWidth = 88.dp)
-                            .height(52.dp)
-                            .testTag("settings_apply_port_button")
-                    ) {
-                        Text(
-                            text = stringResource(R.string.apply_btn),
-                            maxLines = 1,
-                            softWrap = false
-                        )
+                    Column {
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        endpoints.forEach { ep ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = ep.kind.badge,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "${ep.ipAddress}:$boundPort",
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(MaterialTheme.shapes.small)
+                                .minimumInteractiveComponentSize()
+                                .clickable { onToggleBridgeMode(!identity.bridgeEnabled) }
+                                .padding(vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.bridge_mode_title),
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    text = stringResource(R.string.bridge_mode_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = identity.bridgeEnabled,
+                                onCheckedChange = onToggleBridgeMode,
+                                modifier = Modifier.testTag("settings_bridge_switch")
+                            )
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = portInput,
+                                onValueChange = { portInput = it.filter { ch -> ch.isDigit() }.take(5) },
+                                label = { Text(stringResource(R.string.tcp_port_label)) },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                shape = MaterialTheme.shapes.medium,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("settings_port_input")
+                            )
+                            Button(
+                                onClick = { onUpdateListenPort(portInput) },
+                                shape = MaterialTheme.shapes.medium,
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                                modifier = Modifier
+                                    .defaultMinSize(minWidth = 88.dp)
+                                    .height(52.dp)
+                                    .testTag("settings_apply_port_button")
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.apply_btn),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
                     }
                 }
             }

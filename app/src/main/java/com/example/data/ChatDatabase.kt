@@ -30,7 +30,8 @@ data class PeerEntity(
     val selfDestructSeconds: Int = 0,
     val lastMessagePreview: String = "",
     val lastActivityAt: Long = System.currentTimeMillis(),
-    val unreadCount: Int = 0
+    val unreadCount: Int = 0,
+    val viaBridgePeerId: String = ""
 ) {
     val isMutuallyVerified: Boolean
         get() = isVerified && peerVerifiedMe
@@ -144,6 +145,9 @@ interface ChatDao {
     @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 0 AND status != 'READ' ORDER BY createdAt ASC, messageId ASC")
     suspend fun getUnreadIncomingMessagesChronological(peerId: String): List<MessageEntity>
 
+    @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 1 AND status IN ('SENDING', 'FAILED') ORDER BY createdAt ASC, messageId ASC")
+    suspend fun getPendingOutgoingMessagesChronological(peerId: String): List<MessageEntity>
+
     @Query("SELECT * FROM messages WHERE expiresAt IS NOT NULL AND expiresAt <= :now")
     suspend fun getExpiredMessages(now: Long): List<MessageEntity>
 
@@ -186,7 +190,7 @@ data class FavoriteStickerEntity(
 
 @Database(
     entities = [PeerEntity::class, MessageEntity::class, FavoriteStickerEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {
@@ -228,6 +232,12 @@ abstract class ChatDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE peers ADD COLUMN viaBridgePeerId TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         @Volatile
         private var INSTANCE: ChatDatabase? = null
 
@@ -238,7 +248,7 @@ abstract class ChatDatabase : RoomDatabase() {
                     ChatDatabase::class.java,
                     "chatso_local.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration(true)
                     .build()
                     .also { INSTANCE = it }
