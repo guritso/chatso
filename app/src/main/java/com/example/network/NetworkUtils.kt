@@ -28,12 +28,48 @@ data class NetworkScanTarget(
     val isCellular: Boolean = false
 )
 
+data class TcpSocketAttempt(
+    val androidNetwork: Network? = null,
+    val bindLocalLoopback: Boolean = false
+)
+
 object NetworkUtils {
 
     private val timeFormat = ThreadLocal.withInitial { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     private val dateTimeFormat = ThreadLocal.withInitial { SimpleDateFormat("dd/MM HH:mm", Locale.getDefault()) }
     private val vpnPrefixes = listOf("tun", "wg", "ppp", "utun", "tailscale", "zt", "tap", "ipsec")
-    private val cellularPrefixes = listOf("rmnet", "ccmni", "pdp", "wwan", "seth", "clat")
+    private val cellularPrefixes = listOf(
+        "rmnet", "ccmni", "pdp", "wwan", "seth", "clat",
+        "v4-rmnet", "v4-ccmni", "v4-pdp", "v4-wwan"
+    )
+    private val ignoredVirtualPrefixes = listOf("dummy", "sit", "ip_vti", "ip6tnl", "gre")
+
+    fun normalizeHost(host: String): String {
+        val trimmed = host.trim()
+        return when {
+            trimmed.equals("localhost", ignoreCase = true) || trimmed == "::1" -> "127.0.0.1"
+            trimmed.startsWith("::ffff:", ignoreCase = true) -> trimmed.substring(7)
+            else -> trimmed
+        }
+    }
+
+    fun isLoopbackHost(host: String): Boolean {
+        val clean = normalizeHost(host)
+        return clean.startsWith("127.")
+    }
+
+    fun isEmulatorHost(host: String): Boolean = normalizeHost(host) == "10.0.2.2"
+
+    fun isPrivateLanIp(host: String): Boolean {
+        val parts = normalizeHost(host).split(".").mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4 || parts.any { it !in 0..255 }) return false
+        return when {
+            parts[0] == 10 -> true
+            parts[0] == 172 && parts[1] in 16..31 -> true
+            parts[0] == 192 && parts[1] == 168 -> true
+            else -> false
+        }
+    }
 
     fun getActiveEndpoints(): List<NetworkEndpointInfo> {
         val results = mutableListOf<NetworkEndpointInfo>()
@@ -42,6 +78,7 @@ object NetworkUtils {
             for (nif in Collections.list(interfaces)) {
                 if (!nif.isUp) continue
                 val name = nif.name.lowercase(Locale.ROOT)
+                if (ignoredVirtualPrefixes.any { name.startsWith(it) }) continue
                 for (addr in Collections.list(nif.inetAddresses)) {
                     if (addr !is Inet4Address) continue
                     val ip = addr.hostAddress ?: continue
@@ -69,6 +106,51 @@ object NetworkUtils {
                     EndpointKind.LOCALHOST -> 2
                 }
             }
+    }
+
+    @Suppress("DEPRECATION")
+    fun hasActiveVpn(context: Context): Boolean {
+        val cm = runCatching {
+            context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        }.getOrNull()
+        val hasCmVpn = if (cm != null) {
+            runCatching {
+                cm.allNetworks.any { network ->
+                    cm.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                }
+            }.getOrDefault(false)
+        } else {
+            false
+        }
+        if (hasCmVpn) return true
+        return getActiveEndpoints().any { it.kind == EndpointKind.VPN }
+    }
+
+    @Suppress("DEPRECATION")
+    fun getNonVpnNetworks(context: Context, preferLanOnly: Boolean = false): List<Network> {
+        val cm = runCatching {
+            context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        }.getOrNull() ?: return emptyList()
+
+        return runCatching {
+            cm.allNetworks.mapNotNull { network ->
+                val caps = cm.getNetworkCapabilities(network) ?: return@mapNotNull null
+                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return@mapNotNull null
+                val isEthernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+                val isWifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                val isCellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                if (!isEthernet && !isWifi && !isCellular && !hasInternet) return@mapNotNull null
+                if (preferLanOnly && isCellular && !isEthernet && !isWifi) return@mapNotNull null
+                val priority = when {
+                    isEthernet -> 0
+                    isWifi -> 1
+                    !isCellular -> 2
+                    else -> 3
+                }
+                priority to network
+            }.sortedBy { it.first }.map { it.second }
+        }.getOrDefault(emptyList())
     }
 
     @Suppress("DEPRECATION")
@@ -110,6 +192,7 @@ object NetworkUtils {
                 for (nif in Collections.list(interfaces)) {
                     if (!nif.isUp) continue
                     val lowerName = nif.name.lowercase(Locale.ROOT)
+                    if (ignoredVirtualPrefixes.any { lowerName.startsWith(it) }) continue
                     val ifMeta = metaByIfName[lowerName]
 
                     val ifaceAddrs = runCatching { nif.interfaceAddresses }.getOrNull().orEmpty()
@@ -202,13 +285,13 @@ object NetworkUtils {
     }
 
     fun findAndroidNetworkForIp(context: Context, hostIp: String): Network? {
-        val clean = hostIp.trim()
-        if (clean.isBlank() ||
-            clean == "localhost" ||
-            clean.startsWith("127.") ||
-            clean == "10.0.2.2"
-        ) {
+        val clean = normalizeHost(hostIp)
+        if (clean.isBlank() || clean.startsWith("127.")) {
             return null
+        }
+        if (clean == "10.0.2.2") {
+            return getNonVpnNetworks(context, preferLanOnly = true).firstOrNull()
+                ?: getNonVpnNetworks(context, preferLanOnly = false).firstOrNull()
         }
         val targets = getActiveNetworkScanTargets(context)
             .filter { it.kind != EndpointKind.LOCALHOST && it.androidNetwork != null }
@@ -226,10 +309,99 @@ object NetworkUtils {
         return exactMatch?.androidNetwork
     }
 
+    fun buildTcpSocketAttempts(
+        context: Context,
+        host: String,
+        preferredNetwork: Network? = null
+    ): List<TcpSocketAttempt> {
+        val clean = normalizeHost(host)
+        val vpnActive = hasActiveVpn(context)
+
+        if (isLoopbackHost(clean)) {
+            val nonVpnNets = if (vpnActive) getNonVpnNetworks(context) else emptyList()
+            return buildList {
+                if (vpnActive) {
+                    // Bypass VPN fwmark first when an underlying non-VPN network exists,
+                    // then fall back to explicit local 127.0.0.1 bind and plain unbound Socket.
+                    nonVpnNets.take(2).forEach { net ->
+                        add(TcpSocketAttempt(androidNetwork = net, bindLocalLoopback = false))
+                    }
+                    add(TcpSocketAttempt(androidNetwork = null, bindLocalLoopback = true))
+                    add(TcpSocketAttempt(androidNetwork = null, bindLocalLoopback = false))
+                    nonVpnNets.firstOrNull()?.let { net ->
+                        add(TcpSocketAttempt(androidNetwork = net, bindLocalLoopback = true))
+                    }
+                } else {
+                    add(TcpSocketAttempt(androidNetwork = null, bindLocalLoopback = false))
+                    add(TcpSocketAttempt(androidNetwork = null, bindLocalLoopback = true))
+                }
+            }.distinct()
+        }
+
+        if (isEmulatorHost(clean)) {
+            val nonVpnNets = getNonVpnNetworks(context)
+            return buildList {
+                nonVpnNets.take(2).forEach { net ->
+                    add(TcpSocketAttempt(androidNetwork = net, bindLocalLoopback = false))
+                }
+                add(TcpSocketAttempt(androidNetwork = null, bindLocalLoopback = false))
+            }.distinct()
+        }
+
+        val matched = preferredNetwork ?: findAndroidNetworkForIp(context, clean)
+        return buildList {
+            if (matched != null) {
+                add(TcpSocketAttempt(androidNetwork = matched, bindLocalLoopback = false))
+            }
+            add(TcpSocketAttempt(androidNetwork = null, bindLocalLoopback = false))
+            if (matched == null && vpnActive && isPrivateLanIp(clean)) {
+                getNonVpnNetworks(context, preferLanOnly = true).take(2).forEach { net ->
+                    add(TcpSocketAttempt(androidNetwork = net, bindLocalLoopback = false))
+                }
+            }
+        }.distinct()
+    }
+
+    fun openConnectedTcpSocket(
+        context: Context,
+        host: String,
+        port: Int,
+        connectTimeoutMs: Int,
+        preferredNetwork: Network? = null,
+        allowFallback: Boolean = true
+    ): java.net.Socket {
+        val clean = normalizeHost(host)
+        val attempts = if (!allowFallback && preferredNetwork != null) {
+            listOf(TcpSocketAttempt(androidNetwork = preferredNetwork, bindLocalLoopback = false))
+        } else {
+            buildTcpSocketAttempts(context, clean, preferredNetwork)
+        }
+        var lastError: Exception? = null
+        for (attempt in attempts) {
+            val socket = java.net.Socket()
+            try {
+                socket.tcpNoDelay = true
+                socket.keepAlive = true
+                if (attempt.androidNetwork != null) {
+                    attempt.androidNetwork.bindSocket(socket)
+                }
+                if (attempt.bindLocalLoopback) {
+                    socket.bind(java.net.InetSocketAddress("127.0.0.1", 0))
+                }
+                socket.connect(java.net.InetSocketAddress(clean, port), connectTimeoutMs)
+                return socket
+            } catch (e: Exception) {
+                runCatching { socket.close() }
+                lastError = e
+            }
+        }
+        throw lastError ?: java.io.IOException("Unable to connect to $clean:$port")
+    }
+
     fun classifyIpKind(ip: String, targets: List<NetworkScanTarget>): EndpointKind? {
-        val clean = ip.trim()
+        val clean = normalizeHost(ip)
         if (clean.isBlank()) return null
-        if (clean == "localhost" || clean.startsWith("127.") || clean == "10.0.2.2") {
+        if (clean.startsWith("127.") || clean == "10.0.2.2") {
             return EndpointKind.LOCALHOST
         }
         val matched = targets

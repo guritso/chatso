@@ -290,12 +290,39 @@ class ChatRepository(
         if (isDevSimulatedOnline(peerId)) return true
         if (nodeManager.connectedPeers.value.contains(peerId)) return true
         val peer = chatDao.getPeerById(peerId)
+        val discoveredDirect = discoveryManager.discoveredPeers.value[peerId]
+            ?.takeIf { it.viaBridgePeerId.isNullOrBlank() }
         val discoveredBridged = discoveryManager.discoveredPeers.value[peerId]
             ?.takeIf { !it.viaBridgePeerId.isNullOrBlank() }
 
-        if (peer != null && peer.lastIp.isNotBlank() && peer.viaBridgePeerId.isBlank() && discoveredBridged == null) {
+        if (discoveredDirect != null) {
             if (nodeManager.connectToPeer(
+                    host = discoveredDirect.ipAddress,
+                    port = discoveredDirect.port,
+                    expectedPubKeyBase64 = discoveredDirect.publicKeyBase64.ifBlank { peer?.publicKeyBase64.orEmpty() }
+                ).isSuccess
+            ) {
+                return true
+            }
+        }
+
+        if (peer != null && peer.lastIp.isNotBlank() && peer.viaBridgePeerId.isBlank() && discoveredBridged == null) {
+            val sameAsDiscovered = discoveredDirect != null &&
+                NetworkUtils.normalizeHost(discoveredDirect.ipAddress) == NetworkUtils.normalizeHost(peer.lastIp) &&
+                discoveredDirect.port == peer.lastPort
+            if (!sameAsDiscovered && nodeManager.connectToPeer(
                     host = peer.lastIp,
+                    port = peer.lastPort,
+                    expectedPubKeyBase64 = peer.publicKeyBase64
+                ).isSuccess
+            ) {
+                return true
+            }
+            if (!NetworkUtils.isLoopbackHost(peer.lastIp) &&
+                peer.lastPort > 0 &&
+                peer.publicKeyBase64.isNotBlank() &&
+                nodeManager.connectToPeer(
+                    host = "127.0.0.1",
                     port = peer.lastPort,
                     expectedPubKeyBase64 = peer.publicKeyBase64
                 ).isSuccess

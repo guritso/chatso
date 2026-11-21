@@ -299,7 +299,19 @@ class P2PNodeManager(
                     bind(InetSocketAddress("0.0.0.0", preferredPort))
                 }
             } catch (_: Exception) {
-                try {
+                val fallbackRange = (LocalIdentity.DEFAULT_TCP_PORT..(LocalIdentity.DEFAULT_TCP_PORT + 10))
+                    .filter { it != preferredPort }
+                var boundFallback: ServerSocket? = null
+                for (candidatePort in fallbackRange) {
+                    boundFallback = runCatching {
+                        ServerSocket().apply {
+                            reuseAddress = true
+                            bind(InetSocketAddress("0.0.0.0", candidatePort))
+                        }
+                    }.getOrNull()
+                    if (boundFallback != null) break
+                }
+                boundFallback ?: try {
                     ServerSocket(0).apply { reuseAddress = true }
                 } catch (_: Exception) {
                     null
@@ -349,37 +361,12 @@ class P2PNodeManager(
             return@withContext Result.failure(IllegalStateException("Local identity is not initialized yet"))
         }
         try {
-            val cleanHost = host.trim()
-            val matchedNetwork = discoveryManager.findAndroidNetworkForIp(cleanHost)
-            val socket = if (matchedNetwork != null) {
-                val boundSocket = Socket().apply {
-                    tcpNoDelay = true
-                    keepAlive = true
-                }
-                val boundOk = runCatching {
-                    matchedNetwork.bindSocket(boundSocket)
-                    boundSocket.connect(InetSocketAddress(cleanHost, port), 2000)
-                    true
-                }.getOrElse {
-                    runCatching { boundSocket.close() }
-                    false
-                }
-                if (boundOk) {
-                    boundSocket
-                } else {
-                    Socket().apply {
-                        tcpNoDelay = true
-                        keepAlive = true
-                        connect(InetSocketAddress(cleanHost, port), 2000)
-                    }
-                }
-            } else {
-                Socket().apply {
-                    tcpNoDelay = true
-                    keepAlive = true
-                    connect(InetSocketAddress(cleanHost, port), 2000)
-                }
-            }
+            val cleanHost = NetworkUtils.normalizeHost(host)
+            val socket = discoveryManager.openConnectedTcpSocket(
+                host = cleanHost,
+                port = port,
+                connectTimeoutMs = 1500
+            )
             socket.soTimeout = 5_000
 
             val inp = DataInputStream(BufferedInputStream(socket.getInputStream()))
@@ -483,9 +470,9 @@ class P2PNodeManager(
                 output = out,
                 cipher = cipher,
                 remotePubB64 = serverPubB64,
-                remoteIp = host.trim(),
+                remoteIp = cleanHost,
                 remoteListenPort = serverListenPort,
-                remoteUsername = if (isSelfLoopback) "${identity.username} (Localhost)" else host.trim()
+                remoteUsername = if (isSelfLoopback) "${identity.username} (Localhost)" else cleanHost
             )
             registerActiveSession(sessionPeerId, session)
 
@@ -497,9 +484,9 @@ class P2PNodeManager(
             listener.onPeerHandshaked(
                 peerId = sessionPeerId,
                 publicKeyBase64 = serverPubB64,
-                remoteIp = host.trim(),
+                remoteIp = cleanHost,
                 remoteListenPort = serverListenPort,
-                username = if (isSelfLoopback) "${identity.username} (Localhost)" else host.trim(),
+                username = if (isSelfLoopback) "${identity.username} (Localhost)" else cleanHost,
                 avatarBase64 = null
             )
 
@@ -508,7 +495,7 @@ class P2PNodeManager(
                     session = session,
                     inp = inp,
                     remotePubB64 = serverPubB64,
-                    remoteIp = host.trim(),
+                    remoteIp = cleanHost,
                     remoteListenPort = serverListenPort,
                     isSelfLoopbackResponder = false
                 )

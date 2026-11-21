@@ -91,6 +91,15 @@ class DiscoveryManager(
         return NetworkUtils.findAndroidNetworkForIp(context, hostIp)
     }
 
+    fun openConnectedTcpSocket(host: String, port: Int, connectTimeoutMs: Int = 1500): Socket {
+        return NetworkUtils.openConnectedTcpSocket(
+            context = context,
+            host = host,
+            port = port,
+            connectTimeoutMs = connectTimeoutMs
+        )
+    }
+
     private var udpResponderJob: Job? = null
     private var udpSocket: DatagramSocket? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
@@ -164,7 +173,16 @@ class DiscoveryManager(
                     )
                     socket.send(replyPacket)
                 } else if (type == "ANNOUNCE") {
-                    handleIncomingBeacon(json, packet.address.hostAddress ?: "", EndpointKind.LAN.badge)
+                    val senderIp = NetworkUtils.normalizeHost(packet.address.hostAddress ?: "")
+                    val badge = if (packet.address.isLoopbackAddress ||
+                        NetworkUtils.isLoopbackHost(senderIp) ||
+                        NetworkUtils.isEmulatorHost(senderIp)
+                    ) {
+                        EndpointKind.LOCALHOST.badge
+                    } else {
+                        EndpointKind.LAN.badge
+                    }
+                    handleIncomingBeacon(json, senderIp, badge)
                 }
             }
         } catch (_: Exception) {
@@ -192,8 +210,8 @@ class DiscoveryManager(
                 startNsdBrowse()
                 kotlinx.coroutines.withTimeoutOrNull(2500L) {
                     coroutineScope {
-                        // 1. Always probe Localhost (including multi-port local/ADB-forwarded range & emulator host)
-                        // using unbound sockets so active VPNs never swallow loopback discovery.
+                        // 1. Always probe Localhost (127.0.0.1 across multi-port range & 10.0.2.2 emulator host)
+                        // in parallel, using VPN-bypassing non-VPN sockets + loopback fallback when VPN is active.
                         val loopbackPorts = (
                             listOf(identity.listenPort, LocalIdentity.DEFAULT_TCP_PORT) +
                                 (LocalIdentity.DEFAULT_TCP_PORT..(LocalIdentity.DEFAULT_TCP_PORT + 10))
@@ -202,14 +220,17 @@ class DiscoveryManager(
 
                         launch {
                             loopbackPorts.forEach { port ->
-                                probeSingleHost(
-                                    ip = "127.0.0.1",
-                                    port = port,
-                                    badge = EndpointKind.LOCALHOST.badge,
-                                    connectTimeoutMs = 200,
-                                    readTimeoutMs = 350,
-                                    androidNetwork = null
-                                )
+                                launch {
+                                    probeSingleHost(
+                                        ip = "127.0.0.1",
+                                        port = port,
+                                        badge = EndpointKind.LOCALHOST.badge,
+                                        connectTimeoutMs = 200,
+                                        readTimeoutMs = 350,
+                                        androidNetwork = null,
+                                        allowFallback = true
+                                    )
+                                }
                             }
                             emulatorPorts.forEach { port ->
                                 launch {
@@ -217,15 +238,16 @@ class DiscoveryManager(
                                         ip = "10.0.2.2",
                                         port = port,
                                         badge = EndpointKind.LOCALHOST.badge,
-                                        connectTimeoutMs = 150,
+                                        connectTimeoutMs = 180,
                                         readTimeoutMs = 300,
-                                        androidNetwork = null
+                                        androidNetwork = null,
+                                        allowFallback = true
                                     )
                                 }
                             }
                         }
 
-                        // 2. Immediately probe known/saved peer endpoints on their matched interface (with unbound fallback)
+                        // 2. Immediately probe known/saved peer endpoints on their matched interface (with fallback)
                         if (knownTargets.isNotEmpty()) {
                             launch {
                                 knownTargets.distinct().forEach { (ip, port) ->
@@ -233,24 +255,15 @@ class DiscoveryManager(
                                         launch {
                                             val kindBadge = NetworkUtils.classifyIpKind(ip, scanTargets)?.badge ?: "Saved"
                                             val matchedNetwork = NetworkUtils.findAndroidNetworkForIp(context, ip)
-                                            val ok = probeSingleHost(
+                                            probeSingleHost(
                                                 ip = ip,
                                                 port = port,
                                                 badge = kindBadge,
-                                                connectTimeoutMs = 800,
-                                                readTimeoutMs = 1000,
-                                                androidNetwork = matchedNetwork
+                                                connectTimeoutMs = 700,
+                                                readTimeoutMs = 900,
+                                                androidNetwork = matchedNetwork,
+                                                allowFallback = true
                                             )
-                                            if (!ok && matchedNetwork != null) {
-                                                probeSingleHost(
-                                                    ip = ip,
-                                                    port = port,
-                                                    badge = kindBadge,
-                                                    connectTimeoutMs = 600,
-                                                    readTimeoutMs = 800,
-                                                    androidNetwork = null
-                                                )
-                                            }
                                         }
                                     }
                                 }
@@ -326,13 +339,13 @@ class DiscoveryManager(
             }
         }
 
-        // Unbound fallback query (covers environments without per-interface binding or Robolectric tests)
+        // Unbound fallback query + direct localhost UDP query (works even if local instance uses custom port)
         launch(Dispatchers.IO) {
             try {
                 DatagramSocket().use { sock ->
                     sock.broadcast = true
                     sock.soTimeout = 450
-                    val targets = mutableSetOf("255.255.255.255")
+                    val targets = mutableSetOf("255.255.255.255", "127.0.0.1")
                     nonLoopbackTargets
                         .mapNotNull { it.broadcastAddress ?: NetworkUtils.subnetPrefix24(it.ipAddress)?.let { p -> "$p.255" } }
                         .forEach { targets.add(it) }
@@ -364,7 +377,16 @@ class DiscoveryManager(
                 sock.receive(resp)
                 val json = JSONObject(String(resp.data, 0, resp.length, Charsets.UTF_8))
                 if (json.optString("magic") == UDP_MAGIC && json.optString("type") == "ANNOUNCE") {
-                    handleIncomingBeacon(json, resp.address.hostAddress ?: "", fallbackBadge)
+                    val senderIp = NetworkUtils.normalizeHost(resp.address.hostAddress ?: "")
+                    val effectiveBadge = if (resp.address.isLoopbackAddress ||
+                        NetworkUtils.isLoopbackHost(senderIp) ||
+                        NetworkUtils.isEmulatorHost(senderIp)
+                    ) {
+                        EndpointKind.LOCALHOST.badge
+                    } else {
+                        fallbackBadge
+                    }
+                    handleIncomingBeacon(json, senderIp, effectiveBadge)
                 }
             } catch (_: Exception) {
                 break
@@ -423,7 +445,8 @@ class DiscoveryManager(
                                             badge = ep.kind.badge,
                                             connectTimeoutMs = 90,
                                             readTimeoutMs = 150,
-                                            androidNetwork = ep.androidNetwork
+                                            androidNetwork = ep.androidNetwork,
+                                            allowFallback = false
                                         )
                                     }
                                 }
@@ -441,14 +464,19 @@ class DiscoveryManager(
         badge: String,
         connectTimeoutMs: Int = 120,
         readTimeoutMs: Int = 200,
-        androidNetwork: Network? = null
+        androidNetwork: Network? = null,
+        allowFallback: Boolean = true
     ): Boolean {
+        val cleanIp = NetworkUtils.normalizeHost(ip)
         return try {
-            Socket().use { socket ->
-                if (androidNetwork != null) {
-                    runCatching { androidNetwork.bindSocket(socket) }
-                }
-                socket.connect(InetSocketAddress(ip, port), connectTimeoutMs)
+            NetworkUtils.openConnectedTcpSocket(
+                context = context,
+                host = cleanIp,
+                port = port,
+                connectTimeoutMs = connectTimeoutMs,
+                preferredNetwork = androidNetwork,
+                allowFallback = allowFallback
+            ).use { socket ->
                 socket.soTimeout = readTimeoutMs
                 val out = DataOutputStream(socket.getOutputStream())
                 val inp = DataInputStream(socket.getInputStream())
@@ -463,7 +491,7 @@ class DiscoveryManager(
                 val bytes = ByteArray(len)
                 inp.readFully(bytes)
                 val json = JSONObject(String(bytes, Charsets.UTF_8))
-                handleIncomingBeacon(json, ip, badge)
+                handleIncomingBeacon(json, cleanIp, badge)
                 true
             }
         } catch (_: Exception) {
@@ -672,9 +700,15 @@ class DiscoveryManager(
                         nsdManager?.resolveService(service, object : NsdManager.ResolveListener {
                             override fun onResolveFailed(info: NsdServiceInfo, code: Int) {}
                             override fun onServiceResolved(info: NsdServiceInfo) {
-                                val hostIp = info.host?.hostAddress ?: return
+                                val rawIp = info.host?.hostAddress ?: return
+                                val hostIp = NetworkUtils.normalizeHost(rawIp)
+                                val badge = if (NetworkUtils.isLoopbackHost(hostIp) || NetworkUtils.isEmulatorHost(hostIp)) {
+                                    EndpointKind.LOCALHOST.badge
+                                } else {
+                                    "mDNS"
+                                }
                                 scope.launch(Dispatchers.IO) {
-                                    probeSingleHost(hostIp, info.port, "mDNS")
+                                    probeSingleHost(hostIp, info.port, badge)
                                 }
                             }
                         })

@@ -1819,4 +1819,159 @@ class ExampleRobolectricTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `localhost discovery and direct chat succeed even when VPN is active in ConnectivityManager`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val shadowCm = org.robolectric.Shadows.shadowOf(cm)
+
+        val wifiNet = org.robolectric.shadows.ShadowNetwork.newInstance(101)
+        val vpnNet = org.robolectric.shadows.ShadowNetwork.newInstance(202)
+        val wifiCaps = org.robolectric.shadows.ShadowNetworkCapabilities.newInstance().also { caps ->
+            val sc = org.robolectric.Shadows.shadowOf(caps)
+            sc.addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+            sc.addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        val vpnCaps = org.robolectric.shadows.ShadowNetworkCapabilities.newInstance().also { caps ->
+            val sc = org.robolectric.Shadows.shadowOf(caps)
+            sc.addTransportType(android.net.NetworkCapabilities.TRANSPORT_VPN)
+            sc.addCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        @Suppress("DEPRECATION")
+        val wifiInfo = org.robolectric.shadows.ShadowNetworkInfo.newInstance(
+            android.net.NetworkInfo.DetailedState.CONNECTED,
+            android.net.ConnectivityManager.TYPE_WIFI,
+            0,
+            true,
+            android.net.NetworkInfo.State.CONNECTED
+        )
+        @Suppress("DEPRECATION")
+        val vpnInfo = org.robolectric.shadows.ShadowNetworkInfo.newInstance(
+            android.net.NetworkInfo.DetailedState.CONNECTED,
+            android.net.ConnectivityManager.TYPE_VPN,
+            0,
+            true,
+            android.net.NetworkInfo.State.CONNECTED
+        )
+        shadowCm.addNetwork(wifiNet, wifiInfo)
+        shadowCm.addNetwork(vpnNet, vpnInfo)
+        shadowCm.setNetworkCapabilities(wifiNet, wifiCaps)
+        shadowCm.setNetworkCapabilities(vpnNet, vpnCaps)
+
+        assertTrue(com.example.network.NetworkUtils.hasActiveVpn(context))
+        val nonVpnNets = com.example.network.NetworkUtils.getNonVpnNetworks(context)
+        assertTrue(nonVpnNets.contains(wifiNet))
+        assertFalse(nonVpnNets.contains(vpnNet))
+        val emulatorNet = com.example.network.NetworkUtils.findAndroidNetworkForIp(context, "10.0.2.2")
+        assertNotNull(emulatorNet)
+        assertTrue(emulatorNet != vpnNet)
+
+        val loopbackAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "localhost")
+        assertTrue(loopbackAttempts.firstOrNull()?.androidNetwork in nonVpnNets)
+        assertTrue(loopbackAttempts.none { it.androidNetwork == vpnNet })
+        assertTrue(loopbackAttempts.any { it.androidNetwork == null && it.bindLocalLoopback })
+        assertTrue(loopbackAttempts.any { it.androidNetwork == null && !it.bindLocalLoopback })
+
+        val emulatorAttempts = com.example.network.NetworkUtils.buildTcpSocketAttempts(context, "10.0.2.2")
+        assertTrue(emulatorAttempts.firstOrNull()?.androidNetwork in nonVpnNets)
+        assertTrue(emulatorAttempts.none { it.androidNetwork == vpnNet })
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val discPeer = DiscoveryManager(context, scope)
+        val discClient = DiscoveryManager(context, scope)
+        val peerMat = CryptoEngine.createIdentityMaterial()
+        val clientMat = CryptoEngine.createIdentityMaterial()
+        val listener = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
+            ): File = File.createTempFile("unused_vpn_lo", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val nodePeer = P2PNodeManager(scope, discPeer, listener)
+        val nodeClient = P2PNodeManager(scope, discClient, listener)
+        val occupiedDefault = runCatching {
+            java.net.ServerSocket().apply {
+                reuseAddress = true
+                bind(java.net.InetSocketAddress("0.0.0.0", LocalIdentity.DEFAULT_TCP_PORT))
+            }
+        }.getOrNull()
+
+        try {
+            // Even if default 42850 is already occupied on the device, server picks sequential 42851..42860
+            nodePeer.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true,
+                    username = "VpnLocalPeer",
+                    publicKeyBase64 = peerMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = peerMat.wrappedPrivateKeyBase64,
+                    peerId = peerMat.peerId,
+                    fingerprint = peerMat.fingerprint,
+                    listenPort = LocalIdentity.DEFAULT_TCP_PORT,
+                    isDiscoverable = true
+                )
+            )
+            nodeClient.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true,
+                    username = "VpnLocalClient",
+                    publicKeyBase64 = clientMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = clientMat.wrappedPrivateKeyBase64,
+                    peerId = clientMat.peerId,
+                    fingerprint = clientMat.fingerprint,
+                    listenPort = 43981,
+                    isDiscoverable = true
+                )
+            )
+            repeat(25) {
+                if (nodePeer.serverRunning.value && nodeClient.serverRunning.value) return@repeat
+                delay(25)
+            }
+            assertTrue(
+                "Expected fallback port in 42850..42860, got ${nodePeer.boundPort.value}",
+                nodePeer.boundPort.value in LocalIdentity.DEFAULT_TCP_PORT..(LocalIdentity.DEFAULT_TCP_PORT + 10)
+            )
+
+            discClient.scanNetworkNow(knownTargets = emptyList())
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (discClient.discoveredPeers.value[peerMat.peerId] == null && System.nanoTime() < deadline) {
+                delay(25)
+            }
+            val discovered = discClient.discoveredPeers.value[peerMat.peerId]
+            assertNotNull("Localhost peer must still be discovered while VPN is active", discovered)
+            assertEquals("127.0.0.1", discovered!!.ipAddress)
+            assertEquals(com.example.data.EndpointKind.LOCALHOST.badge, discovered.source)
+
+            val connectResult = nodeClient.connectToPeer(
+                host = "localhost",
+                port = discovered.port,
+                expectedPubKeyBase64 = peerMat.publicKeyBase64
+            )
+            assertTrue("Expected localhost connect under active VPN to succeed: ${connectResult.exceptionOrNull()}", connectResult.isSuccess)
+        } finally {
+            runCatching { occupiedDefault?.close() }
+            nodeClient.disconnectAll()
+            nodePeer.disconnectAll()
+            discClient.shutdown()
+            discPeer.shutdown()
+            scope.cancel()
+        }
+    }
 }
