@@ -53,8 +53,6 @@
 
     <string name="message_placeholder">メッセージ…</string>
     <string name="key_changed_warning">公開鍵が変更されました。タップして確認。</string>
-    <string name="send_photo">写真を送信</string>
-    <string name="send_file">ファイルを送信</string>
     <string name="delete_chat">チャットを削除</string>
     <string name="recording_voice">録音中</string>
     <string name="send_btn">送信</string>
@@ -74,7 +72,6 @@
     <string name="unmark_verified">確認を解除</string>
     <string name="close_btn">閉じる</string>
 
-    <string name="profile_title">プロフィールとネットワーク</string>
     <string name="change_photo">写真を変更</string>
     <string name="save_btn">保存</string>
     <string name="privacy_section">プライバシー</string>
@@ -167,7 +164,6 @@
     <string name="paste_btn">貼り付け</string>
     <string name="msg_clipboard_empty">クリップボードが空です。</string>
 
-    <string name="send_video">動画を送信</string>
     <string name="video_label">動画</string>
     <string name="reply_action">返信</string>
     <string name="reply_you">自分</string>
@@ -178,7 +174,6 @@
     <string name="transfer_uploading">アップロード中</string>
     <string name="transfer_downloading">ダウンロード中</string>
 
-    <string name="updates_section">アップデートと情報</string>
     <string name="current_version_label">バージョン %1$s</string>
     <string name="check_updates_btn">更新を確認</string>
     <string name="checking_updates">確認中…</string>
@@ -205,7 +200,6 @@
     <string name="notif_action_reply">返信</string>
     <string name="notif_reply_hint">メッセージ…</string>
     <string name="sticker_label">スタンプ</string>
-    <string name="cd_take_photo">写真を撮る</string>
     <string name="msg_camera_denied">写真を撮るにはカメラアクセスを許可してください。</string>
     <string name="msg_camera_unavailable">この端末ではカメラを利用できません。</string>
 
@@ -222,25 +216,7 @@
     <string name="remove_favorite_sticker_btn">削除</string>
     <string name="tab_camera">カメラ</string>
     <string name="attach_gallery">ギャラリー</string>
-    <string name="tab_photos">写真</string>
-    <string name="tab_videos">動画</string>
     <string name="tab_files">ファイル</string>
-    <string name="cd_expand_tray">展開</string>
-    <string name="cd_collapse_tray">折りたたむ</string>
-    <string name="cd_switch_camera">カメラを切り替え</string>
-    <string name="cd_flash_mode">フラッシュ</string>
-    <string name="retake_photo_btn">撮り直す</string>
-    <string name="send_selected_count">送信 (%1$d)</string>
-    <string name="choose_from_gallery_btn">ギャラリーから写真を送信</string>
-    <string name="choose_video_from_gallery_btn">ギャラリーから動画を送信</string>
-    <string name="external_picker_btn">外部ピッカー</string>
-    <string name="choose_document_btn">送信するファイルを選択</string>
-    <string name="choose_document_desc">システムの最近使ったファイルを開きます（PDF、文書、APK など）</string>
-    <string name="recent_in_app_photos">チャット内の最近の写真（タップで送信）</string>
-    <string name="recent_in_app_videos">チャット内の最近の動画（タップで送信）</string>
-    <string name="recent_in_app_files">チャット内の最近のファイル（タップで送信）</string>
-    <string name="no_saved_media_hint">上から端末内の項目を選択して送信できます。</string>
-    <string name="no_recent_files_hint">上からシステムの最近使ったファイルを開いて送信できます。</string>
 
     <string name="tab_settings">設定</string>
     <string name="profile_only_title">プロフィール</string>
@@ -258,10 +234,7 @@
     <string name="unread_messages_plural">%1$d 件の新着メッセージ</string>
 
     <string name="dev_mode_section">開発者モード</string>
-    <string name="dev_mode_title">開発者モードを有効にする</string>
-    <string name="dev_mode_desc">架空の連絡先や受信メッセージ・バックグラウンド通知のシミュレート、実行状態の確認ができます。</string>
     <string name="dev_mode_open_tools">開発者ツールを開く</string>
-    <string name="dev_mode_open_tools_desc">テストユーザー、遅延バックグラウンド受信、イベント、診断</string>
     <string name="dev_tools_title">開発者ツール</string>
     <string name="dev_fake_peer_section">テスト用連絡先</string>
     <string name="dev_fake_name_label">テスト連絡先の名前</string>

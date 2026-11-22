@@ -1,9 +1,6 @@
 package com.example.ui.screens
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -404,9 +401,7 @@ private fun QrConnectPane(
     onNotify: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val clipboard = remember(context) {
-        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    }
+    val clipboard = rememberClipboard()
     var showScanner by rememberSaveable { mutableStateOf(false) }
     var pastedInviteText by rememberSaveable { mutableStateOf("") }
     var selectedIpIndex by rememberSaveable { mutableIntStateOf(0) }
@@ -567,9 +562,7 @@ private fun QrConnectPane(
                     ) {
                         OutlinedButton(
                             onClick = {
-                                clipboard.setPrimaryClip(
-                                    ClipData.newPlainText("Chatso", inviteUri)
-                                )
+                                clipboard.copyText("Chatso", inviteUri)
                                 onNotify(copiedMsg)
                             },
                             shape = MaterialTheme.shapes.medium,
@@ -760,9 +753,7 @@ private fun ManualIpConnectPane(
     onNotify: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val clipboard = remember(context) {
-        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    }
+    val clipboard = rememberClipboard()
     var ipInput by rememberSaveable { mutableStateOf("") }
     var portInput by rememberSaveable(boundPort) { mutableStateOf(boundPort.toString()) }
     val copiedMsg = stringResource(R.string.msg_copied)
@@ -892,7 +883,7 @@ private fun ManualIpConnectPane(
                 }
                 IconButton(
                     onClick = {
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Chatso IP", preferredAddr))
+                        clipboard.copyText("Chatso IP", preferredAddr)
                         onNotify(copiedMsg)
                     }
                 ) {

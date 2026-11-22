@@ -53,8 +53,6 @@
 
     <string name="message_placeholder">Message…</string>
     <string name="key_changed_warning">Public key changed. Tap to verify.</string>
-    <string name="send_photo">Send photo</string>
-    <string name="send_file">Send file</string>
     <string name="delete_chat">Delete chat</string>
     <string name="recording_voice">Recording</string>
     <string name="send_btn">Send</string>
@@ -74,7 +72,6 @@
     <string name="unmark_verified">Remove verification</string>
     <string name="close_btn">Close</string>
 
-    <string name="profile_title">Profile &amp; Network</string>
     <string name="change_photo">Change photo</string>
     <string name="save_btn">Save</string>
     <string name="privacy_section">Privacy</string>
@@ -167,7 +164,6 @@
     <string name="paste_btn">Paste</string>
     <string name="msg_clipboard_empty">Clipboard is empty.</string>
 
-    <string name="send_video">Send video</string>
     <string name="video_label">Video</string>
     <string name="reply_action">Reply</string>
     <string name="reply_you">You</string>
@@ -178,7 +174,6 @@
     <string name="transfer_uploading">Uploading</string>
     <string name="transfer_downloading">Downloading</string>
 
-    <string name="updates_section">Updates &amp; About</string>
     <string name="current_version_label">Version %1$s</string>
     <string name="check_updates_btn">Check updates</string>
     <string name="checking_updates">Checking…</string>
@@ -205,7 +200,6 @@
     <string name="notif_action_reply">Reply</string>
     <string name="notif_reply_hint">Message…</string>
     <string name="sticker_label">Sticker</string>
-    <string name="cd_take_photo">Take photo</string>
     <string name="msg_camera_denied">Allow camera access to take a photo.</string>
     <string name="msg_camera_unavailable">Camera unavailable on this device.</string>
 
@@ -222,25 +216,7 @@
     <string name="remove_favorite_sticker_btn">Remove</string>
     <string name="tab_camera">Camera</string>
     <string name="attach_gallery">Gallery</string>
-    <string name="tab_photos">Photos</string>
-    <string name="tab_videos">Videos</string>
     <string name="tab_files">Files</string>
-    <string name="cd_expand_tray">Expand</string>
-    <string name="cd_collapse_tray">Collapse</string>
-    <string name="cd_switch_camera">Switch camera</string>
-    <string name="cd_flash_mode">Flash</string>
-    <string name="retake_photo_btn">Retake</string>
-    <string name="send_selected_count">Send (%1$d)</string>
-    <string name="choose_from_gallery_btn">Send photos from gallery</string>
-    <string name="choose_video_from_gallery_btn">Send videos from gallery</string>
-    <string name="external_picker_btn">External picker</string>
-    <string name="choose_document_btn">Choose file to send</string>
-    <string name="choose_document_desc">Opens system Recents (PDFs, docs, APKs, or any file)</string>
-    <string name="recent_in_app_photos">Recent in chats (tap to send)</string>
-    <string name="recent_in_app_videos">Recent in chats (tap to send)</string>
-    <string name="recent_in_app_files">Recent files in chats (tap to send)</string>
-    <string name="no_saved_media_hint">Tap above to select items from your device and send.</string>
-    <string name="no_recent_files_hint">Tap above to open system Recents and send any file.</string>
 
     <string name="tab_settings">Settings</string>
     <string name="profile_only_title">Profile</string>
@@ -258,10 +234,7 @@
     <string name="unread_messages_plural">%1$d new messages</string>
 
     <string name="dev_mode_section">Developer Mode</string>
-    <string name="dev_mode_title">Enable Developer Mode</string>
-    <string name="dev_mode_desc">Simulate fake contacts, incoming messages, background notifications, and inspect runtime state.</string>
     <string name="dev_mode_open_tools">Open Developer Tools</string>
-    <string name="dev_mode_open_tools_desc">Fake users, delayed background messages, events, and diagnostics</string>
     <string name="dev_tools_title">Developer Tools</string>
     <string name="dev_fake_peer_section">Fake Contacts</string>
     <string name="dev_fake_name_label">Fake contact name</string>

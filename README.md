@@ -13,7 +13,7 @@ End-to-end encrypted peer-to-peer Android messenger for local networks, VPNs, an
 - **Rich Media & Self-Destruct**: Send chunked encrypted photos, `.m4a` voice messages, and arbitrary files, with optional per-chat self-destruct timers (`30s`, `5m`, `1h`).
 - **Profile Image Cropper**: Interactive pan-and-pinch cropper before saving profile avatars.
 - **Background Connectivity**: Foreground service (`ChatsoConnectionService`) keeps listening sockets alive in the background with an in-app battery optimization exemption prompt.
-- **Localization & Themes**: Automatic Light/Dark themes and support for English, Portuguese, Spanish, French, and German.
+- **Localization & Themes**: Automatic Light/Dark themes and support for English, Portuguese, Spanish, French, German, Chinese, and Japanese.
 
 ## Requirements
 

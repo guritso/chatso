@@ -1,8 +1,5 @@
 package com.example.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -89,9 +86,7 @@ fun ContactProfileScreen(
     BackHandler(onBack = onBack)
 
     val context = LocalContext.current
-    val clipboard = remember(context) {
-        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    }
+    val clipboard = rememberClipboard()
     val copiedMsg = stringResource(R.string.msg_copied)
     val avatarFilePath = peer.avatarPath
         ?.takeIf { it.isNotBlank() }
@@ -271,7 +266,7 @@ fun ContactProfileScreen(
                             value = peer.peerId,
                             monospace = true,
                             onCopy = {
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Peer ID", peer.peerId))
+                                clipboard.copyText("Peer ID", peer.peerId)
                                 onNotify(copiedMsg)
                             }
                         )
@@ -282,7 +277,7 @@ fun ContactProfileScreen(
                             value = peer.fingerprint,
                             monospace = true,
                             onCopy = {
-                                clipboard.setPrimaryClip(ClipData.newPlainText("Fingerprint", peer.fingerprint))
+                                clipboard.copyText("Fingerprint", peer.fingerprint)
                                 onNotify(copiedMsg)
                             }
                         )

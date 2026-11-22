@@ -108,7 +108,7 @@ fun OnboardingScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Image(
-                    painter = painterResource(id = R.drawable.img_onboarding_hero_1794975444364),
+                    painter = painterResource(id = R.drawable.img_onboarding_hero),
                     contentDescription = stringResource(R.string.onboarding_title),
                     contentScale = ContentScale.Crop,
                     modifier = Modifier

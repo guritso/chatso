@@ -53,8 +53,6 @@
 
     <string name="message_placeholder">消息…</string>
     <string name="key_changed_warning">公钥已变更，点击验证。</string>
-    <string name="send_photo">发送照片</string>
-    <string name="send_file">发送文件</string>
     <string name="delete_chat">删除聊天</string>
     <string name="recording_voice">录音中</string>
     <string name="send_btn">发送</string>
@@ -74,7 +72,6 @@
     <string name="unmark_verified">取消验证</string>
     <string name="close_btn">关闭</string>
 
-    <string name="profile_title">个人资料与网络</string>
     <string name="change_photo">更换头像</string>
     <string name="save_btn">保存</string>
     <string name="privacy_section">隐私</string>
@@ -167,7 +164,6 @@
     <string name="paste_btn">粘贴</string>
     <string name="msg_clipboard_empty">剪贴板为空。</string>
 
-    <string name="send_video">发送视频</string>
     <string name="video_label">视频</string>
     <string name="reply_action">回复</string>
     <string name="reply_you">你</string>
@@ -178,7 +174,6 @@
     <string name="transfer_uploading">上传中</string>
     <string name="transfer_downloading">下载中</string>
 
-    <string name="updates_section">更新与关于</string>
     <string name="current_version_label">版本 %1$s</string>
     <string name="check_updates_btn">检查更新</string>
     <string name="checking_updates">检查中…</string>
@@ -205,7 +200,6 @@
     <string name="notif_action_reply">回复</string>
     <string name="notif_reply_hint">消息…</string>
     <string name="sticker_label">贴纸</string>
-    <string name="cd_take_photo">拍照</string>
     <string name="msg_camera_denied">请允许相机权限以拍照。</string>
     <string name="msg_camera_unavailable">此设备相机不可用。</string>
 
@@ -222,25 +216,7 @@
     <string name="remove_favorite_sticker_btn">移除</string>
     <string name="tab_camera">相机</string>
     <string name="attach_gallery">相册</string>
-    <string name="tab_photos">照片</string>
-    <string name="tab_videos">视频</string>
     <string name="tab_files">文件</string>
-    <string name="cd_expand_tray">展开</string>
-    <string name="cd_collapse_tray">收起</string>
-    <string name="cd_switch_camera">切换镜头</string>
-    <string name="cd_flash_mode">闪光灯</string>
-    <string name="retake_photo_btn">重拍</string>
-    <string name="send_selected_count">发送 (%1$d)</string>
-    <string name="choose_from_gallery_btn">从相册发送照片</string>
-    <string name="choose_video_from_gallery_btn">从相册发送视频</string>
-    <string name="external_picker_btn">外部选择器</string>
-    <string name="choose_document_btn">选择要发送的文件</string>
-    <string name="choose_document_desc">打开系统最近文件（PDF、文档、APK 或任意文件）</string>
-    <string name="recent_in_app_photos">聊天中的最近照片（点击发送）</string>
-    <string name="recent_in_app_videos">聊天中的最近视频（点击发送）</string>
-    <string name="recent_in_app_files">聊天中的最近文件（点击发送）</string>
-    <string name="no_saved_media_hint">点击上方从您的设备选择项目发送。</string>
-    <string name="no_recent_files_hint">点击上方打开系统最近文件并发送任意文件。</string>
 
     <string name="tab_settings">设置</string>
     <string name="profile_only_title">个人资料</string>
@@ -258,10 +234,7 @@
     <string name="unread_messages_plural">%1$d 条新消息</string>
 
     <string name="dev_mode_section">开发者模式</string>
-    <string name="dev_mode_title">启用开发者模式</string>
-    <string name="dev_mode_desc">模拟虚拟联系人、接收消息与后台通知，并检查运行状态。</string>
     <string name="dev_mode_open_tools">打开开发者工具</string>
-    <string name="dev_mode_open_tools_desc">虚拟用户、延迟后台消息、事件和诊断</string>
     <string name="dev_tools_title">开发者工具</string>
     <string name="dev_fake_peer_section">虚拟联系人</string>
     <string name="dev_fake_name_label">虚拟联系人名称</string>

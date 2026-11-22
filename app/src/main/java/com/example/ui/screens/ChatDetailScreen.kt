@@ -1,9 +1,6 @@
 package com.example.ui.screens
 
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -227,9 +224,7 @@ fun ChatDetailScreen(
     onNotify: (String) -> Unit
 ) {
     val context = LocalContext.current
-    val clipboard = remember(context) {
-        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    }
+    val clipboard = rememberClipboard()
     val copiedMsg = stringResource(R.string.msg_copied)
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
@@ -1506,7 +1501,7 @@ fun ChatDetailScreen(
             onSelectEmoji = { emoji -> onToggleReaction(msg.messageId, emoji) },
             onReply = { replyingToId = msg.messageId },
             onCopy = {
-                clipboard.setPrimaryClip(ClipData.newPlainText("Chatso", msg.textContent))
+                clipboard.copyText("Chatso", msg.textContent)
                 onNotify(copiedMsg)
             },
             onDelete = { onDeleteMessage(msg.messageId) }

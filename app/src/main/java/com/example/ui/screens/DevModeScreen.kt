@@ -1,8 +1,5 @@
 package com.example.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -119,9 +116,7 @@ fun DevModeScreen(
     BackHandler(onBack = onBack)
 
     val context = LocalContext.current
-    val clipboard = remember(context) {
-        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    }
+    val clipboard = rememberClipboard()
     val copiedMsg = stringResource(R.string.msg_copied)
     val defaultFakeMsg = stringResource(R.string.dev_fake_msg_default)
 
@@ -644,7 +639,7 @@ fun DevModeScreen(
                     label = stringResource(R.string.dev_diag_peer_id),
                     value = identity.peerId.take(16) + "…",
                     onCopy = {
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Peer ID", identity.peerId))
+                        clipboard.copyText("Peer ID", identity.peerId)
                         onNotify(copiedMsg)
                     }
                 )

@@ -1,8 +1,5 @@
 package com.example.ui.screens
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -87,9 +84,7 @@ fun ProfileScreen(
         )
     }
 
-    val clipboard = remember(context) {
-        context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    }
+    val clipboard = rememberClipboard()
     val copiedMsg = stringResource(R.string.msg_copied)
 
     Column(
@@ -223,9 +218,7 @@ fun ProfileScreen(
 
                     OutlinedButton(
                         onClick = {
-                            clipboard.setPrimaryClip(
-                                ClipData.newPlainText("Chatso Peer ID", identity.peerId)
-                            )
+                            clipboard.copyText("Chatso Peer ID", identity.peerId)
                             onNotify(copiedMsg)
                         },
                         shape = MaterialTheme.shapes.small,
@@ -286,9 +279,7 @@ fun ProfileScreen(
 
                     OutlinedButton(
                         onClick = {
-                            clipboard.setPrimaryClip(
-                                ClipData.newPlainText("Chatso Public Key", identity.publicKeyBase64)
-                            )
+                            clipboard.copyText("Chatso Public Key", identity.publicKeyBase64)
                             onNotify(copiedMsg)
                         },
                         shape = MaterialTheme.shapes.small,

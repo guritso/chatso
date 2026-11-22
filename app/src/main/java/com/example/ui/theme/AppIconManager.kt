@@ -58,10 +58,6 @@ object AppIconManager {
         return isEffectivelyEnabled(pm, comp, defaultEnabled = aliasClassName == DEFAULT_ALIAS_CLASS)
     }
 
-    fun applyPaletteIcon(context: Context, palette: ThemePalette) {
-        applyAlias(context, palette.aliasClassName)
-    }
-
     fun applyAlias(context: Context, targetAliasClassName: String) {
         val pm = context.packageManager
         val pkg = context.packageName

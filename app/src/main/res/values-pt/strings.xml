@@ -59,8 +59,6 @@
     <!-- Chat Detail -->
     <string name="message_placeholder">Mensagem…</string>
     <string name="key_changed_warning">A chave pública mudou. Toque para conferir.</string>
-    <string name="send_photo">Enviar foto</string>
-    <string name="send_file">Enviar arquivo</string>
     <string name="delete_chat">Excluir conversa</string>
     <string name="recording_voice">Gravando</string>
     <string name="send_btn">Enviar</string>
@@ -81,7 +79,6 @@
     <string name="close_btn">Fechar</string>
 
     <!-- Profile & Settings -->
-    <string name="profile_title">Perfil e Rede</string>
     <string name="change_photo">Trocar foto</string>
     <string name="save_btn">Salvar</string>
     <string name="privacy_section">Privacidade</string>
@@ -179,7 +176,6 @@
     <string name="paste_btn">Colar</string>
     <string name="msg_clipboard_empty">Área de transferência vazia.</string>
 
-    <string name="send_video">Enviar vídeo</string>
     <string name="video_label">Vídeo</string>
     <string name="reply_action">Responder</string>
     <string name="reply_you">Você</string>
@@ -190,7 +186,6 @@
     <string name="transfer_uploading">Enviando</string>
     <string name="transfer_downloading">Recebendo</string>
 
-    <string name="updates_section">Atualizações e Sobre</string>
     <string name="current_version_label">Versão %1$s</string>
     <string name="check_updates_btn">Verificar update</string>
     <string name="checking_updates">Verificando…</string>
@@ -217,7 +212,6 @@
     <string name="notif_action_reply">Responder</string>
     <string name="notif_reply_hint">Mensagem…</string>
     <string name="sticker_label">Figurinha</string>
-    <string name="cd_take_photo">Tirar foto</string>
     <string name="msg_camera_denied">Permita o acesso à câmera para tirar uma foto.</string>
     <string name="msg_camera_unavailable">Câmera indisponível neste dispositivo.</string>
 
@@ -234,25 +228,7 @@
     <string name="remove_favorite_sticker_btn">Remover</string>
     <string name="tab_camera">Câmera</string>
     <string name="attach_gallery">Galeria</string>
-    <string name="tab_photos">Fotos</string>
-    <string name="tab_videos">Vídeos</string>
     <string name="tab_files">Arquivos</string>
-    <string name="cd_expand_tray">Expandir</string>
-    <string name="cd_collapse_tray">Recolher</string>
-    <string name="cd_switch_camera">Trocar câmera</string>
-    <string name="cd_flash_mode">Flash</string>
-    <string name="retake_photo_btn">Refazer</string>
-    <string name="send_selected_count">Enviar (%1$d)</string>
-    <string name="choose_from_gallery_btn">Enviar fotos da galeria</string>
-    <string name="choose_video_from_gallery_btn">Enviar vídeos da galeria</string>
-    <string name="external_picker_btn">Seletor externo</string>
-    <string name="choose_document_btn">Escolher arquivo para enviar</string>
-    <string name="choose_document_desc">Abre Recentes do sistema (PDFs, docs, APKs e outros)</string>
-    <string name="recent_in_app_photos">Recentes nas conversas (toque para enviar)</string>
-    <string name="recent_in_app_videos">Recentes nas conversas (toque para enviar)</string>
-    <string name="recent_in_app_files">Arquivos recentes nas conversas (toque para enviar)</string>
-    <string name="no_saved_media_hint">Toque acima para escolher fotos ou vídeos do aparelho e enviar.</string>
-    <string name="no_recent_files_hint">Toque acima para abrir os arquivos recentes do sistema e enviar.</string>
 
     <string name="tab_settings">Ajustes</string>
     <string name="profile_only_title">Perfil</string>
@@ -270,10 +246,7 @@
     <string name="unread_messages_plural">%1$d novas mensagens</string>
 
     <string name="dev_mode_section">Modo Desenvolvedor</string>
-    <string name="dev_mode_title">Ativar Modo Desenvolvedor</string>
-    <string name="dev_mode_desc">Simule usuários fake, recebimento de mensagens em segundo plano e inspecione diagnósticos.</string>
     <string name="dev_mode_open_tools">Ferramentas de Desenvolvedor</string>
-    <string name="dev_mode_open_tools_desc">Usuários fake, mensagens agendadas no background, eventos e diagnóstico</string>
     <string name="dev_tools_title">Modo Desenvolvedor</string>
     <string name="dev_fake_peer_section">Usuários Fake</string>
     <string name="dev_fake_name_label">Nome do usuário fake</string>

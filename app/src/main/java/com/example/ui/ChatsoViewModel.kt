@@ -540,11 +540,6 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun setAppForeground(inForeground: Boolean) {
-        container.isAppInForeground = inForeground
-        repository.onAppForegroundChanged(inForeground)
-    }
-
     fun checkForUpdates(manual: Boolean) {
         if (_updateUiState.value is UpdateUiState.Checking) return
         viewModelScope.launch {

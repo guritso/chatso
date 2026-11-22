@@ -377,13 +377,6 @@ object NetworkUtils {
         return acc
     }
 
-    fun getPreferredShareIp(): String {
-        val endpoints = getActiveEndpoints()
-        return endpoints.firstOrNull { it.kind == EndpointKind.VPN }?.ipAddress
-            ?: endpoints.firstOrNull { it.kind == EndpointKind.LAN }?.ipAddress
-            ?: "127.0.0.1"
-    }
-
     private fun isCellularInterface(ifName: String): Boolean {
         return cellularPrefixes.any { ifName.startsWith(it) }
     }

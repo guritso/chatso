@@ -63,7 +63,6 @@ object ChatsoNotificationHelper {
     private const val PREFS_NOTIF_THEME = "chatso_notif_theme_prefs"
     private const val KEY_THEME_PALETTE = "theme_palette"
     private const val KEY_THEME_ADVANCED = "theme_advanced"
-    private const val DEFAULT_APP_ICON_COLOR = 0xFF222634.toInt()
     private const val MAX_CACHED_MESSAGES = 8
 
     @Volatile
