@@ -33,6 +33,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONObject
 
 class ChatRepository(
     context: Context,
@@ -87,6 +88,11 @@ class ChatRepository(
     private val dismissedPeerIds = ConcurrentHashMap.newKeySet<String>().apply {
         dismissedPrefs.getStringSet("ids", emptySet())?.let { addAll(it) }
     }
+    private val dismissedInstanceIds = ConcurrentHashMap.newKeySet<String>().apply {
+        dismissedPrefs.getStringSet("instance_ids", emptySet())?.let { addAll(it) }
+    }
+    private val pendingReceiptPrefs = appContext.getSharedPreferences("chatso_pending_receipts", Context.MODE_PRIVATE)
+    private val pendingReceiptsMutex = Mutex()
     private var autoConnectJob: Job? = null
 
     private val _transferAlertResIds = MutableSharedFlow<Int>(extraBufferCapacity = 8)
@@ -121,6 +127,7 @@ class ChatRepository(
             mediaStorage.encodeAvatarBase64(snap.avatarPath)
         }
         scope.launch(Dispatchers.IO) {
+            runCatching { identityStore.ensureInstanceId() }
             var wasInit = false
             var wasBridge = false
             identityStore.identityFlow.collectLatest { identity ->
@@ -244,7 +251,7 @@ class ChatRepository(
                 null
             }
             chatDao.markMessageRead(msg.messageId, DeliveryStatus.READ.name, now, expiresAt)
-            nodeManager.sendReadReceipt(peerId, msg.messageId)
+            dispatchReceipt(peerId, msg.messageId, DeliveryStatus.READ)
             markedCount++
         }
         if (markedCount > 0) {
@@ -300,18 +307,32 @@ class ChatRepository(
         ip: String,
         port: Int,
         expectedPubKeyBase64: String = "",
-        inviteToken: String = ""
+        inviteToken: String = "",
+        expectedInstanceId: String = ""
     ): Result<String> {
-        return nodeManager.connectToPeer(ip, port, expectedPubKeyBase64, inviteToken)
+        return nodeManager.connectToPeer(
+            host = ip,
+            port = port,
+            expectedPubKeyBase64 = expectedPubKeyBase64,
+            inviteToken = inviteToken,
+            expectedInstanceId = expectedInstanceId
+        )
     }
 
     suspend fun connectViaBridge(
         bridgePeerId: String,
         targetPeerId: String,
         expectedPubKeyBase64: String = "",
-        inviteToken: String = ""
+        inviteToken: String = "",
+        expectedInstanceId: String = ""
     ): Result<String> {
-        return nodeManager.connectViaBridge(bridgePeerId, targetPeerId, expectedPubKeyBase64, inviteToken)
+        return nodeManager.connectViaBridge(
+            bridgePeerId = bridgePeerId,
+            targetPeerId = targetPeerId,
+            expectedPubKeyBase64 = expectedPubKeyBase64,
+            inviteToken = inviteToken,
+            expectedInstanceId = expectedInstanceId
+        )
     }
 
     fun isDevSimulatedOnline(peerId: String): Boolean =
@@ -350,13 +371,17 @@ class ChatRepository(
                 ?.takeIf { it.viaBridgePeerId.isNullOrBlank() }
             val discoveredBridged = discoveryManager.discoveredPeers.value[peerId]
                 ?.takeIf { !it.viaBridgePeerId.isNullOrBlank() }
+            val targetExpectedInstance = discoveredDirect?.instanceId?.ifBlank { null }
+                ?: discoveredBridged?.instanceId?.ifBlank { null }
+                ?: peer?.instanceId.orEmpty()
 
             if (discoveredDirect != null) {
                 if (nodeManager.connectToPeer(
                         host = discoveredDirect.ipAddress,
                         port = discoveredDirect.port,
                         expectedPubKeyBase64 = discoveredDirect.publicKeyBase64.ifBlank { peer?.publicKeyBase64.orEmpty() },
-                        isAutoReconnect = isAutoReconnect
+                        isAutoReconnect = isAutoReconnect,
+                        expectedInstanceId = targetExpectedInstance
                     ).isSuccess
                 ) {
                     return@withLock finalizeAttempt(true)
@@ -371,7 +396,8 @@ class ChatRepository(
                         host = peer.lastIp,
                         port = peer.lastPort,
                         expectedPubKeyBase64 = peer.publicKeyBase64,
-                        isAutoReconnect = isAutoReconnect
+                        isAutoReconnect = isAutoReconnect,
+                        expectedInstanceId = peer.instanceId
                     ).isSuccess
                 ) {
                     return@withLock finalizeAttempt(true)
@@ -382,7 +408,8 @@ class ChatRepository(
                         host = "127.0.0.1",
                         port = peer.lastPort,
                         expectedPubKeyBase64 = peer.publicKeyBase64,
-                        isAutoReconnect = isAutoReconnect
+                        isAutoReconnect = isAutoReconnect,
+                        expectedInstanceId = peer.instanceId
                     ).isSuccess
                 ) {
                     return@withLock finalizeAttempt(true)
@@ -403,7 +430,8 @@ class ChatRepository(
                             host = bridgeIp,
                             port = bridgePort,
                             expectedPubKeyBase64 = bridgePub,
-                            isAutoReconnect = isAutoReconnect
+                            isAutoReconnect = isAutoReconnect,
+                            expectedInstanceId = bridgePeer?.instanceId.orEmpty()
                         )
                     }
                 }
@@ -411,7 +439,8 @@ class ChatRepository(
                         bridgePeerId = bridgeId,
                         targetPeerId = peerId,
                         expectedPubKeyBase64 = targetPub,
-                        isAutoReconnect = isAutoReconnect
+                        isAutoReconnect = isAutoReconnect,
+                        expectedInstanceId = targetExpectedInstance
                     ).isSuccess
                 ) {
                     return@withLock finalizeAttempt(true)
@@ -424,7 +453,8 @@ class ChatRepository(
                         host = peer.lastIp,
                         port = peer.lastPort,
                         expectedPubKeyBase64 = peer.publicKeyBase64,
-                        isAutoReconnect = isAutoReconnect
+                        isAutoReconnect = isAutoReconnect,
+                        expectedInstanceId = peer.instanceId
                     ).isSuccess
                 )
             }
@@ -482,7 +512,8 @@ class ChatRepository(
                 host = peer.lastIp,
                 port = peer.lastPort,
                 expectedPubKeyBase64 = peer.publicKeyBase64,
-                isAutoReconnect = isAutoReconnect
+                isAutoReconnect = isAutoReconnect,
+                expectedInstanceId = peer.instanceId
             ).isSuccess
             if (!ok) return@withLock false
             val endGen = deleteGenerationByPeer[targetPeerId]?.get() ?: 0L
@@ -597,10 +628,9 @@ class ChatRepository(
         } finally {
             sendingInFlightIds.remove(msgId)
         }
-        chatDao.updateMessageStatus(
-            msgId,
-            if (ok) DeliveryStatus.SENT.name else DeliveryStatus.SENDING.name
-        )
+        if (ok) {
+            chatDao.markMessageSentIfPending(msgId)
+        }
         return ok
     }
 
@@ -1040,7 +1070,7 @@ class ChatRepository(
         }
 
         if (!cancelledTransferIds.remove(msgId) && !simOnlineHandled) {
-            chatDao.updateTransferProgress(
+            chatDao.markTransferCompleteIfPending(
                 msgId,
                 100,
                 if (ok) DeliveryStatus.SENT.name else DeliveryStatus.SENDING.name
@@ -1116,7 +1146,7 @@ class ChatRepository(
                 null
             }
             chatDao.markMessageRead(msg.messageId, DeliveryStatus.READ.name, now, expiresAt)
-            nodeManager.sendReadReceipt(peerId, msg.messageId)
+            dispatchReceipt(peerId, msg.messageId, DeliveryStatus.READ)
         }
     }
 
@@ -1165,14 +1195,81 @@ class ChatRepository(
     }
 
     private fun persistDismissedPeers() {
-        dismissedPrefs.edit().putStringSet("ids", HashSet(dismissedPeerIds)).apply()
+        dismissedPrefs.edit()
+            .putStringSet("ids", HashSet(dismissedPeerIds))
+            .putStringSet("instance_ids", HashSet(dismissedInstanceIds))
+            .apply()
+    }
+
+    private suspend fun enqueuePendingReceipt(peerId: String, messageId: String, status: DeliveryStatus) {
+        if (peerId.startsWith(DEV_FAKE_PEER_PREFIX) || transientTestPeerIds.contains(peerId)) return
+        pendingReceiptsMutex.withLock {
+            val raw = pendingReceiptPrefs.getString(peerId, null)
+            val json = if (!raw.isNullOrBlank()) runCatching { JSONObject(raw) }.getOrElse { JSONObject() } else JSONObject()
+            val prev = json.optString(messageId)
+            if (prev == DeliveryStatus.READ.name && status != DeliveryStatus.READ) return
+            json.put(messageId, status.name)
+            pendingReceiptPrefs.edit().putString(peerId, json.toString()).apply()
+        }
+    }
+
+    private suspend fun dispatchReceipt(peerId: String, messageId: String, status: DeliveryStatus) {
+        if (peerId.startsWith(DEV_FAKE_PEER_PREFIX) || transientTestPeerIds.contains(peerId)) return
+        val sent = if (status == DeliveryStatus.READ) {
+            nodeManager.sendReadReceipt(peerId, messageId)
+        } else {
+            nodeManager.sendDeliveredReceipt(peerId, messageId)
+        }
+        if (!sent) {
+            enqueuePendingReceipt(peerId, messageId, status)
+        }
+    }
+
+    private suspend fun syncReceiptsWithPeer(peerId: String) {
+        if (peerId.startsWith(DEV_FAKE_PEER_PREFIX) || transientTestPeerIds.contains(peerId)) return
+        val batch: List<Pair<String, DeliveryStatus>> = pendingReceiptsMutex.withLock {
+            val raw = pendingReceiptPrefs.getString(peerId, null) ?: return@withLock emptyList()
+            val json = runCatching { JSONObject(raw) }.getOrNull() ?: return@withLock emptyList()
+            buildList {
+                val keys = json.keys()
+                while (keys.hasNext()) {
+                    val id = keys.next()
+                    val status = DeliveryStatus.entries.firstOrNull { it.name == json.optString(id) }
+                    if (status != null) add(id to status)
+                }
+            }
+        }
+        if (batch.isNotEmpty() && nodeManager.sendReceiptBatch(peerId, batch)) {
+            pendingReceiptsMutex.withLock {
+                val raw = pendingReceiptPrefs.getString(peerId, null) ?: return@withLock
+                val json = runCatching { JSONObject(raw) }.getOrNull() ?: return@withLock
+                for ((id, sentStatus) in batch) {
+                    val cur = json.optString(id)
+                    if (cur == sentStatus.name || sentStatus == DeliveryStatus.READ) {
+                        json.remove(id)
+                    }
+                }
+                if (json.length() == 0) {
+                    pendingReceiptPrefs.edit().remove(peerId).apply()
+                } else {
+                    pendingReceiptPrefs.edit().putString(peerId, json.toString()).apply()
+                }
+            }
+        }
+        val awaiting = chatDao.getOutgoingMessagesAwaitingReceipt(peerId).map { it.messageId }
+        if (awaiting.isNotEmpty()) {
+            nodeManager.sendReceiptQuery(peerId, awaiting)
+        }
     }
 
     suspend fun deleteConversation(peerId: String) {
+        val existingPeer = chatDao.getPeerById(peerId)
         deletingPeerIds.add(peerId)
         deleteGenerationByPeer.computeIfAbsent(peerId) { AtomicLong(0L) }.incrementAndGet()
         dismissedPeerIds.add(peerId)
+        existingPeer?.instanceId?.takeIf { it.isNotBlank() }?.let { dismissedInstanceIds.add(it) }
         persistDismissedPeers()
+        pendingReceiptPrefs.edit().remove(peerId).apply()
         try {
             if (_unreadDivider.value?.peerId == peerId) {
                 _unreadDivider.value = null
@@ -1212,6 +1309,14 @@ class ChatRepository(
         return dismissedPeerIds.contains(peerId)
     }
 
+    override suspend fun isInstanceDismissed(instanceId: String): Boolean {
+        return instanceId.isNotBlank() && dismissedInstanceIds.contains(instanceId)
+    }
+
+    override suspend fun getKnownPeerInstanceId(peerId: String): String {
+        return chatDao.getPeerById(peerId)?.instanceId.orEmpty()
+    }
+
     override suspend fun onPeerProfileUpdated(
         peerId: String,
         publicKeyBase64: String,
@@ -1221,16 +1326,41 @@ class ChatRepository(
         avatarBase64: String?,
         viaBridgePeerId: String
     ) {
-        if (deletingPeerIds.contains(peerId) || transientTestPeerIds.contains(peerId)) return
-        if (chatDao.getPeerById(peerId) == null) return
-        onPeerHandshaked(
+        onPeerProfileUpdatedWithMeta(
             peerId = peerId,
             publicKeyBase64 = publicKeyBase64,
             remoteIp = remoteIp,
             remoteListenPort = remoteListenPort,
             username = username,
             avatarBase64 = avatarBase64,
-            viaBridgePeerId = viaBridgePeerId
+            viaBridgePeerId = viaBridgePeerId,
+            remoteInstanceId = ""
+        )
+    }
+
+    override suspend fun onPeerProfileUpdatedWithMeta(
+        peerId: String,
+        publicKeyBase64: String,
+        remoteIp: String,
+        remoteListenPort: Int,
+        username: String,
+        avatarBase64: String?,
+        viaBridgePeerId: String,
+        remoteInstanceId: String
+    ) {
+        if (deletingPeerIds.contains(peerId) || transientTestPeerIds.contains(peerId)) return
+        if (chatDao.getPeerById(peerId) == null) return
+        onPeerHandshakedWithMeta(
+            peerId = peerId,
+            publicKeyBase64 = publicKeyBase64,
+            remoteIp = remoteIp,
+            remoteListenPort = remoteListenPort,
+            username = username,
+            avatarBase64 = avatarBase64,
+            viaBridgePeerId = viaBridgePeerId,
+            remoteInstanceId = remoteInstanceId,
+            isInviteAuthorized = false,
+            allowRestoreDismissed = false
         )
     }
 
@@ -1243,11 +1373,53 @@ class ChatRepository(
         avatarBase64: String?,
         viaBridgePeerId: String
     ) {
+        onPeerHandshakedWithMeta(
+            peerId = peerId,
+            publicKeyBase64 = publicKeyBase64,
+            remoteIp = remoteIp,
+            remoteListenPort = remoteListenPort,
+            username = username,
+            avatarBase64 = avatarBase64,
+            viaBridgePeerId = viaBridgePeerId,
+            remoteInstanceId = "",
+            isInviteAuthorized = false,
+            allowRestoreDismissed = true
+        )
+    }
+
+    override suspend fun onPeerHandshakedWithMeta(
+        peerId: String,
+        publicKeyBase64: String,
+        remoteIp: String,
+        remoteListenPort: Int,
+        username: String,
+        avatarBase64: String?,
+        viaBridgePeerId: String,
+        remoteInstanceId: String,
+        isInviteAuthorized: Boolean,
+        allowRestoreDismissed: Boolean
+    ) {
         if (deletingPeerIds.contains(peerId) || transientTestPeerIds.contains(peerId)) return
-        if (dismissedPeerIds.remove(peerId)) {
-            persistDismissedPeers()
-        }
         val existing = chatDao.getPeerById(peerId)
+        val isDismissed = dismissedPeerIds.contains(peerId) ||
+            (remoteInstanceId.isNotBlank() && dismissedInstanceIds.contains(remoteInstanceId))
+        if (!allowRestoreDismissed && existing == null && isDismissed) return
+
+        val instanceChanged = existing != null &&
+            existing.instanceId.isNotBlank() &&
+            remoteInstanceId.isNotBlank() &&
+            existing.instanceId != remoteInstanceId
+        if (instanceChanged && !isInviteAuthorized) return
+
+        if (allowRestoreDismissed || existing != null) {
+            var dismissedChanged = dismissedPeerIds.remove(peerId)
+            if (remoteInstanceId.isNotBlank() && dismissedInstanceIds.remove(remoteInstanceId)) {
+                dismissedChanged = true
+            }
+            if (dismissedChanged) {
+                persistDismissedPeers()
+            }
+        }
         val avatarPath = if (!avatarBase64.isNullOrBlank()) {
             mediaStorage.savePeerAvatarBase64(peerId, avatarBase64) ?: existing?.avatarPath
         } else {
@@ -1256,12 +1428,14 @@ class ChatRepository(
         val keyChanged = existing != null &&
             existing.publicKeyBase64.isNotBlank() &&
             existing.publicKeyBase64 != publicKeyBase64
+        val identityAlert = keyChanged || (instanceChanged && !isInviteAuthorized)
 
         val resolvedName = if (username.isNotBlank() && username != remoteIp) {
             username
         } else {
             existing?.username ?: username.ifBlank { "P2P Contact" }
         }
+        val resolvedInstanceId = remoteInstanceId.ifBlank { existing?.instanceId.orEmpty() }
 
         val updated = PeerEntity(
             peerId = peerId,
@@ -1271,19 +1445,21 @@ class ChatRepository(
             avatarPath = avatarPath,
             lastIp = remoteIp,
             lastPort = remoteListenPort,
-            isVerified = if (keyChanged) false else (existing?.isVerified ?: false),
-            peerVerifiedMe = if (keyChanged) false else (existing?.peerVerifiedMe ?: false),
-            keyChangedWarning = keyChanged,
+            isVerified = if (keyChanged || (instanceChanged && !isInviteAuthorized)) false else (existing?.isVerified ?: false),
+            peerVerifiedMe = if (keyChanged || (instanceChanged && !isInviteAuthorized)) false else (existing?.peerVerifiedMe ?: false),
+            keyChangedWarning = identityAlert,
             selfDestructSeconds = existing?.selfDestructSeconds ?: 0,
             lastMessagePreview = existing?.lastMessagePreview?.ifBlank { "E2EE channel established" }
                 ?: "E2EE channel established",
             lastActivityAt = existing?.lastActivityAt ?: System.currentTimeMillis(),
             unreadCount = existing?.unreadCount ?: 0,
-            viaBridgePeerId = viaBridgePeerId
+            viaBridgePeerId = viaBridgePeerId,
+            instanceId = resolvedInstanceId
         )
         chatDao.upsertPeer(updated)
         if (!peerId.startsWith(DEV_FAKE_PEER_PREFIX)) {
             scope.launch(Dispatchers.IO) {
+                syncReceiptsWithPeer(peerId)
                 flushPendingOutgoingMessages(peerId)
             }
         }
@@ -1351,9 +1527,8 @@ class ChatRepository(
                             replyToPreview = msg.replyToPreview
                         )
                         if (ok) {
-                            chatDao.updateMessageStatus(msg.messageId, DeliveryStatus.SENT.name)
+                            chatDao.markMessageSentIfPending(msg.messageId)
                         } else {
-                            chatDao.updateMessageStatus(msg.messageId, DeliveryStatus.SENDING.name)
                             abortLoop = true
                         }
                     } else {
@@ -1427,11 +1602,13 @@ class ChatRepository(
                             }
                             if (cancelledTransferIds.remove(msg.messageId)) {
                                 Unit
-                            } else if (ok) {
-                                chatDao.updateTransferProgress(msg.messageId, 100, DeliveryStatus.SENT.name)
                             } else {
-                                chatDao.updateTransferProgress(msg.messageId, 100, DeliveryStatus.SENDING.name)
-                                abortLoop = true
+                                chatDao.markTransferCompleteIfPending(
+                                    msg.messageId,
+                                    100,
+                                    if (ok) DeliveryStatus.SENT.name else DeliveryStatus.SENDING.name
+                                )
+                                if (!ok) abortLoop = true
                             }
                         }
                     }
@@ -1487,6 +1664,22 @@ class ChatRepository(
         _typingPeers.update { it - peerId }
         val isChatOpenInFg = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
         val isActivelyViewed = isChatOpenInFg && isOpenChatAtBottom
+        val existingMsg = chatDao.getMessageById(messageId)
+        if (existingMsg != null && !existingMsg.isOutgoing && existingMsg.transferProgress >= 100) {
+            if (isActivelyViewed && existingMsg.status != DeliveryStatus.READ.name) {
+                val now = System.currentTimeMillis()
+                val expiresAt = if (existingMsg.selfDestructSeconds > 0) {
+                    now + existingMsg.selfDestructSeconds * 1000L
+                } else {
+                    null
+                }
+                chatDao.markMessageRead(messageId, DeliveryStatus.READ.name, now, expiresAt)
+                dispatchReceipt(peerId, messageId, DeliveryStatus.READ)
+            } else if (existingMsg.status == DeliveryStatus.READ.name) {
+                dispatchReceipt(peerId, messageId, DeliveryStatus.READ)
+            }
+            return
+        }
         val now = System.currentTimeMillis()
         val expiresAt = if (isActivelyViewed && selfDestructSec > 0) {
             now + selfDestructSec * 1000L
@@ -1521,7 +1714,7 @@ class ChatRepository(
             )
         }
         if (isActivelyViewed) {
-            nodeManager.sendReadReceipt(peerId, messageId)
+            dispatchReceipt(peerId, messageId, DeliveryStatus.READ)
         } else if (isChatOpenInFg) {
             recordScrolledUpUnreadAnchor(peerId, messageId)
         } else {
@@ -1575,6 +1768,14 @@ class ChatRepository(
         mediaHeight: Int
     ): File {
         cancelledTransferIds.remove(messageId)
+        val existingMsg = chatDao.getMessageById(messageId)
+        if (existingMsg != null &&
+            !existingMsg.isOutgoing &&
+            existingMsg.transferProgress >= 100 &&
+            existingMsg.mediaLocalPath?.let { File(it).exists() } == true
+        ) {
+            return mediaStorage.createIncomingMediaFile("dup_$messageId", fileName)
+        }
         val targetFile = mediaStorage.createIncomingMediaFile(messageId, fileName)
         val preview = when (messageType) {
             MessageType.IMAGE -> "Receiving photo: $fileName"
@@ -1623,6 +1824,8 @@ class ChatRepository(
 
     override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {
         if (cancelledTransferIds.contains(messageId)) return
+        val existingMsg = chatDao.getMessageById(messageId)
+        if (existingMsg != null && existingMsg.transferProgress >= 100) return
         chatDao.updateTransferProgress(messageId, progress, DeliveryStatus.SENDING.name)
         val existing = transfersMap[messageId]
         if (existing != null) {
@@ -1647,6 +1850,22 @@ class ChatRepository(
         val existing = chatDao.getMessageById(messageId) ?: return
         val isChatOpenInFg = isAppInForegroundProvider() && currentlyOpenPeerId == peerId
         val isActivelyViewed = isChatOpenInFg && isOpenChatAtBottom
+        if (!existing.isOutgoing && existing.transferProgress >= 100 && existing.mediaLocalPath != file.absolutePath) {
+            mediaStorage.deleteMediaFile(file.absolutePath)
+            if (isActivelyViewed && existing.status != DeliveryStatus.READ.name) {
+                val now = System.currentTimeMillis()
+                val expiresAt = if (existing.selfDestructSeconds > 0) {
+                    now + existing.selfDestructSeconds * 1000L
+                } else {
+                    null
+                }
+                chatDao.markMessageRead(messageId, DeliveryStatus.READ.name, now, expiresAt)
+                dispatchReceipt(peerId, messageId, DeliveryStatus.READ)
+            } else if (existing.status == DeliveryStatus.READ.name) {
+                dispatchReceipt(peerId, messageId, DeliveryStatus.READ)
+            }
+            return
+        }
         val now = System.currentTimeMillis()
         val expiresAt = if (isActivelyViewed && existing.selfDestructSeconds > 0) {
             now + existing.selfDestructSeconds * 1000L
@@ -1692,7 +1911,7 @@ class ChatRepository(
             )
         }
         if (isActivelyViewed) {
-            nodeManager.sendReadReceipt(peerId, messageId)
+            dispatchReceipt(peerId, messageId, DeliveryStatus.READ)
         } else if (isChatOpenInFg) {
             recordScrolledUpUnreadAnchor(peerId, messageId)
         } else {
@@ -1796,7 +2015,7 @@ class ChatRepository(
             removeTransferEntry(messageId)
         }
         if (!cancelledTransferIds.remove(messageId) && ok) {
-            chatDao.updateTransferProgress(messageId, 100, DeliveryStatus.SENT.name)
+            chatDao.markTransferCompleteIfPending(messageId, 100, DeliveryStatus.SENT.name)
         }
     }
 
@@ -1809,18 +2028,55 @@ class ChatRepository(
 
     override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {
         val msg = chatDao.getMessageById(messageId) ?: return
-        if (status == DeliveryStatus.READ) {
-            val now = System.currentTimeMillis()
-            val expiresAt = if (msg.selfDestructSeconds > 0) {
-                now + msg.selfDestructSeconds * 1000L
-            } else {
-                null
+        when (status) {
+            DeliveryStatus.READ -> {
+                if (msg.status != DeliveryStatus.READ.name) {
+                    val now = System.currentTimeMillis()
+                    val expiresAt = if (msg.selfDestructSeconds > 0) {
+                        now + msg.selfDestructSeconds * 1000L
+                    } else {
+                        null
+                    }
+                    chatDao.markMessageRead(messageId, DeliveryStatus.READ.name, now, expiresAt)
+                }
             }
-            chatDao.markMessageRead(messageId, DeliveryStatus.READ.name, now, expiresAt)
-        } else {
-            if (msg.status != DeliveryStatus.READ.name) {
-                chatDao.updateMessageStatus(messageId, status.name)
+            DeliveryStatus.DELIVERED -> {
+                chatDao.markMessageDeliveredIfNotRead(messageId)
             }
+            DeliveryStatus.SENT -> {
+                chatDao.markMessageSentIfPending(messageId)
+            }
+            else -> Unit
+        }
+    }
+
+    override suspend fun onReceiptSendFailed(peerId: String, messageId: String, status: DeliveryStatus) {
+        enqueuePendingReceipt(peerId, messageId, status)
+    }
+
+    override suspend fun onReceiptQueryReceived(peerId: String, messageIds: List<String>) {
+        if (deletingPeerIds.contains(peerId) || dismissedPeerIds.contains(peerId)) return
+        val receipts = buildList {
+            for (id in messageIds) {
+                val msg = chatDao.getMessageById(id) ?: continue
+                if (!msg.isOutgoing && msg.peerId == peerId && msg.transferProgress >= 100) {
+                    val st = if (msg.status == DeliveryStatus.READ.name) {
+                        DeliveryStatus.READ
+                    } else {
+                        DeliveryStatus.DELIVERED
+                    }
+                    add(msg.messageId to st)
+                }
+            }
+        }
+        if (receipts.isNotEmpty() && !nodeManager.sendReceiptBatch(peerId, receipts)) {
+            receipts.forEach { (id, st) -> enqueuePendingReceipt(peerId, id, st) }
+        }
+    }
+
+    override suspend fun onReceiptBatchReceived(peerId: String, receipts: List<Pair<String, DeliveryStatus>>) {
+        for ((id, status) in receipts) {
+            onDeliveryReceipt(peerId, id, status)
         }
     }
 

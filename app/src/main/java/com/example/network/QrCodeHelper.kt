@@ -19,7 +19,8 @@ data class QrInvitePayload(
     val port: Int,
     val publicKeyBase64: String,
     val username: String,
-    val inviteToken: String
+    val inviteToken: String,
+    val instanceId: String = ""
 )
 
 object QrCodeHelper {
@@ -29,9 +30,10 @@ object QrCodeHelper {
         port: Int,
         publicKeyBase64: String,
         username: String,
-        inviteToken: String
+        inviteToken: String,
+        instanceId: String = ""
     ): String {
-        return Uri.Builder()
+        val builder = Uri.Builder()
             .scheme("chatso")
             .authority("connect")
             .appendQueryParameter("ip", ip.trim())
@@ -39,8 +41,10 @@ object QrCodeHelper {
             .appendQueryParameter("pub", publicKeyBase64.trim())
             .appendQueryParameter("name", username.trim())
             .appendQueryParameter("token", inviteToken.trim())
-            .build()
-            .toString()
+        if (instanceId.isNotBlank()) {
+            builder.appendQueryParameter("inst", instanceId.trim())
+        }
+        return builder.build().toString()
     }
 
     fun parseInviteUri(rawText: String): QrInvitePayload? {
@@ -53,7 +57,15 @@ object QrCodeHelper {
                 val pub = uri.getQueryParameter("pub") ?: ""
                 val name = uri.getQueryParameter("name") ?: "Contact"
                 val token = uri.getQueryParameter("token") ?: ""
-                QrInvitePayload(ip = ip, port = port, publicKeyBase64 = pub, username = name, inviteToken = token)
+                val inst = uri.getQueryParameter("inst") ?: ""
+                QrInvitePayload(
+                    ip = ip,
+                    port = port,
+                    publicKeyBase64 = pub,
+                    username = name,
+                    inviteToken = token,
+                    instanceId = inst
+                )
             } else if (trimmed.contains(":")) {
                 // Also support plain ip:port strings
                 val host = trimmed.substringBeforeLast(":").trim()

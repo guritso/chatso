@@ -18,6 +18,7 @@ import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,7 +53,8 @@ class DiscoveryManager(
         val username: String,
         val publicKeyBase64: String,
         val listenPort: Int,
-        val isDiscoverable: Boolean = true
+        val isDiscoverable: Boolean = true,
+        val instanceId: String = ""
     )
 
     companion object {
@@ -72,8 +74,14 @@ class DiscoveryManager(
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
+    private val runtimeFallbackInstanceId = UUID.randomUUID().toString()
+
     @Volatile
     private var latestIdentity: LocalIdentity = LocalIdentity()
+
+    private fun effectiveInstanceId(identity: LocalIdentity = latestIdentity): String {
+        return identity.instanceId.ifBlank { runtimeFallbackInstanceId }
+    }
 
     @Volatile
     private var bridgedPeersProvider: () -> List<BridgedPeerInfo> = { emptyList() }
@@ -152,7 +160,12 @@ class DiscoveryManager(
                 val type = json.optString("type")
                 if (type == "QUERY") {
                     val senderPeerId = json.optString("peerId")
-                    if (senderPeerId == current.peerId) continue
+                    val senderInst = json.optString("inst")
+                    if (senderPeerId == current.peerId ||
+                        (senderInst.isNotBlank() && senderInst == effectiveInstanceId(current))
+                    ) {
+                        continue
+                    }
                     val beaconStr = buildBeaconJson(current, "ANNOUNCE") ?: continue
                     val replyBytes = beaconStr.toByteArray(Charsets.UTF_8)
                     val replyPacket = DatagramPacket(
@@ -273,6 +286,7 @@ class DiscoveryManager(
             put("magic", UDP_MAGIC)
             put("type", "QUERY")
             put("peerId", if (identity.isDiscoverable) identity.peerId else "anon")
+            put("inst", effectiveInstanceId(identity))
         }.toString().toByteArray(Charsets.UTF_8)
 
         val nonLoopbackTargets = scanTargets.filter {
@@ -478,6 +492,8 @@ class DiscoveryManager(
         if (json.has("disc") && !json.optBoolean("disc", true)) return
         val pubB64 = json.optString("pub")
         if (pubB64.isBlank() || sourceIp.isBlank()) return
+        val instId = json.optString("inst", "")
+        if (instId.isNotBlank() && instId == effectiveInstanceId()) return
         val peerId = CryptoEngine.computePeerIdFromBase64(pubB64)
         if (peerId == latestIdentity.peerId) return
         val name = json.optString("name", "Chatso User")
@@ -489,7 +505,8 @@ class DiscoveryManager(
             port = port,
             publicKeyBase64 = pubB64,
             fingerprint = CryptoEngine.formatFingerprintFromBase64(pubB64),
-            source = sourceLabel
+            source = sourceLabel,
+            instanceId = instId
         )
         _discoveredPeers.update { current ->
             val existing = current[peerId]
@@ -505,12 +522,15 @@ class DiscoveryManager(
 
         val bridgedArr = json.optJSONArray("bridgedPeers")
         if (bridgedArr != null) {
+            val myInst = effectiveInstanceId()
             val entries = buildList {
                 for (i in 0 until bridgedArr.length()) {
                     val obj = bridgedArr.optJSONObject(i) ?: continue
                     if (obj.has("disc") && !obj.optBoolean("disc", true)) continue
                     val bPub = obj.optString("pub")
                     if (bPub.isBlank()) continue
+                    val bInst = obj.optString("inst", "")
+                    if (bInst.isNotBlank() && bInst == myInst) continue
                     val bPeerId = CryptoEngine.computePeerIdFromBase64(bPub)
                     if (bPeerId == latestIdentity.peerId || bPeerId == peerId) continue
                     add(
@@ -519,7 +539,8 @@ class DiscoveryManager(
                             username = obj.optString("name", "Chatso User"),
                             publicKeyBase64 = bPub,
                             listenPort = obj.optInt("port", LocalIdentity.DEFAULT_TCP_PORT),
-                            isDiscoverable = obj.optBoolean("disc", true)
+                            isDiscoverable = obj.optBoolean("disc", true),
+                            instanceId = bInst
                         )
                     )
                 }
@@ -544,10 +565,12 @@ class DiscoveryManager(
         val bridgeBadge = context.getString(R.string.bridge_badge)
         val cleanBridgeName = bridgeName.ifBlank { bridgeHost.ifBlank { bridgeBadge } }
         val sourceText = "$bridgeBadge ($cleanBridgeName)"
+        val myInst = effectiveInstanceId()
         val validEntries = entries.filter {
             it.isDiscoverable &&
                 it.peerId != latestIdentity.peerId &&
                 it.peerId != bridgePeerId &&
+                (it.instanceId.isBlank() || it.instanceId != myInst) &&
                 it.publicKeyBase64.isNotBlank()
         }
         val activeIds = validEntries.map { it.peerId }.toSet()
@@ -573,7 +596,8 @@ class DiscoveryManager(
                         source = sourceText,
                         viaBridgePeerId = bridgePeerId,
                         bridgeHost = bridgeHost.ifBlank { "127.0.0.1" },
-                        bridgePort = bridgePort
+                        bridgePort = bridgePort,
+                        instanceId = item.instanceId
                     )
                 }
             }
@@ -600,10 +624,12 @@ class DiscoveryManager(
 
     private fun buildBeaconJson(identity: LocalIdentity, type: String): String? {
         if (!identity.isInitialized || !identity.isDiscoverable) return null
+        val myInst = effectiveInstanceId(identity)
         return JSONObject().apply {
             put("magic", UDP_MAGIC)
             put("type", type)
             put("peerId", identity.peerId)
+            put("inst", myInst)
             put("name", identity.username)
             put("port", identity.listenPort)
             put("pub", identity.publicKeyBase64)
@@ -613,6 +639,7 @@ class DiscoveryManager(
                     .filter {
                         it.isDiscoverable &&
                             it.peerId != identity.peerId &&
+                            (it.instanceId.isBlank() || it.instanceId != myInst) &&
                             it.publicKeyBase64.isNotBlank()
                     }
                 if (bridged.isNotEmpty()) {
@@ -625,6 +652,7 @@ class DiscoveryManager(
                                 put("pub", p.publicKeyBase64)
                                 put("port", p.listenPort)
                                 put("disc", true)
+                                if (p.instanceId.isNotBlank()) put("inst", p.instanceId)
                             }
                         )
                     }
@@ -634,11 +662,15 @@ class DiscoveryManager(
         }.toString()
     }
 
+    private fun nsdServiceSuffix(identity: LocalIdentity = latestIdentity): String {
+        return "${identity.peerId.take(6)}_${effectiveInstanceId(identity).take(6)}"
+    }
+
     private fun registerNsdService(identity: LocalIdentity) {
         unregisterNsdService()
         try {
             val serviceInfo = NsdServiceInfo().apply {
-                serviceName = "Chatso_${identity.peerId.take(8)}"
+                serviceName = "Chatso_${nsdServiceSuffix(identity)}"
                 serviceType = NSD_SERVICE_TYPE
                 port = identity.listenPort
             }
@@ -670,7 +702,7 @@ class DiscoveryManager(
                 override fun onDiscoveryStarted(regType: String) {}
                 override fun onServiceFound(service: NsdServiceInfo) {
                     if (!service.serviceType.contains("_chatso")) return
-                    if (service.serviceName.endsWith(latestIdentity.peerId.take(8))) return
+                    if (service.serviceName.endsWith(nsdServiceSuffix())) return
                     try {
                         @Suppress("DEPRECATION")
                         nsdManager?.resolveService(service, object : NsdManager.ResolveListener {

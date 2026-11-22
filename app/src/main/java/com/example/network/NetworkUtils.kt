@@ -54,6 +54,20 @@ object NetworkUtils {
 
     fun isEmulatorHost(host: String): Boolean = normalizeHost(host) == "10.0.2.2"
 
+    fun isSameDeviceIp(host: String): Boolean {
+        val clean = normalizeHost(host)
+        if (clean.isBlank()) return false
+        if (isLoopbackHost(clean) || isEmulatorHost(clean)) return true
+        return runCatching {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return@runCatching false
+            Collections.list(interfaces).any { nif ->
+                nif.isUp && Collections.list(nif.inetAddresses).any { addr ->
+                    addr is Inet4Address && normalizeHost(addr.hostAddress ?: "") == clean
+                }
+            }
+        }.getOrDefault(false)
+    }
+
     fun openTcpSocket(
         host: String,
         port: Int,

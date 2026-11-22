@@ -31,7 +31,8 @@ data class PeerEntity(
     val lastMessagePreview: String = "",
     val lastActivityAt: Long = System.currentTimeMillis(),
     val unreadCount: Int = 0,
-    val viaBridgePeerId: String = ""
+    val viaBridgePeerId: String = "",
+    val instanceId: String = ""
 ) {
     val isMutuallyVerified: Boolean
         get() = isVerified && peerVerifiedMe
@@ -133,10 +134,38 @@ interface ChatDao {
     @Query("UPDATE messages SET status = :status WHERE messageId = :messageId")
     suspend fun updateMessageStatus(messageId: String, status: String)
 
+    @Query("UPDATE messages SET status = :sentStatus WHERE messageId = :messageId AND status IN ('SENDING', 'FAILED')")
+    suspend fun markMessageSentIfPending(
+        messageId: String,
+        sentStatus: String = DeliveryStatus.SENT.name
+    )
+
+    @Query(
+        "UPDATE messages SET transferProgress = :progress, " +
+            "status = CASE WHEN status IN ('SENDING', 'FAILED') THEN :sentStatus ELSE status END " +
+            "WHERE messageId = :messageId"
+    )
+    suspend fun markTransferCompleteIfPending(
+        messageId: String,
+        progress: Int = 100,
+        sentStatus: String = DeliveryStatus.SENT.name
+    )
+
+    @Query("UPDATE messages SET status = :deliveredStatus WHERE messageId = :messageId AND status IN ('SENDING', 'FAILED', 'SENT')")
+    suspend fun markMessageDeliveredIfNotRead(
+        messageId: String,
+        deliveredStatus: String = DeliveryStatus.DELIVERED.name
+    )
+
     @Query("UPDATE messages SET reactionsJson = :reactionsJson WHERE messageId = :messageId")
     suspend fun updateMessageReactions(messageId: String, reactionsJson: String)
 
-    @Query("UPDATE messages SET status = :status, readAt = :readAt, expiresAt = :expiresAt WHERE messageId = :messageId")
+    @Query(
+        "UPDATE messages SET status = :status, " +
+            "readAt = COALESCE(readAt, :readAt), " +
+            "expiresAt = COALESCE(expiresAt, :expiresAt) " +
+            "WHERE messageId = :messageId"
+    )
     suspend fun markMessageRead(
         messageId: String,
         status: String,
@@ -152,6 +181,9 @@ interface ChatDao {
 
     @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 1 AND status IN ('SENDING', 'FAILED') ORDER BY createdAt ASC, messageId ASC")
     suspend fun getPendingOutgoingMessagesChronological(peerId: String): List<MessageEntity>
+
+    @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 1 AND status IN ('SENDING', 'SENT', 'DELIVERED') ORDER BY createdAt DESC, messageId DESC LIMIT 100")
+    suspend fun getOutgoingMessagesAwaitingReceipt(peerId: String): List<MessageEntity>
 
     @Query("SELECT * FROM messages WHERE peerId = :peerId AND isOutgoing = 1 AND status IN ('SENDING', 'SENT', 'DELIVERED')")
     suspend fun getUnreadOutgoingMessages(peerId: String): List<MessageEntity>
@@ -198,7 +230,7 @@ data class FavoriteStickerEntity(
 
 @Database(
     entities = [PeerEntity::class, MessageEntity::class, FavoriteStickerEntity::class],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {
@@ -253,6 +285,12 @@ abstract class ChatDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE peers ADD COLUMN instanceId TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         @Volatile
         private var INSTANCE: ChatDatabase? = null
 
@@ -268,7 +306,8 @@ abstract class ChatDatabase : RoomDatabase() {
                         MIGRATION_2_3,
                         MIGRATION_3_4,
                         MIGRATION_4_5,
-                        MIGRATION_5_6
+                        MIGRATION_5_6,
+                        MIGRATION_6_7
                     )
                     .fallbackToDestructiveMigration(true)
                     .build()

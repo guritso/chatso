@@ -590,7 +590,13 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         if (bridgeId != null) {
             connectViaBridgeInternal(peer, bridgeId)
         } else {
-            connectInternal(peer.ipAddress, peer.port, peer.publicKeyBase64, "")
+            connectInternal(
+                ip = peer.ipAddress,
+                port = peer.port,
+                expectedPub = peer.publicKeyBase64,
+                inviteToken = "",
+                expectedInstanceId = peer.instanceId
+            )
         }
     }
 
@@ -607,7 +613,8 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
                 repository.connectViaBridge(
                     bridgePeerId = bridgePeerId,
                     targetPeerId = peer.peerId,
-                    expectedPubKeyBase64 = peer.publicKeyBase64
+                    expectedPubKeyBase64 = peer.publicKeyBase64,
+                    expectedInstanceId = peer.instanceId
                 )
             } finally {
                 _isConnecting.value = false
@@ -630,7 +637,13 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
             _snackbarMessage.value = str(R.string.msg_invalid_qr)
             return
         }
-        connectInternal(parsed.ip, parsed.port, parsed.publicKeyBase64, parsed.inviteToken)
+        connectInternal(
+            ip = parsed.ip,
+            port = parsed.port,
+            expectedPub = parsed.publicKeyBase64,
+            inviteToken = parsed.inviteToken,
+            expectedInstanceId = parsed.instanceId
+        )
     }
 
     fun decodeQrFromGalleryUri(uri: Uri) {
@@ -657,12 +670,19 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         ip: String,
         port: Int,
         expectedPub: String,
-        inviteToken: String
+        inviteToken: String,
+        expectedInstanceId: String = ""
     ) {
         if (_isConnecting.value) return
         viewModelScope.launch {
             _isConnecting.value = true
-            val result = repository.connectDirect(ip, port, expectedPub, inviteToken)
+            val result = repository.connectDirect(
+                ip = ip,
+                port = port,
+                expectedPubKeyBase64 = expectedPub,
+                inviteToken = inviteToken,
+                expectedInstanceId = expectedInstanceId
+            )
             _isConnecting.value = false
             result.fold(
                 onSuccess = { peerId ->

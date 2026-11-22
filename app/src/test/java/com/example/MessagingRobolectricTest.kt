@@ -1023,4 +1023,167 @@ class MessagingRobolectricTest {
             scope.cancel()
         }
     }
+
+    @Test
+    fun `instanceId isolates colliding keys, detects installation mismatch, and blocks blank-inst loopback`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        dao.getAllPeersOnce().forEach {
+            dao.deleteAllMessagesForPeer(it.peerId)
+            dao.deletePeer(it.peerId)
+        }
+
+        val store = LocalIdentityStore(context)
+        val inst1 = store.ensureInstanceId()
+        assertTrue("Generated instanceId must be non-blank", inst1.isNotBlank())
+        assertEquals("Subsequent ensureInstanceId calls must persist same token", inst1, store.ensureInstanceId())
+
+        store.createIdentity("PrimaryInstall", null, isDiscoverable = true)
+        val repo = ChatRepository(
+            context = context,
+            scope = scope,
+            chatDao = dao,
+            identityStore = store,
+            mediaStorage = MediaStorageHelper(context),
+            isAppInForegroundProvider = { true }
+        )
+        val discPeer = DiscoveryManager(context, scope)
+        val dummyListener = object : P2PEventListener {
+            override suspend fun isKnownPeer(peerId: String) = true
+            override suspend fun onPeerHandshaked(
+                peerId: String, publicKeyBase64: String, remoteIp: String,
+                remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+            ) {}
+            override suspend fun onPeerDisconnected(peerId: String) {}
+            override suspend fun onIncomingTextMessage(
+                peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+            ) {}
+            override suspend fun onIncomingFileStart(
+                peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                mediaWidth: Int, mediaHeight: Int
+            ): File = File.createTempFile("unused_inst", ".bin")
+            override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+            override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+            override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+            override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+            override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+        }
+        val remoteNode = P2PNodeManager(scope, discPeer, dummyListener)
+        val remoteMat = CryptoEngine.createIdentityMaterial()
+
+        try {
+            repeat(30) {
+                if (repo.nodeManager.serverRunning.value) return@repeat
+                delay(50)
+            }
+            val primary = store.getSnapshot()
+            val port = repo.nodeManager.boundPort.value
+
+            // 1. Key collision check: another install using the SAME keypair/peerId but DIFFERENT instanceId is rejected!
+            remoteNode.updateIdentityAndEnsureServer(
+                primary.copy(instanceId = "colliding_clone_install_id", listenPort = 0)
+            )
+            repeat(30) {
+                if (remoteNode.serverRunning.value) return@repeat
+                delay(50)
+            }
+            val collisionRes = remoteNode.connectToPeer("127.0.0.1", port, primary.publicKeyBase64)
+            assertTrue("Conflicting key with different instanceId must be rejected", collisionRes.isFailure)
+
+            // 2. Normal distinct contact connects with inst_alpha -> persisted on PeerEntity
+            remoteNode.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true,
+                    username = "RemoteAlpha",
+                    publicKeyBase64 = remoteMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = remoteMat.wrappedPrivateKeyBase64,
+                    peerId = remoteMat.peerId,
+                    fingerprint = remoteMat.fingerprint,
+                    listenPort = 0,
+                    isDiscoverable = false,
+                    instanceId = "inst_remote_alpha"
+                )
+            )
+            assertTrue(remoteNode.connectToPeer("127.0.0.1", port, primary.publicKeyBase64).isSuccess)
+            delay(150)
+            assertEquals("inst_remote_alpha", dao.getPeerById(remoteMat.peerId)?.instanceId)
+
+            // 3. Same keypair switches to a different installation (inst_remote_beta) without QR token -> rejected!
+            remoteNode.disconnectAll()
+            remoteNode.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true,
+                    username = "RemoteBeta",
+                    publicKeyBase64 = remoteMat.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = remoteMat.wrappedPrivateKeyBase64,
+                    peerId = remoteMat.peerId,
+                    fingerprint = remoteMat.fingerprint,
+                    listenPort = 0,
+                    isDiscoverable = false,
+                    instanceId = "inst_remote_beta"
+                )
+            )
+            val mismatchRes = remoteNode.connectToPeer("127.0.0.1", port, primary.publicKeyBase64)
+            assertTrue("Changed installation ID without QR token must be rejected", mismatchRes.isFailure)
+
+            // With valid QR invite token, the updated installation ID is accepted and updated cleanly
+            val qrAuthorizedRes = remoteNode.connectToPeer(
+                host = "127.0.0.1",
+                port = port,
+                expectedPubKeyBase64 = primary.publicKeyBase64,
+                inviteToken = primary.qrInviteToken
+            )
+            assertTrue("QR invite token should authorize updated installation ID", qrAuthorizedRes.isSuccess)
+            delay(150)
+            assertEquals("inst_remote_beta", dao.getPeerById(remoteMat.peerId)?.instanceId)
+
+            // 4. Unsolicited legacy APK with blank instanceId connecting over local device IP (127.0.0.1) is rejected
+            val legacyMat = CryptoEngine.createIdentityMaterial()
+            val legacyPriv = CryptoEngine.unwrapPrivateKey(legacyMat.wrappedPrivateKeyBase64)
+            val eph = CryptoEngine.generateIdentityKeyPair()
+            val ephB64 = android.util.Base64.encodeToString(eph.public.encoded, android.util.Base64.NO_WRAP)
+            val nonceB64 = android.util.Base64.encodeToString(CryptoEngine.randomBytes(16), android.util.Base64.NO_WRAP)
+            val sigB64 = CryptoEngine.signHandshake(
+                identityPrivateKey = legacyPriv,
+                roleTag = "CLIENT",
+                identityPubBase64 = legacyMat.publicKeyBase64,
+                ephemeralPubBase64 = ephB64,
+                nonceBase64 = nonceB64
+            )
+            val legacyHello = org.json.JSONObject().apply {
+                put("pub", legacyMat.publicKeyBase64)
+                put("eph", ephB64)
+                put("nonce", nonceB64)
+                put("sig", sigB64)
+                put("port", 43999)
+                put("token", "")
+                put("auto", false)
+                // intentionally omit "inst" to simulate pre-instanceId APK
+            }.toString().toByteArray(Charsets.UTF_8)
+
+            Socket("127.0.0.1", port).use { sock ->
+                val out = DataOutputStream(sock.getOutputStream())
+                val inp = DataInputStream(sock.getInputStream())
+                out.writeByte(0x03) // KIND_HANDSHAKE_HELLO
+                out.writeInt(legacyHello.size)
+                out.write(legacyHello)
+                out.flush()
+                val respKind = inp.readByte()
+                assertEquals(0x05.toByte(), respKind) // KIND_HANDSHAKE_REJECT
+            }
+            assertNull(dao.getPeerById(legacyMat.peerId))
+        } finally {
+            remoteNode.disconnectAll()
+            discPeer.shutdown()
+            repo.shutdown()
+            dao.deleteAllMessagesForPeer(remoteMat.peerId)
+            dao.deletePeer(remoteMat.peerId)
+            scope.cancel()
+        }
+    }
 }

@@ -135,4 +135,69 @@ class DatabaseRobolectricTest {
         sqliteHelper.close()
         context.deleteDatabase(dbName)
     }
+
+    @Test
+    fun `migration 6 to 7 adds instanceId column to peers`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val dbName = "migration_6_7_test.db"
+        context.deleteDatabase(dbName)
+        val sqliteHelper = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(
+            androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(6) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS peers (peerId TEXT NOT NULL PRIMARY KEY, username TEXT NOT NULL DEFAULT '')")
+                        db.execSQL("INSERT INTO peers (peerId, username) VALUES ('p1', 'Alice')")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+                })
+                .build()
+        )
+        val writable = sqliteHelper.writableDatabase
+        ChatDatabase.MIGRATION_6_7.migrate(writable)
+        writable.query("SELECT instanceId FROM peers WHERE peerId = 'p1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("", c.getString(0))
+        }
+        sqliteHelper.close()
+        context.deleteDatabase(dbName)
+    }
+
+    @Test
+    fun `monotonic status queries never downgrade DELIVERED or READ back to SENT`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = ChatDatabase.getInstance(context)
+        val dao = db.chatDao()
+        val peerId = "peer_monotonic_status_test"
+        dao.deleteAllMessagesForPeer(peerId)
+
+        dao.upsertMessage(
+            MessageEntity(
+                messageId = "mono_1",
+                peerId = peerId,
+                isOutgoing = true,
+                type = MessageType.TEXT.name,
+                textContent = "fast ack race",
+                status = com.example.data.DeliveryStatus.SENDING.name
+            )
+        )
+        // Simulate DELIVERED ACK arriving before sendText post-write runs SENT
+        dao.markMessageDeliveredIfNotRead("mono_1")
+        assertEquals(com.example.data.DeliveryStatus.DELIVERED.name, dao.getMessageById("mono_1")?.status)
+
+        dao.markMessageSentIfPending("mono_1")
+        assertEquals(com.example.data.DeliveryStatus.DELIVERED.name, dao.getMessageById("mono_1")?.status)
+
+        dao.markTransferCompleteIfPending("mono_1", 100, com.example.data.DeliveryStatus.SENT.name)
+        assertEquals(com.example.data.DeliveryStatus.DELIVERED.name, dao.getMessageById("mono_1")?.status)
+
+        // Simulate READ arriving, then late DELIVERED or SENT
+        dao.markMessageRead("mono_1", com.example.data.DeliveryStatus.READ.name, 123456L, null)
+        dao.markMessageDeliveredIfNotRead("mono_1")
+        dao.markMessageSentIfPending("mono_1")
+        assertEquals(com.example.data.DeliveryStatus.READ.name, dao.getMessageById("mono_1")?.status)
+        assertEquals(123456L, dao.getMessageById("mono_1")?.readAt)
+
+        dao.deleteAllMessagesForPeer(peerId)
+    }
 }

@@ -409,13 +409,21 @@ private fun QrConnectPane(
         ?: endpoints.firstOrNull()?.ipAddress
         ?: "127.0.0.1"
 
-    val inviteUri = remember(activeIp, boundPort, identity.publicKeyBase64, identity.username, identity.qrInviteToken) {
+    val inviteUri = remember(
+        activeIp,
+        boundPort,
+        identity.publicKeyBase64,
+        identity.username,
+        identity.qrInviteToken,
+        identity.instanceId
+    ) {
         QrCodeHelper.buildInviteUri(
             ip = activeIp,
             port = boundPort,
             publicKeyBase64 = identity.publicKeyBase64,
             username = identity.username,
-            inviteToken = identity.qrInviteToken
+            inviteToken = identity.qrInviteToken,
+            instanceId = identity.instanceId
         )
     }
 

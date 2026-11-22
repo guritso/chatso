@@ -18,7 +18,12 @@ private val Context.identityDataStore: DataStore<Preferences> by preferencesData
     name = "chatso_local_identity"
 )
 
-class LocalIdentityStore(private val context: Context) {
+class LocalIdentityStore(
+    private val context: Context,
+    private val dataStoreOverride: DataStore<Preferences>? = null
+) {
+    private val store: DataStore<Preferences>
+        get() = dataStoreOverride ?: context.identityDataStore
     private object Keys {
         val INITIALIZED = booleanPreferencesKey("initialized")
         val USERNAME = stringPreferencesKey("username")
@@ -39,9 +44,10 @@ class LocalIdentityStore(private val context: Context) {
         val BATTERY_PROMPT_DISMISSED = booleanPreferencesKey("battery_prompt_dismissed")
         val DEV_MODE_ENABLED = booleanPreferencesKey("dev_mode_enabled")
         val BRIDGE_ENABLED = booleanPreferencesKey("bridge_enabled")
+        val INSTANCE_ID = stringPreferencesKey("instance_id")
     }
 
-    val identityFlow: Flow<LocalIdentity> = context.identityDataStore.data.map { prefs ->
+    val identityFlow: Flow<LocalIdentity> = store.data.map { prefs ->
         val themeStr = prefs[Keys.THEME_MODE] ?: ThemeMode.SYSTEM.name
         val theme = ThemeMode.entries.firstOrNull { it.name == themeStr } ?: ThemeMode.SYSTEM
         val palette = ThemePalette.fromName(prefs[Keys.THEME_PALETTE])
@@ -65,8 +71,22 @@ class LocalIdentityStore(private val context: Context) {
             backgroundConnectionEnabled = prefs[Keys.BACKGROUND_CONN_ENABLED] ?: true,
             batteryPromptDismissed = prefs[Keys.BATTERY_PROMPT_DISMISSED] ?: false,
             devModeEnabled = prefs[Keys.DEV_MODE_ENABLED] ?: false,
-            bridgeEnabled = prefs[Keys.BRIDGE_ENABLED] ?: false
+            bridgeEnabled = prefs[Keys.BRIDGE_ENABLED] ?: false,
+            instanceId = prefs[Keys.INSTANCE_ID] ?: ""
         )
+    }
+
+    suspend fun ensureInstanceId(): String {
+        var resolved = ""
+        store.edit { prefs ->
+            val current = prefs[Keys.INSTANCE_ID]
+            resolved = if (current.isNullOrBlank()) {
+                generateInstanceId().also { prefs[Keys.INSTANCE_ID] = it }
+            } else {
+                current
+            }
+        }
+        return resolved
     }
 
     suspend fun getSnapshot(): LocalIdentity = identityFlow.first()
@@ -79,7 +99,7 @@ class LocalIdentityStore(private val context: Context) {
     ): LocalIdentity {
         val material = pregeneratedMaterial ?: CryptoEngine.createIdentityMaterial()
         val inviteToken = generateInviteToken()
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.INITIALIZED] = true
             prefs[Keys.USERNAME] = username.trim()
             if (avatarPath != null) {
@@ -95,6 +115,9 @@ class LocalIdentityStore(private val context: Context) {
             prefs[Keys.IS_DISCOVERABLE] = isDiscoverable
             prefs[Keys.BLOCK_UNKNOWN_PEERS] = false
             prefs[Keys.QR_INVITE_TOKEN] = inviteToken
+            if ((prefs[Keys.INSTANCE_ID] ?: "").isBlank()) {
+                prefs[Keys.INSTANCE_ID] = generateInstanceId()
+            }
             if (prefs[Keys.BACKGROUND_CONN_ENABLED] == null) {
                 prefs[Keys.BACKGROUND_CONN_ENABLED] = true
             }
@@ -103,7 +126,7 @@ class LocalIdentityStore(private val context: Context) {
     }
 
     suspend fun updateProfile(username: String, avatarPath: String?) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.USERNAME] = username.trim()
             if (avatarPath != null) {
                 prefs[Keys.AVATAR_PATH] = avatarPath
@@ -114,13 +137,13 @@ class LocalIdentityStore(private val context: Context) {
     }
 
     suspend fun setDiscoverable(discoverable: Boolean) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.IS_DISCOVERABLE] = discoverable
         }
     }
 
     suspend fun setBlockUnknownPeers(blockUnknown: Boolean) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.BLOCK_UNKNOWN_PEERS] = blockUnknown
             if ((prefs[Keys.QR_INVITE_TOKEN] ?: "").isEmpty()) {
                 prefs[Keys.QR_INVITE_TOKEN] = generateInviteToken()
@@ -130,7 +153,7 @@ class LocalIdentityStore(private val context: Context) {
 
     suspend fun rotateQrInviteToken(): String {
         val token = generateInviteToken()
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.QR_INVITE_TOKEN] = token
         }
         return token
@@ -138,56 +161,56 @@ class LocalIdentityStore(private val context: Context) {
 
     suspend fun setListenPort(port: Int) {
         val validPort = port.coerceIn(1024, 65535)
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.LISTEN_PORT] = validPort
         }
     }
 
     suspend fun setThemeMode(mode: ThemeMode) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.THEME_MODE] = mode.name
         }
     }
 
     suspend fun setThemePalette(palette: ThemePalette) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.THEME_PALETTE] = palette.name
         }
     }
 
     suspend fun setThemeAdvanced(enabled: Boolean) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.THEME_ADVANCED] = enabled
         }
     }
 
     suspend fun setLanguage(language: AppLanguage) {
         LocaleHelper.saveLanguage(context, language)
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.LANGUAGE] = language.code
         }
     }
 
     suspend fun setBackgroundConnectionEnabled(enabled: Boolean) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.BACKGROUND_CONN_ENABLED] = enabled
         }
     }
 
     suspend fun setBatteryPromptDismissed(dismissed: Boolean) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.BATTERY_PROMPT_DISMISSED] = dismissed
         }
     }
 
     suspend fun setDevModeEnabled(enabled: Boolean) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.DEV_MODE_ENABLED] = enabled
         }
     }
 
     suspend fun setBridgeEnabled(enabled: Boolean) {
-        context.identityDataStore.edit { prefs ->
+        store.edit { prefs ->
             prefs[Keys.BRIDGE_ENABLED] = enabled
         }
     }
@@ -195,6 +218,13 @@ class LocalIdentityStore(private val context: Context) {
     private fun generateInviteToken(): String {
         return Base64.encodeToString(
             CryptoEngine.randomBytes(12),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+        )
+    }
+
+    private fun generateInstanceId(): String {
+        return Base64.encodeToString(
+            CryptoEngine.randomBytes(16),
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
         )
     }

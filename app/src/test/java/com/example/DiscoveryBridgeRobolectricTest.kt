@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -895,6 +896,211 @@ class DiscoveryBridgeRobolectricTest {
             dao.deletePeer(matA.peerId)
             dao.deletePeer(matC.peerId)
             scope.cancel()
+        }
+    }
+
+    @Test
+    fun `crossed bridge handshake succeeds and queued offline READ receipt syncs on reconnect`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        val dbA = androidx.room.Room.inMemoryDatabaseBuilder(context, ChatDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val dbC = androidx.room.Room.inMemoryDatabaseBuilder(context, ChatDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val daoA = dbA.chatDao()
+        val daoC = dbC.chatDao()
+
+        val matB = CryptoEngine.createIdentityMaterial()
+
+        val dirA = context.getDir("bridge_test_a", Context.MODE_PRIVATE)
+        val dirC = context.getDir("bridge_test_c", Context.MODE_PRIVATE)
+        val mockCtxA = object : android.content.ContextWrapper(context) {
+            override fun getSharedPreferences(name: String, mode: Int) =
+                context.getSharedPreferences("bridge_a_$name", mode)
+            override fun getFilesDir(): File = dirA
+        }
+        val mockCtxC = object : android.content.ContextWrapper(context) {
+            override fun getSharedPreferences(name: String, mode: Int) =
+                context.getSharedPreferences("bridge_c_$name", mode)
+            override fun getFilesDir(): File = dirC
+        }
+
+        val discB = DiscoveryManager(context, scope)
+        val sessionsOnB = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        val nodeB = P2PNodeManager(
+            scope,
+            discB,
+            object : P2PEventListener {
+                override suspend fun isKnownPeer(peerId: String) = true
+                override suspend fun onPeerHandshaked(
+                    peerId: String, publicKeyBase64: String, remoteIp: String,
+                    remoteListenPort: Int, username: String, avatarBase64: String?, viaBridgePeerId: String
+                ) {
+                    sessionsOnB[peerId] = true
+                }
+                override suspend fun onPeerDisconnected(peerId: String) {
+                    sessionsOnB.remove(peerId)
+                }
+                override suspend fun onIncomingTextMessage(
+                    peerId: String, messageId: String, text: String, selfDestructSec: Int,
+                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?
+                ) {}
+                override suspend fun onIncomingFileStart(
+                    peerId: String, messageId: String, messageType: MessageType, fileName: String,
+                    mimeType: String, totalBytes: Long, audioDurationMs: Long, selfDestructSec: Int,
+                    createdAt: Long, replyToMessageId: String?, replyToSenderTag: String?, replyToPreview: String?,
+                    mediaWidth: Int, mediaHeight: Int
+                ): File = File.createTempFile("unused_b", ".bin")
+                override suspend fun onIncomingFileProgress(peerId: String, messageId: String, progress: Int) {}
+                override suspend fun onIncomingFileComplete(peerId: String, messageId: String, file: File) {}
+                override suspend fun onDeliveryReceipt(peerId: String, messageId: String, status: DeliveryStatus) {}
+                override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {}
+                override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {}
+            }
+        )
+
+        var repoA: ChatRepository? = null
+        var repoC: ChatRepository? = null
+        try {
+            nodeB.updateIdentityAndEnsureServer(
+                LocalIdentity(
+                    isInitialized = true,
+                    username = "RelayBob",
+                    publicKeyBase64 = matB.publicKeyBase64,
+                    wrappedPrivateKeyBase64 = matB.wrappedPrivateKeyBase64,
+                    peerId = matB.peerId,
+                    fingerprint = matB.fingerprint,
+                    listenPort = 44102,
+                    isDiscoverable = true,
+                    bridgeEnabled = true,
+                    instanceId = "inst_bob_relay_test"
+                )
+            )
+            repeat(30) {
+                if (nodeB.serverRunning.value) return@repeat
+                delay(50)
+            }
+            val bPort = nodeB.boundPort.value
+
+            val prefsFileA = File(dirA, "test_identity_a.preferences_pb").apply { delete() }
+            val prefsFileC = File(dirC, "test_identity_c.preferences_pb").apply { delete() }
+            val storeA = LocalIdentityStore(
+                mockCtxA,
+                androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(scope = scope) { prefsFileA }
+            )
+            storeA.ensureInstanceId()
+            storeA.createIdentity("AliceBridgeRepo", null, isDiscoverable = true)
+            storeA.setListenPort(44103)
+            repoA = ChatRepository(
+                context = mockCtxA,
+                scope = scope,
+                chatDao = daoA,
+                identityStore = storeA,
+                mediaStorage = MediaStorageHelper(mockCtxA),
+                isAppInForegroundProvider = { true }
+            )
+            val storeC = LocalIdentityStore(
+                mockCtxC,
+                androidx.datastore.preferences.core.PreferenceDataStoreFactory.create(scope = scope) { prefsFileC }
+            )
+            storeC.ensureInstanceId()
+            storeC.createIdentity("CharlieBridgeRepo", null, isDiscoverable = true)
+            storeC.setListenPort(44104)
+            repoC = ChatRepository(
+                context = mockCtxC,
+                scope = scope,
+                chatDao = daoC,
+                identityStore = storeC,
+                mediaStorage = MediaStorageHelper(mockCtxC),
+                isAppInForegroundProvider = { true }
+            )
+
+            repeat(40) {
+                if (repoA.nodeManager.serverRunning.value && repoC.nodeManager.serverRunning.value) return@repeat
+                delay(50)
+            }
+            val idA = storeA.getSnapshot()
+            val idC = storeC.getSnapshot()
+            assertTrue(idA.peerId != idC.peerId)
+            assertTrue(idA.instanceId != idC.instanceId)
+
+            assertTrue(repoA.connectDirect("127.0.0.1", bPort, matB.publicKeyBase64).isSuccess)
+            assertTrue(repoC.connectDirect("127.0.0.1", bPort, matB.publicKeyBase64).isSuccess)
+            repeat(40) {
+                if (sessionsOnB.containsKey(idA.peerId) && sessionsOnB.containsKey(idC.peerId)) return@repeat
+                delay(40)
+            }
+            assertTrue(sessionsOnB.containsKey(idA.peerId))
+            assertTrue(sessionsOnB.containsKey(idC.peerId))
+
+            // Simultaneous crossed connectViaBridge from both Alice and Charlie!
+            val jobA = scope.async {
+                repoA.connectViaBridge(matB.peerId, idC.peerId, idC.publicKeyBase64)
+            }
+            val jobC = scope.async {
+                repoC.connectViaBridge(matB.peerId, idA.peerId, idA.publicKeyBase64)
+            }
+            val resA = jobA.await()
+            val resC = jobC.await()
+            assertTrue("Side A crossed bridge connect failed: ${resA.exceptionOrNull()}", resA.isSuccess)
+            assertTrue("Side C crossed bridge connect failed: ${resC.exceptionOrNull()}", resC.isSuccess)
+
+            // Charlie is backgrounded / not viewing chat with Alice -> receives message as DELIVERED (not yet READ)
+            repoC.currentlyOpenPeerId = null
+            assertTrue(repoA.sendText(idC.peerId, "Hello over crossed bridge!"))
+
+            val deliveredDeadline = System.currentTimeMillis() + 3000L
+            var cMsgId: String? = null
+            while (System.currentTimeMillis() < deliveredDeadline) {
+                val msgsC = daoC.getUnreadIncomingMessagesChronological(idA.peerId)
+                if (msgsC.isNotEmpty()) {
+                    cMsgId = msgsC.first().messageId
+                    break
+                }
+                delay(40)
+            }
+            assertNotNull("Charlie should receive message over crossed bridge", cMsgId)
+
+            val ackDeadline = System.currentTimeMillis() + 3000L
+            while (System.currentTimeMillis() < ackDeadline) {
+                if (daoA.getMessageById(cMsgId!!)?.status == DeliveryStatus.DELIVERED.name) break
+                delay(40)
+            }
+            assertEquals(DeliveryStatus.DELIVERED.name, daoA.getMessageById(cMsgId!!)?.status)
+
+            // Drop bridge connection on Charlie (tearing down virtual bridge session to Alice), then Charlie reads while offline!
+            repoC.nodeManager.disconnectPeer(matB.peerId)
+            delay(80)
+            assertFalse(repoC.nodeManager.connectedPeers.value.contains(idA.peerId))
+            repoC.markConversationRead(idA.peerId, fromNotification = true)
+            assertEquals(DeliveryStatus.READ.name, daoC.getMessageById(cMsgId)?.status)
+
+            // Alice's message is still DELIVERED while Charlie is disconnected
+            assertEquals(DeliveryStatus.DELIVERED.name, daoA.getMessageById(cMsgId)?.status)
+
+            // Charlie reconnects to bridge and peer -> queued READ receipt + RECEIPT_QUERY sync upgrades Alice to READ
+            assertTrue(repoC.connectDirect("127.0.0.1", bPort, matB.publicKeyBase64).isSuccess)
+            assertTrue(repoC.connectViaBridge(matB.peerId, idA.peerId, idA.publicKeyBase64).isSuccess)
+            val readDeadline = System.currentTimeMillis() + 3000L
+            while (System.currentTimeMillis() < readDeadline) {
+                if (daoA.getMessageById(cMsgId)?.status == DeliveryStatus.READ.name) break
+                delay(40)
+            }
+            assertEquals(
+                "Alice's message must transition to READ after Charlie reconnects via bridge",
+                DeliveryStatus.READ.name,
+                daoA.getMessageById(cMsgId)?.status
+            )
+        } finally {
+            repoA?.shutdown()
+            repoC?.shutdown()
+            nodeB.disconnectAll()
+            discB.shutdown()
+            scope.cancel()
+            delay(100)
+            dbA.close()
+            dbC.close()
         }
     }
 }
