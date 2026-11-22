@@ -83,6 +83,10 @@ class ChatRepository(
     private val lastAutoConnectAttemptMs = ConcurrentHashMap<String, Long>()
     private val deletingPeerIds = ConcurrentHashMap.newKeySet<String>()
     private val deleteGenerationByPeer = ConcurrentHashMap<String, AtomicLong>()
+    private val dismissedPrefs = appContext.getSharedPreferences("chatso_dismissed_peers", Context.MODE_PRIVATE)
+    private val dismissedPeerIds = ConcurrentHashMap.newKeySet<String>().apply {
+        dismissedPrefs.getStringSet("ids", emptySet())?.let { addAll(it) }
+    }
     private var autoConnectJob: Job? = null
 
     private val _transferAlertResIds = MutableSharedFlow<Int>(extraBufferCapacity = 8)
@@ -1160,9 +1164,15 @@ class ChatRepository(
         }
     }
 
+    private fun persistDismissedPeers() {
+        dismissedPrefs.edit().putStringSet("ids", HashSet(dismissedPeerIds)).apply()
+    }
+
     suspend fun deleteConversation(peerId: String) {
         deletingPeerIds.add(peerId)
         deleteGenerationByPeer.computeIfAbsent(peerId) { AtomicLong(0L) }.incrementAndGet()
+        dismissedPeerIds.add(peerId)
+        persistDismissedPeers()
         try {
             if (_unreadDivider.value?.peerId == peerId) {
                 _unreadDivider.value = null
@@ -1198,6 +1208,10 @@ class ChatRepository(
             (transientTestPeerIds.contains(peerId) || chatDao.getPeerById(peerId) != null)
     }
 
+    override suspend fun isPeerDismissed(peerId: String): Boolean {
+        return dismissedPeerIds.contains(peerId)
+    }
+
     override suspend fun onPeerProfileUpdated(
         peerId: String,
         publicKeyBase64: String,
@@ -1230,6 +1244,9 @@ class ChatRepository(
         viaBridgePeerId: String
     ) {
         if (deletingPeerIds.contains(peerId) || transientTestPeerIds.contains(peerId)) return
+        if (dismissedPeerIds.remove(peerId)) {
+            persistDismissedPeers()
+        }
         val existing = chatDao.getPeerById(peerId)
         val avatarPath = if (!avatarBase64.isNullOrBlank()) {
             mediaStorage.savePeerAvatarBase64(peerId, avatarBase64) ?: existing?.avatarPath
@@ -1808,12 +1825,12 @@ class ChatRepository(
     }
 
     override suspend fun onTypingChanged(peerId: String, isTyping: Boolean) {
-        if (deletingPeerIds.contains(peerId)) return
+        if (deletingPeerIds.contains(peerId) || dismissedPeerIds.contains(peerId)) return
         _typingPeers.update { if (isTyping) it + peerId else it - peerId }
     }
 
     override suspend fun onSelfDestructConfigChanged(peerId: String, seconds: Int) {
-        if (deletingPeerIds.contains(peerId)) return
+        if (deletingPeerIds.contains(peerId) || dismissedPeerIds.contains(peerId)) return
         chatDao.updatePeerSelfDestruct(peerId, seconds)
     }
 

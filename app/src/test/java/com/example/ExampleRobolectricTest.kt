@@ -2360,6 +2360,41 @@ class ExampleRobolectricTest {
             repoA.autoConnectActiveChats(force = true)
             assertTrue(dao.getAllPeersOnce().isEmpty())
             assertFalse(repoA.nodeManager.connectedPeers.value.contains(matB.peerId))
+
+            // 6. Legacy/old app version reconnects passively without the "auto" flag (isAutoReconnect = false):
+            //    AppOne must keep the session silent and NOT recreate the deleted chat on handshake/PROFILE_SYNC
+            val legacyReconnectRes = nodeB.connectToPeer(
+                host = "127.0.0.1",
+                port = aPort,
+                expectedPubKeyBase64 = aIdentity.publicKeyBase64,
+                isAutoReconnect = false
+            )
+            assertTrue("Legacy passive reconnect should finish silently", legacyReconnectRes.isSuccess)
+            delay(250)
+            assertNull(
+                "Legacy passive reconnect without any real message must NOT recreate deleted chat",
+                dao.getPeerById(matB.peerId)
+            )
+            assertFalse(
+                "Silent dismissed session must not appear in connectedPeers UI count",
+                repoA.nodeManager.connectedPeers.value.contains(matB.peerId)
+            )
+
+            // 7. Only if the remote peer actually sends a real message does the chat materialize
+            assertTrue(
+                nodeB.sendTextMessage(
+                    peerId = aIdentity.peerId,
+                    messageId = "real-after-delete-1",
+                    text = "Oi de novo",
+                    selfDestructSec = 0,
+                    createdAt = System.currentTimeMillis()
+                )
+            )
+            delay(250)
+            val materializedPeer = dao.getPeerById(matB.peerId)
+            assertNotNull("Real incoming message must restore the chat", materializedPeer)
+            assertEquals("AppTwo", materializedPeer?.username)
+            assertTrue(repoA.nodeManager.connectedPeers.value.contains(matB.peerId))
         } finally {
             nodeB.disconnectAll()
             discB.shutdown()

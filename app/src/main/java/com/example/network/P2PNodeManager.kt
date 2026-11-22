@@ -41,6 +41,7 @@ import org.json.JSONObject
 
 interface P2PEventListener {
     suspend fun isKnownPeer(peerId: String): Boolean
+    suspend fun isPeerDismissed(peerId: String): Boolean = false
     suspend fun onPeerHandshaked(
         peerId: String,
         publicKeyBase64: String,
@@ -141,7 +142,9 @@ class P2PNodeManager(
         val remoteIp: String = "",
         @Volatile var remoteListenPort: Int = LocalIdentity.DEFAULT_TCP_PORT,
         @Volatile var remoteUsername: String = "",
+        @Volatile var remoteAvatarBase64: String? = null,
         @Volatile var remoteDiscoverable: Boolean = true,
+        @Volatile var isSilentDismissed: Boolean = false,
         val writeMutex: Mutex = Mutex(),
         val incomingTransfers: ConcurrentHashMap<String, IncomingTransfer> = ConcurrentHashMap(),
         val cancelledIncomingIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -239,6 +242,7 @@ class P2PNodeManager(
                     .filter { s ->
                         s.bridgePeerId == null &&
                             !s.isClosed &&
+                            !s.isSilentDismissed &&
                             !s.peerId.startsWith("loopback_") &&
                             s.remoteDiscoverable &&
                             s.remotePubB64.isNotBlank()
@@ -531,6 +535,9 @@ class P2PNodeManager(
         }
         val existing = sessions[targetPeerId]
         if (existing != null && !existing.isClosed) {
+            if (!isAutoReconnect && existing.isSilentDismissed) {
+                materializeSilentSessionIfNeeded(existing)
+            }
             return@withContext Result.success(targetPeerId)
         }
         val bridgeSession = sessions[bridgePeerId]
@@ -732,8 +739,10 @@ class P2PNodeManager(
             val remotePeerId = CryptoEngine.computePeerIdFromBase64(clientPubB64)
             val isSelfLoopback = remotePeerId == identity.peerId
 
+            var silentDismissed = false
             if (!isSelfLoopback) {
                 val isKnown = listener.isKnownPeer(remotePeerId)
+                val isDismissed = listener.isPeerDismissed(remotePeerId)
                 val validToken = inviteToken.isNotBlank() && inviteToken == identity.qrInviteToken
                 if (isAutoReconnect && !isKnown && !validToken) {
                     val rej = JSONObject().apply {
@@ -757,6 +766,7 @@ class P2PNodeManager(
                     socket.close()
                     return
                 }
+                silentDismissed = isDismissed && !isKnown && !validToken
             }
 
             val privKey = CryptoEngine.unwrapPrivateKey(identity.wrappedPrivateKeyBase64)
@@ -827,21 +837,24 @@ class P2PNodeManager(
                     remotePubB64 = clientPubB64,
                     remoteIp = remoteIp,
                     remoteListenPort = clientListenPort,
-                    remoteUsername = remoteIp
+                    remoteUsername = remoteIp,
+                    isSilentDismissed = silentDismissed
                 )
                 registerActiveSession(remotePeerId, session)
                 sendProfileSync(session, identity)
-                if (identity.bridgeEnabled) {
-                    broadcastBridgePeers()
+                if (!silentDismissed) {
+                    if (identity.bridgeEnabled) {
+                        broadcastBridgePeers()
+                    }
+                    listener.onPeerHandshaked(
+                        peerId = remotePeerId,
+                        publicKeyBase64 = clientPubB64,
+                        remoteIp = remoteIp,
+                        remoteListenPort = clientListenPort,
+                        username = remoteIp,
+                        avatarBase64 = null
+                    )
                 }
-                listener.onPeerHandshaked(
-                    peerId = remotePeerId,
-                    publicKeyBase64 = clientPubB64,
-                    remoteIp = remoteIp,
-                    remoteListenPort = clientListenPort,
-                    username = remoteIp,
-                    avatarBase64 = null
-                )
                 runSessionReadLoop(
                     session = session,
                     inp = inp,
@@ -1011,24 +1024,29 @@ class P2PNodeManager(
                 if (name.isNotBlank() && name != remoteIp) {
                     session.remoteUsername = name
                 }
+                if (!avatarB64.isNullOrBlank()) {
+                    session.remoteAvatarBase64 = avatarB64
+                }
                 session.remoteListenPort = listenPort
                 session.remoteDiscoverable = isDisc
-                _foregroundPeers.update { if (isFg) it + session.peerId else it - session.peerId }
-                listener.onPeerForegroundChanged(session.peerId, isFg)
-                listener.onPeerProfileUpdated(
-                    peerId = session.peerId,
-                    publicKeyBase64 = remotePubB64,
-                    remoteIp = remoteIp,
-                    remoteListenPort = listenPort,
-                    username = name,
-                    avatarBase64 = avatarB64,
-                    viaBridgePeerId = session.bridgePeerId ?: ""
-                )
-                if (json.has("verifiedPeer")) {
-                    listener.onPeerVerificationChanged(session.peerId, json.optBoolean("verifiedPeer", false))
-                }
-                if (session.bridgePeerId == null && currentIdentity.bridgeEnabled) {
-                    broadcastBridgePeers()
+                if (!session.isSilentDismissed) {
+                    _foregroundPeers.update { if (isFg) it + session.peerId else it - session.peerId }
+                    listener.onPeerForegroundChanged(session.peerId, isFg)
+                    listener.onPeerProfileUpdated(
+                        peerId = session.peerId,
+                        publicKeyBase64 = remotePubB64,
+                        remoteIp = remoteIp,
+                        remoteListenPort = listenPort,
+                        username = name,
+                        avatarBase64 = avatarB64,
+                        viaBridgePeerId = session.bridgePeerId ?: ""
+                    )
+                    if (json.has("verifiedPeer")) {
+                        listener.onPeerVerificationChanged(session.peerId, json.optBoolean("verifiedPeer", false))
+                    }
+                    if (session.bridgePeerId == null && currentIdentity.bridgeEnabled) {
+                        broadcastBridgePeers()
+                    }
                 }
                 refreshBridgeTelemetry()
             }
@@ -1079,10 +1097,13 @@ class P2PNodeManager(
             }
             "APP_STATE" -> {
                 val isFg = json.optBoolean("fg", false)
-                _foregroundPeers.update { if (isFg) it + session.peerId else it - session.peerId }
-                listener.onPeerForegroundChanged(session.peerId, isFg)
+                if (!session.isSilentDismissed) {
+                    _foregroundPeers.update { if (isFg) it + session.peerId else it - session.peerId }
+                    listener.onPeerForegroundChanged(session.peerId, isFg)
+                }
             }
             "TEXT_MSG" -> {
+                materializeSilentSessionIfNeeded(session)
                 val msgId = json.getString("id")
                 val text = json.optString("text", "")
                 val sdSec = json.optInt("sd", 0)
@@ -1123,6 +1144,7 @@ class P2PNodeManager(
                 listener.onSelfDestructConfigChanged(session.peerId, json.optInt("sd", 0))
             }
             "FILE_START" -> {
+                materializeSilentSessionIfNeeded(session)
                 val msgId = json.getString("id")
                 session.cancelledIncomingIds.remove(msgId)
                 val typeStr = json.optString("msgType", MessageType.FILE.name)
@@ -1407,6 +1429,7 @@ class P2PNodeManager(
         if (computedPeerId != senderPeerId) return
 
         val isKnown = listener.isKnownPeer(computedPeerId)
+        val isDismissed = listener.isPeerDismissed(computedPeerId)
         val validToken = inviteToken.isNotBlank() && inviteToken == identity.qrInviteToken
         if ((isAutoReconnect || identity.blockUnknownPeers) && !isKnown && !validToken) {
             val reason = if (isAutoReconnect && !identity.blockUnknownPeers) {
@@ -1427,6 +1450,7 @@ class P2PNodeManager(
             runCatching { bridgeSession.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, rejEnvelope) }
             return
         }
+        val silentDismissed = isDismissed && !isKnown && !validToken
 
         val privKey = CryptoEngine.unwrapPrivateKey(identity.wrappedPrivateKeyBase64)
         val serverEphKp = CryptoEngine.generateIdentityKeyPair()
@@ -1483,19 +1507,22 @@ class P2PNodeManager(
             remotePubB64 = clientPubB64,
             remoteIp = bridgeSession.remoteIp,
             remoteListenPort = clientListenPort,
-            remoteUsername = senderPeerId
+            remoteUsername = senderPeerId,
+            isSilentDismissed = silentDismissed
         )
         registerActiveSession(senderPeerId, virtualSession)
         sendProfileSync(virtualSession, identity)
-        listener.onPeerHandshaked(
-            peerId = senderPeerId,
-            publicKeyBase64 = clientPubB64,
-            remoteIp = bridgeSession.remoteIp,
-            remoteListenPort = clientListenPort,
-            username = "",
-            avatarBase64 = null,
-            viaBridgePeerId = bridgeSession.peerId
-        )
+        if (!silentDismissed) {
+            listener.onPeerHandshaked(
+                peerId = senderPeerId,
+                publicKeyBase64 = clientPubB64,
+                remoteIp = bridgeSession.remoteIp,
+                remoteListenPort = clientListenPort,
+                username = "",
+                avatarBase64 = null,
+                viaBridgePeerId = bridgeSession.peerId
+            )
+        }
     }
 
     private fun invertWireAuthorType(wireType: String?): String? {
@@ -1536,17 +1563,38 @@ class P2PNodeManager(
         }
     }
 
+    private suspend fun materializeSilentSessionIfNeeded(session: ActivePeerSession) {
+        if (!session.isSilentDismissed) return
+        session.isSilentDismissed = false
+        _connectedPeers.update { it + session.peerId }
+        listener.onPeerHandshaked(
+            peerId = session.peerId,
+            publicKeyBase64 = session.remotePubB64,
+            remoteIp = session.remoteIp,
+            remoteListenPort = session.remoteListenPort,
+            username = session.remoteUsername,
+            avatarBase64 = session.remoteAvatarBase64,
+            viaBridgePeerId = session.bridgePeerId ?: ""
+        )
+        refreshBridgeTelemetry()
+    }
+
     private fun registerActiveSession(peerId: String, session: ActivePeerSession) {
         val old = sessions.put(peerId, session)
         old?.closeQuietly()
-        _connectedPeers.update { it + peerId }
+        if (session.isSilentDismissed) {
+            _connectedPeers.update { it - peerId }
+            _foregroundPeers.update { it - peerId }
+        } else {
+            _connectedPeers.update { it + peerId }
+        }
         refreshBridgeTelemetry()
     }
 
     private fun refreshBridgeTelemetry() {
         val identity = currentIdentity
         val directSessions = sessions.values.filter {
-            it.bridgePeerId == null && !it.isClosed && !it.peerId.startsWith("loopback_")
+            it.bridgePeerId == null && !it.isClosed && !it.isSilentDismissed && !it.peerId.startsWith("loopback_")
         }
         val directNames = directSessions.map { s ->
             s.remoteUsername.ifBlank { s.remoteIp.ifBlank { s.peerId.take(10) } }
@@ -1618,6 +1666,7 @@ class P2PNodeManager(
         val identity = currentIdentity
         if (!identity.isInitialized) return
         for (session in sessions.values) {
+            if (session.isSilentDismissed) continue
             runCatching { sendProfileSync(session, identity) }
         }
     }
@@ -1626,7 +1675,7 @@ class P2PNodeManager(
         val identity = currentIdentity
         if (!identity.isInitialized) return
         val directSessions = sessions.values.filter {
-            it.bridgePeerId == null && !it.isClosed && !it.peerId.startsWith("loopback_")
+            it.bridgePeerId == null && !it.isClosed && !it.isSilentDismissed && !it.peerId.startsWith("loopback_")
         }
         for (recipient in directSessions) {
             val peersArray = JSONArray()
@@ -1665,6 +1714,7 @@ class P2PNodeManager(
             put("fg", inForeground)
         }.toString().toByteArray(Charsets.UTF_8)
         for (session in sessions.values) {
+            if (session.isSilentDismissed) continue
             runCatching { session.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, payload) }
         }
     }
