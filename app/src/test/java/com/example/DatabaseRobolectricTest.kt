@@ -200,4 +200,38 @@ class DatabaseRobolectricTest {
 
         dao.deleteAllMessagesForPeer(peerId)
     }
+
+    @Test
+    fun `migration 7 to 8 creates sticker_packs and pack_stickers tables and indices`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val dbName = "migration_7_8_test.db"
+        context.deleteDatabase(dbName)
+        val sqliteHelper = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(
+            androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(7) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS peers (peerId TEXT NOT NULL PRIMARY KEY)")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+                })
+                .build()
+        )
+        val writable = sqliteHelper.writableDatabase
+        ChatDatabase.MIGRATION_7_8.migrate(writable)
+        writable.query("SELECT name FROM sqlite_master WHERE type='table' AND name='sticker_packs'").use { c ->
+            assertTrue(c.moveToFirst())
+        }
+        writable.query("SELECT name FROM sqlite_master WHERE type='table' AND name='pack_stickers'").use { c ->
+            assertTrue(c.moveToFirst())
+        }
+        writable.query("SELECT name FROM sqlite_master WHERE type='index' AND name='index_pack_stickers_packId'").use { c ->
+            assertTrue(c.moveToFirst())
+        }
+        writable.query("SELECT name FROM sqlite_master WHERE type='index' AND name='index_pack_stickers_packId_sha256'").use { c ->
+            assertTrue(c.moveToFirst())
+        }
+        sqliteHelper.close()
+        context.deleteDatabase(dbName)
+    }
 }

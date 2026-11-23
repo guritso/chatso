@@ -12,9 +12,11 @@ import com.example.data.ChatRepository
 import com.example.data.LocalIdentityStore
 import com.example.data.MediaStorageHelper
 import com.example.network.ChatsoNotificationHelper
+import com.example.network.ChatsoSharingShortcuts
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 class ChatsoContainer(context: Context) {
@@ -41,6 +43,20 @@ class ChatsoContainer(context: Context) {
             identityStore.identityFlow.collect { id ->
                 ChatsoNotificationHelper.syncThemeConfig(context, id.themePalette, id.themeAdvanced)
             }
+        }
+        appScope.launch {
+            repository.allPeersFlow
+                .distinctUntilChanged { old, new ->
+                    old.size == new.size && old.zip(new).all { (a, b) ->
+                        a.peerId == b.peerId &&
+                            a.username == b.username &&
+                            a.avatarPath == b.avatarPath &&
+                            a.lastActivityAt == b.lastActivityAt
+                    }
+                }
+                .collect { peers ->
+                    ChatsoSharingShortcuts.syncContactShortcuts(context, peers)
+                }
         }
         repository.onClearPeerNotification = { peerId ->
             ChatsoNotificationHelper.cancelPeerNotification(context, peerId)

@@ -214,6 +214,39 @@ interface ChatDao {
 
     @Query("DELETE FROM favorite_stickers WHERE stickerId = :stickerId")
     suspend fun deleteFavoriteSticker(stickerId: String)
+
+    @Query("SELECT * FROM sticker_packs ORDER BY createdAt DESC")
+    fun observeStickerPacks(): Flow<List<StickerPackEntity>>
+
+    @Query("SELECT * FROM pack_stickers ORDER BY sortOrder ASC, createdAt ASC")
+    fun observePackStickers(): Flow<List<PackStickerEntity>>
+
+    @Query("SELECT * FROM sticker_packs WHERE packId = :packId LIMIT 1")
+    suspend fun getStickerPackById(packId: String): StickerPackEntity?
+
+    @Query("SELECT * FROM pack_stickers WHERE stickerId = :stickerId LIMIT 1")
+    suspend fun getPackStickerById(stickerId: String): PackStickerEntity?
+
+    @Query("SELECT * FROM pack_stickers WHERE packId = :packId ORDER BY sortOrder ASC, createdAt ASC")
+    suspend fun getPackStickersByPackId(packId: String): List<PackStickerEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertStickerPack(pack: StickerPackEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPackStickers(stickers: List<PackStickerEntity>)
+
+    @Query("UPDATE sticker_packs SET name = :name WHERE packId = :packId")
+    suspend fun renameStickerPack(packId: String, name: String)
+
+    @Query("DELETE FROM pack_stickers WHERE packId = :packId")
+    suspend fun deletePackStickersByPackId(packId: String)
+
+    @Query("DELETE FROM sticker_packs WHERE packId = :packId")
+    suspend fun deleteStickerPackById(packId: String)
+
+    @Query("DELETE FROM pack_stickers WHERE stickerId = :stickerId")
+    suspend fun deletePackStickerById(stickerId: String)
 }
 
 @Entity(
@@ -228,9 +261,41 @@ data class FavoriteStickerEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "sticker_packs")
+data class StickerPackEntity(
+    @PrimaryKey val packId: String,
+    val name: String,
+    val author: String = "",
+    val iconPath: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "pack_stickers",
+    indices = [
+        Index(value = ["packId"]),
+        Index(value = ["packId", "sha256"], unique = true)
+    ]
+)
+data class PackStickerEntity(
+    @PrimaryKey val stickerId: String,
+    val packId: String,
+    val localPath: String,
+    val mimeType: String,
+    val sha256: String,
+    val sortOrder: Int = 0,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
 @Database(
-    entities = [PeerEntity::class, MessageEntity::class, FavoriteStickerEntity::class],
-    version = 7,
+    entities = [
+        PeerEntity::class,
+        MessageEntity::class,
+        FavoriteStickerEntity::class,
+        StickerPackEntity::class,
+        PackStickerEntity::class
+    ],
+    version = 8,
     exportSchema = false
 )
 abstract class ChatDatabase : RoomDatabase() {
@@ -291,6 +356,43 @@ abstract class ChatDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `sticker_packs` (
+                        `packId` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `author` TEXT NOT NULL DEFAULT '',
+                        `iconPath` TEXT,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`packId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `pack_stickers` (
+                        `stickerId` TEXT NOT NULL,
+                        `packId` TEXT NOT NULL,
+                        `localPath` TEXT NOT NULL,
+                        `mimeType` TEXT NOT NULL,
+                        `sha256` TEXT NOT NULL,
+                        `sortOrder` INTEGER NOT NULL DEFAULT 0,
+                        `createdAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`stickerId`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_pack_stickers_packId` ON `pack_stickers` (`packId`)"
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_pack_stickers_packId_sha256` ON `pack_stickers` (`packId`, `sha256`)"
+                )
+            }
+        }
+
         @Volatile
         private var INSTANCE: ChatDatabase? = null
 
@@ -307,7 +409,8 @@ abstract class ChatDatabase : RoomDatabase() {
                         MIGRATION_3_4,
                         MIGRATION_4_5,
                         MIGRATION_5_6,
-                        MIGRATION_6_7
+                        MIGRATION_6_7,
+                        MIGRATION_7_8
                     )
                     .fallbackToDestructiveMigration(true)
                     .build()

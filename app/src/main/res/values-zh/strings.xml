@@ -311,4 +311,40 @@
     <string name="dev_bridge_no_routes">尚未转发任何数据帧</string>
     <string name="wireguard_vpn_note_title">VPN 与 WireGuard 说明</string>
     <string name="wireguard_vpn_note_desc">OpenVPN 和 Tailscale 可在局域网与 VPN 下自动工作。WireGuard 若设为 AllowedIPs = 0.0.0.0/0 会拦截局域网流量，需在 AllowedIPs 中排除本地网段或为 chatso 启用分流。</string>
+
+    <string name="share_to_chatso_title">分享到 chatso</string>
+    <string name="share_send_to_contact">发送给 %1$s</string>
+    <string name="share_select_contacts_hint">选择一个或多个联系人</string>
+    <string name="share_message_optional_label">消息 / 附言</string>
+    <string name="share_message_hint">添加消息…</string>
+    <string name="share_files_count_single">1 个附件</string>
+    <string name="share_files_count_plural">%1$d 个附件</string>
+    <string name="share_no_contacts_title">暂无联系人</string>
+    <string name="share_no_contacts_body">分享前请先通过 Wi-Fi、VPN 或二维码连接联系人。</string>
+    <string name="share_go_to_connect_btn">立即连接</string>
+    <string name="share_send_count_btn">发送 (%1$d)</string>
+    <string name="share_sent_success">已分享。</string>
+    <string name="share_loading_media">正在准备分享文件…</string>
+    <string name="share_load_failed">无法读取分享内容。</string>
+    <string name="share_change_contact_btn">更换联系人</string>
+    <string name="share_onboarding_pending">请先创建个人资料以发送分享的内容。</string>
+
+    <string name="stickers_tab_all">全部</string>
+    <string name="stickers_tab_favorites">收藏</string>
+    <string name="stickers_all_empty_body">长按贴纸即可收藏，或导入贴纸包（.enc、.wastickers、.zip）。</string>
+    <string name="stickers_import_btn">导入贴纸包</string>
+    <string name="stickers_pack_count">%1$d 张贴纸</string>
+    <string name="sticker_pack_detected_title">检测到贴纸包</string>
+    <string name="sticker_pack_detected_subtitle">%1$s · %2$d 张贴纸</string>
+    <string name="sticker_pack_name_label">贴纸包名称</string>
+    <string name="sticker_pack_import_action">导入贴纸</string>
+    <string name="sticker_pack_import_confirm">导入 (%1$d)</string>
+    <string name="sticker_pack_imported_msg">已导入“%1$s”（%2$d 张贴纸）。</string>
+    <string name="sticker_pack_import_invalid">此文件不包含有效的 WebP 贴纸。</string>
+    <string name="sticker_pack_rename_title">重命名贴纸包</string>
+    <string name="sticker_pack_delete_title">删除贴纸包“%1$s”？</string>
+    <string name="sticker_pack_deleted_msg">已删除贴纸包。</string>
+    <string name="sticker_add_favorite_btn">添加到收藏</string>
+    <string name="sticker_remove_from_pack_btn">从贴纸包移除</string>
+    <string name="sticker_actions_title">贴纸选项</string>
 </resources>

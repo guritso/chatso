@@ -132,9 +132,11 @@ import com.example.data.FavoriteStickerEntity
 import com.example.data.LocalIdentity
 import com.example.data.MessageEntity
 import com.example.data.MessageType
+import com.example.data.PackStickerEntity
 import com.example.data.PeerEntity
 import com.example.data.PeerPresence
 import com.example.data.SelfDestructOption
+import com.example.data.StickerPackEntity
 import com.example.media.VoicePlaybackState
 import com.example.media.VoiceRecordingState
 import com.example.network.NetworkUtils
@@ -221,7 +223,16 @@ fun ChatDetailScreen(
     onReconnect: () -> Unit,
     onDeleteMessage: (String) -> Unit,
     onDeleteConversation: () -> Unit,
-    onNotify: (String) -> Unit
+    onNotify: (String) -> Unit,
+    stickerPacks: List<StickerPackEntity> = emptyList(),
+    packStickers: List<PackStickerEntity> = emptyList(),
+    onSendStickerFile: (localPath: String, mimeType: String, replyTo: MessageEntity?) -> Unit = { _, _, _ -> },
+    onToggleFavoriteStickerFile: (localPath: String, mimeType: String) -> Unit = { _, _ -> },
+    onRemovePackSticker: (String) -> Unit = {},
+    onRenameStickerPack: (packId: String, newName: String) -> Unit = { _, _ -> },
+    onDeleteStickerPack: (String) -> Unit = {},
+    onImportStickerPackFromFile: (localPath: String, fileName: String?) -> Unit = { _, _ -> },
+    onImportStickerPackFromUri: (Uri) -> Unit = {}
 ) {
     val context = LocalContext.current
     val clipboard = rememberClipboard()
@@ -940,6 +951,7 @@ fun ChatDetailScreen(
                                     viewerPayload = ViewerMediaPayload(FullscreenViewerTarget.VIDEO, path, fileName)
                                 },
                                 onOpenAttachment = onOpenAttachment,
+                                onImportStickerPack = onImportStickerPackFromFile,
                                 onCancelTransfer = onCancelTransfer,
                                 onRetryDownload = onRetryDownload,
                                 onSwipeReply = { target -> replyingToId = target.messageId },
@@ -1442,7 +1454,20 @@ fun ChatDetailScreen(
                                             markSendingAndScroll()
                                             onSendFavoriteSticker(sticker, replyTarget)
                                         },
-                                        onRemoveFavoriteSticker = onRemoveFavoriteSticker
+                                        onRemoveFavoriteSticker = onRemoveFavoriteSticker,
+                                        stickerPacks = stickerPacks,
+                                        packStickers = packStickers,
+                                        onSendStickerFile = { localPath, mimeType ->
+                                            val replyTarget = replyingToMessage
+                                            replyingToId = null
+                                            markSendingAndScroll()
+                                            onSendStickerFile(localPath, mimeType, replyTarget)
+                                        },
+                                        onToggleFavoriteStickerFile = onToggleFavoriteStickerFile,
+                                        onRemovePackSticker = onRemovePackSticker,
+                                        onRenameStickerPack = onRenameStickerPack,
+                                        onDeleteStickerPack = onDeleteStickerPack,
+                                        onPickStickerPackUri = onImportStickerPackFromUri
                                     )
 
                                     ComposerTrayMode.ATTACHMENTS -> AttachmentsMenuTray(

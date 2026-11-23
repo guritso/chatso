@@ -58,6 +58,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.outlined.StarBorder
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -83,6 +84,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -101,6 +103,8 @@ import com.example.data.MessageEntity
 import com.example.data.MessageType
 import com.example.data.ReactionCodec
 import com.example.data.ReplySenderTags
+import com.example.data.StickerPackArchiveHelper
+import com.example.data.StickerPackProbe
 import com.example.data.TransferPhase
 import com.example.media.VoicePlaybackState
 import com.example.network.NetworkUtils
@@ -125,6 +129,7 @@ fun ChatMessageBubbleItem(
     onOpenImageFullscreen: (path: String, fileName: String?) -> Unit,
     onOpenVideoFullscreen: (path: String, fileName: String?) -> Unit,
     onOpenAttachment: (String, String?) -> Unit,
+    onImportStickerPack: (localPath: String, fileName: String?) -> Unit = { _, _ -> },
     onCancelTransfer: (messageId: String) -> Unit = {},
     onRetryDownload: (messageId: String) -> Unit = {},
     onSwipeReply: (MessageEntity) -> Unit,
@@ -737,6 +742,56 @@ fun ChatMessageBubbleItem(
                                     onCancel = { onCancelTransfer(message.messageId) }
                                 )
                             } else if (!message.mediaLocalPath.isNullOrBlank()) {
+                                val localFilePath = message.mediaLocalPath
+                                val cachedProbe = remember(localFilePath) {
+                                    StickerPackArchiveHelper.getCachedProbe(localFilePath)
+                                }
+                                val detectedPack by produceState<StickerPackProbe?>(
+                                    initialValue = cachedProbe,
+                                    key1 = localFilePath,
+                                    key2 = message.fileName
+                                ) {
+                                    value = cachedProbe ?: StickerPackArchiveHelper.probePackArchive(
+                                        file = File(localFilePath),
+                                        displayNameHint = message.fileName,
+                                        includePreviews = false
+                                    )
+                                }
+                                val packProbe = detectedPack
+                                if (packProbe != null) {
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = stringResource(
+                                            R.string.stickers_pack_count,
+                                            packProbe.stickerCount
+                                        ),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Button(
+                                        onClick = { onImportStickerPack(localFilePath, message.fileName) },
+                                        shape = MaterialTheme.shapes.small,
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("import_sticker_pack_btn_${message.messageId}")
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_sticker_smiley),
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = stringResource(R.string.sticker_pack_import_action),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                }
                                 Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedButton(
                                     onClick = {

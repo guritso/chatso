@@ -311,4 +311,40 @@
     <string name="dev_bridge_no_routes">まだフレームは中継されていません</string>
     <string name="wireguard_vpn_note_title">VPN と WireGuard に関する注意</string>
     <string name="wireguard_vpn_note_desc">OpenVPN と Tailscale は LAN と VPN の両方で自動的に動作します。WireGuard で AllowedIPs = 0.0.0.0/0 を使用する場合、LAN を利用するには AllowedIPs からローカルサブネットを除外するか chatso をバイパス設定してください。</string>
+
+    <string name="share_to_chatso_title">chatso で共有</string>
+    <string name="share_send_to_contact">%1$s に送信</string>
+    <string name="share_select_contacts_hint">送信先の連絡先を選択</string>
+    <string name="share_message_optional_label">メッセージ / キャプション</string>
+    <string name="share_message_hint">メッセージを追加…</string>
+    <string name="share_files_count_single">1 件の添付ファイル</string>
+    <string name="share_files_count_plural">%1$d 件の添付ファイル</string>
+    <string name="share_no_contacts_title">連絡先がまだありません</string>
+    <string name="share_no_contacts_body">共有する前に Wi-Fi、VPN、または QR コードで相手と接続してください。</string>
+    <string name="share_go_to_connect_btn">接続する</string>
+    <string name="share_send_count_btn">送信 (%1$d)</string>
+    <string name="share_sent_success">共有しました。</string>
+    <string name="share_loading_media">共有ファイルを準備中…</string>
+    <string name="share_load_failed">共有コンテンツを読み込めませんでした。</string>
+    <string name="share_change_contact_btn">別の相手を選ぶ</string>
+    <string name="share_onboarding_pending">共有した内容を送信するにはプロフィールを作成してください。</string>
+
+    <string name="stickers_tab_all">すべて</string>
+    <string name="stickers_tab_favorites">お気に入り</string>
+    <string name="stickers_all_empty_body">スタンプを長押ししてお気に入りに追加するか、パック (.enc, .wastickers, .zip) をインポートしてください。</string>
+    <string name="stickers_import_btn">パックをインポート</string>
+    <string name="stickers_pack_count">%1$d 個のスタンプ</string>
+    <string name="sticker_pack_detected_title">スタンプパックを検出しました</string>
+    <string name="sticker_pack_detected_subtitle">%1$s · %2$d 個のスタンプ</string>
+    <string name="sticker_pack_name_label">パック名</string>
+    <string name="sticker_pack_import_action">スタンプをインポート</string>
+    <string name="sticker_pack_import_confirm">インポート (%1$d)</string>
+    <string name="sticker_pack_imported_msg">「%1$s」(%2$d 個) をインポートしました。</string>
+    <string name="sticker_pack_import_invalid">有効な WebP スタンプが含まれていません。</string>
+    <string name="sticker_pack_rename_title">パック名を変更</string>
+    <string name="sticker_pack_delete_title">パック「%1$s」を削除しますか？</string>
+    <string name="sticker_pack_deleted_msg">スタンプパックを削除しました。</string>
+    <string name="sticker_add_favorite_btn">お気に入りに追加</string>
+    <string name="sticker_remove_from_pack_btn">パックから削除</string>
+    <string name="sticker_actions_title">スタンプ設定</string>
 </resources>

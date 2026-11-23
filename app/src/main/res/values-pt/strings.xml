@@ -323,4 +323,40 @@
     <string name="dev_bridge_no_routes">Nenhum quadro repassado ainda</string>
     <string name="wireguard_vpn_note_title">Nota sobre VPN e WireGuard</string>
     <string name="wireguard_vpn_note_desc">OpenVPN e Tailscale funcionam normalmente na rede local e na VPN. No WireGuard com AllowedIPs = 0.0.0.0/0, a LAN só funciona se você ajustar o AllowedIPs para excluir sua sub-rede local ou liberar o chatso no bypass do túnel.</string>
+
+    <string name="share_to_chatso_title">Compartilhar no chatso</string>
+    <string name="share_send_to_contact">Enviar para %1$s</string>
+    <string name="share_select_contacts_hint">Selecione um ou mais contatos</string>
+    <string name="share_message_optional_label">Mensagem / legenda</string>
+    <string name="share_message_hint">Adicione uma mensagem…</string>
+    <string name="share_files_count_single">1 anexo</string>
+    <string name="share_files_count_plural">%1$d anexos</string>
+    <string name="share_no_contacts_title">Nenhum contato ainda</string>
+    <string name="share_no_contacts_body">Conecte-se com alguém pelo Wi-Fi, VPN ou QR Code antes de compartilhar.</string>
+    <string name="share_go_to_connect_btn">Conectar agora</string>
+    <string name="share_send_count_btn">Enviar (%1$d)</string>
+    <string name="share_sent_success">Compartilhado com sucesso.</string>
+    <string name="share_loading_media">Preparando arquivos…</string>
+    <string name="share_load_failed">Não foi possível ler o conteúdo compartilhado.</string>
+    <string name="share_change_contact_btn">Trocar contato</string>
+    <string name="share_onboarding_pending">Conclua a criação do seu perfil para enviar o conteúdo compartilhado.</string>
+
+    <string name="stickers_tab_all">Todas</string>
+    <string name="stickers_tab_favorites">Favoritas</string>
+    <string name="stickers_all_empty_body">Segure qualquer figurinha para favoritar ou importe um pacote (.enc, .wastickers, .zip).</string>
+    <string name="stickers_import_btn">Importar pacote</string>
+    <string name="stickers_pack_count">%1$d figurinhas</string>
+    <string name="sticker_pack_detected_title">Pacote de figurinhas detectado</string>
+    <string name="sticker_pack_detected_subtitle">%1$s · %2$d figurinhas</string>
+    <string name="sticker_pack_name_label">Nome do pacote</string>
+    <string name="sticker_pack_import_action">Importar figurinhas</string>
+    <string name="sticker_pack_import_confirm">Importar (%1$d)</string>
+    <string name="sticker_pack_imported_msg">Pacote \"%1$s\" importado (%2$d figurinhas).</string>
+    <string name="sticker_pack_import_invalid">Este arquivo não contém figurinhas WebP válidas.</string>
+    <string name="sticker_pack_rename_title">Renomear pacote</string>
+    <string name="sticker_pack_delete_title">Excluir pacote \"%1$s\"?</string>
+    <string name="sticker_pack_deleted_msg">Pacote de figurinhas excluído.</string>
+    <string name="sticker_add_favorite_btn">Adicionar às favoritas</string>
+    <string name="sticker_remove_from_pack_btn">Remover do pacote</string>
+    <string name="sticker_actions_title">Opções da figurinha</string>
 </resources>

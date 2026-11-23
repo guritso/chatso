@@ -323,18 +323,18 @@ object ChatsoNotificationHelper {
             .setIcon(personIcon)
             .build()
 
-        // Publish a long-lived conversation shortcut so SystemUI (Android 11+) renders the
-        // WhatsApp-style conversation header (large contact avatar + mini Chatso corner icon,
-        // without the redundant top "Chatso" app title row).
+        // Publish a long-lived conversation + Direct Share shortcut so SystemUI renders the
+        // WhatsApp-style conversation header AND the contact remains available in the Android Sharesheet.
         runCatching {
-            val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
-                .setShortLabel(cache.senderName.ifBlank { "chatso" })
-                .setLongLived(true)
-                .setPerson(senderPerson)
-                .setCategories(setOf("android.shortcut.conversation"))
-                .setIcon(personIcon)
-                .setIntent(openIntent)
-                .build()
+            val shortcut = ChatsoSharingShortcuts.buildConversationShortcut(
+                context = context,
+                peerId = peerId,
+                displayName = cache.senderName.ifBlank { "chatso" },
+                avatarPath = cache.avatarPath,
+                rank = 0,
+                precomputedPerson = senderPerson,
+                precomputedIcon = personIcon
+            )
             ShortcutManagerCompat.pushDynamicShortcut(context, shortcut)
         }
 
@@ -436,7 +436,7 @@ object ChatsoNotificationHelper {
         nm?.notify(notificationId, notification)
     }
 
-    private fun buildNotificationAvatarBitmap(
+    internal fun buildNotificationAvatarBitmap(
         context: Context,
         senderName: String,
         avatarPath: String?,

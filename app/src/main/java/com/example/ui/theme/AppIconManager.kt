@@ -58,6 +58,11 @@ object AppIconManager {
         return isEffectivelyEnabled(pm, comp, defaultEnabled = aliasClassName == DEFAULT_ALIAS_CLASS)
     }
 
+    fun getActiveLauncherComponent(context: Context): ComponentName? {
+        val activeClass = allAliases.firstOrNull { isAliasActive(context, it) } ?: DEFAULT_ALIAS_CLASS
+        return ComponentName(context.packageName, activeClass)
+    }
+
     fun applyAlias(context: Context, targetAliasClassName: String) {
         val pm = context.packageManager
         val pkg = context.packageName
@@ -92,6 +97,7 @@ object AppIconManager {
                     }
                 }
             }
+            com.example.network.ChatsoSharingShortcuts.resyncLastKnownShortcuts(context)
         }
     }
 

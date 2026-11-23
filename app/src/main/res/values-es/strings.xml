@@ -311,4 +311,40 @@
     <string name="dev_bridge_no_routes">Aún sin tramas retransmitidas</string>
     <string name="wireguard_vpn_note_title">Nota sobre VPN y WireGuard</string>
     <string name="wireguard_vpn_note_desc">OpenVPN y Tailscale funcionan automáticamente en LAN y VPN. WireGuard con AllowedIPs = 0.0.0.0/0 bloquea la red local salvo que excluyas tu subred LAN en AllowedIPs o omitas chatso del túnel.</string>
+
+    <string name="share_to_chatso_title">Compartir en chatso</string>
+    <string name="share_send_to_contact">Enviar a %1$s</string>
+    <string name="share_select_contacts_hint">Selecciona uno o más contactos</string>
+    <string name="share_message_optional_label">Mensaje / descripción</string>
+    <string name="share_message_hint">Añade un mensaje…</string>
+    <string name="share_files_count_single">1 archivo adjunto</string>
+    <string name="share_files_count_plural">%1$d archivos adjuntos</string>
+    <string name="share_no_contacts_title">Aún no hay contactos</string>
+    <string name="share_no_contacts_body">Conéctate con alguien por Wi-Fi, VPN o código QR antes de compartir.</string>
+    <string name="share_go_to_connect_btn">Conectar ahora</string>
+    <string name="share_send_count_btn">Enviar (%1$d)</string>
+    <string name="share_sent_success">Compartido correctamente.</string>
+    <string name="share_loading_media">Preparando archivos…</string>
+    <string name="share_load_failed">No se pudo leer el contenido compartido.</string>
+    <string name="share_change_contact_btn">Elegir otro</string>
+    <string name="share_onboarding_pending">Termina de crear tu perfil para enviar el contenido compartido.</string>
+
+    <string name="stickers_tab_all">Todas</string>
+    <string name="stickers_tab_favorites">Favoritas</string>
+    <string name="stickers_all_empty_body">Mantén pulsado cualquier sticker para añadirlo a favoritos o importa un paquete (.enc, .wastickers, .zip).</string>
+    <string name="stickers_import_btn">Importar paquete</string>
+    <string name="stickers_pack_count">%1$d stickers</string>
+    <string name="sticker_pack_detected_title">Paquete de stickers detectado</string>
+    <string name="sticker_pack_detected_subtitle">%1$s · %2$d stickers</string>
+    <string name="sticker_pack_name_label">Nombre del paquete</string>
+    <string name="sticker_pack_import_action">Importar stickers</string>
+    <string name="sticker_pack_import_confirm">Importar (%1$d)</string>
+    <string name="sticker_pack_imported_msg">Paquete \"%1$s\" importado (%2$d stickers).</string>
+    <string name="sticker_pack_import_invalid">Este archivo no contiene stickers WebP válidos.</string>
+    <string name="sticker_pack_rename_title">Renombrar paquete</string>
+    <string name="sticker_pack_delete_title">¿Eliminar paquete \"%1$s\"?</string>
+    <string name="sticker_pack_deleted_msg">Paquete de stickers eliminado.</string>
+    <string name="sticker_add_favorite_btn">Añadir a favoritas</string>
+    <string name="sticker_remove_from_pack_btn">Quitar del paquete</string>
+    <string name="sticker_actions_title">Opciones de sticker</string>
 </resources>

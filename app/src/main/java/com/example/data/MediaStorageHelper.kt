@@ -49,8 +49,14 @@ class MediaStorageHelper(private val context: Context) {
     private val favoriteStickersDir: File
         get() = File(context.filesDir, "favorite_stickers").apply { if (!exists()) mkdirs() }
 
+    val stickerPacksDir: File
+        get() = File(context.filesDir, "sticker_packs").apply { if (!exists()) mkdirs() }
+
     private val avatarsDir: File
         get() = File(context.filesDir, "avatars").apply { if (!exists()) mkdirs() }
+
+    private val sharedStagingDir: File
+        get() = File(context.cacheDir, "shared_staging").apply { if (!exists()) mkdirs() }
 
     suspend fun loadBitmapForCrop(sourceUri: Uri, maxSidePx: Int = 1280): Bitmap? =
         withContext(Dispatchers.IO) {
@@ -201,17 +207,51 @@ class MediaStorageHelper(private val context: Context) {
     }
 
     suspend fun copyUriToPrivateMedia(uri: Uri, fallbackPrefix: String): CopiedMediaInfo? =
+        copyUriToDirectory(uri, mediaDir, fallbackPrefix)
+
+    suspend fun stageSharedUriToCache(uri: Uri): CopiedMediaInfo? =
+        copyUriToDirectory(uri, sharedStagingDir, "shared")
+
+    suspend fun clearSharedStagingFiles(files: List<File>) = withContext(Dispatchers.IO) {
+        files.forEach { file ->
+            runCatching {
+                if (file.exists() && file.parentFile?.absolutePath == sharedStagingDir.absolutePath) {
+                    file.delete()
+                }
+            }
+        }
+    }
+
+    private suspend fun copyUriToDirectory(
+        uri: Uri,
+        targetDir: File,
+        fallbackPrefix: String
+    ): CopiedMediaInfo? =
         withContext(Dispatchers.IO) {
             try {
                 val cr = context.contentResolver
-                val mimeType = cr.getType(uri) ?: "application/octet-stream"
                 var displayName = resolveDisplayName(uri)
+                val rawMime = cr.getType(uri)?.substringBefore(';')?.trim()
+                val extFromName = displayName?.substringAfterLast('.', "")
+                    ?.lowercase()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: uri.lastPathSegment?.substringAfterLast('.', "")
+                        ?.lowercase()
+                        ?.takeIf { it.isNotBlank() && it.length <= 6 }
+                val mimeType = when {
+                    !rawMime.isNullOrBlank() && rawMime != "application/octet-stream" -> rawMime
+                    extFromName != null -> MimeTypeMap.getSingleton().getMimeTypeFromExtension(extFromName)
+                        ?: rawMime
+                        ?: "application/octet-stream"
+                    else -> rawMime ?: "application/octet-stream"
+                }
                 if (displayName.isNullOrBlank()) {
-                    val ext = mimeType.substringAfterLast('/', "bin").take(5)
+                    val ext = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+                        ?: mimeType.substringAfterLast('/', "bin").take(5)
                     displayName = "${fallbackPrefix}_${System.currentTimeMillis()}.$ext"
                 }
                 val safeName = sanitizeFileName(displayName)
-                val targetFile = File(mediaDir, "${UUID.randomUUID()}_$safeName")
+                val targetFile = File(targetDir, "${UUID.randomUUID()}_$safeName")
                 cr.openInputStream(uri)?.use { input ->
                     FileOutputStream(targetFile).use { output ->
                         input.copyTo(output, bufferSize = 32 * 1024)
@@ -468,6 +508,15 @@ class MediaStorageHelper(private val context: Context) {
                 file.delete()
             }
         } catch (_: Exception) {
+        }
+    }
+
+    suspend fun deleteStickerPackDir(packId: String) = withContext(Dispatchers.IO) {
+        runCatching {
+            val dir = File(stickerPacksDir, packId)
+            if (dir.exists()) {
+                dir.deleteRecursively()
+            }
         }
     }
 

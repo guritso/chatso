@@ -19,8 +19,12 @@ import com.example.data.LocaleHelper
 import com.example.data.MessageEntity
 import com.example.data.MessageType
 import com.example.data.NetworkEndpointInfo
+import com.example.data.PackStickerEntity
 import com.example.data.PeerEntity
 import com.example.data.SavedMediaKind
+import com.example.data.StickerPackArchiveHelper
+import com.example.data.StickerPackEntity
+import com.example.data.StickerPackProbe
 import com.example.data.ThemeMode
 import com.example.data.ThemePalette
 import com.example.data.UnreadDividerInfo
@@ -29,13 +33,16 @@ import com.example.media.VoicePlayerController
 import com.example.media.VoiceRecorderController
 import com.example.media.VoiceRecordingState
 import com.example.network.ChatsoConnectionService
+import com.example.network.ChatsoSharingShortcuts
 import com.example.network.NetworkUtils
 import com.example.network.QrCodeHelper
+import com.example.network.RawShareRequest
 import com.example.network.UpdateCheckResult
 import com.example.network.UpdateChecker
 import com.example.ui.theme.AppIconManager
 import java.io.File
 import java.io.InputStream
+import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -45,6 +52,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -65,6 +73,32 @@ sealed class UpdateUiState {
     data object Checking : UpdateUiState()
     data class UpdateAvailable(val info: UpdateCheckResult.UpdateAvailable) : UpdateUiState()
 }
+
+data class StagedSharedFile(
+    val file: File,
+    val fileName: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val messageType: MessageType,
+    val detectedStickerPack: StickerPackProbe? = null
+)
+
+data class PendingIncomingShare(
+    val id: String = UUID.randomUUID().toString(),
+    val directTargetPeerId: String?,
+    val sharedText: String?,
+    val sharedFiles: List<StagedSharedFile> = emptyList(),
+    val isLoadingMedia: Boolean = false,
+    val isSending: Boolean = false
+)
+
+data class PendingPackImportUiState(
+    val sourceFile: File,
+    val displayNameHint: String,
+    val deleteSourceOnFinish: Boolean,
+    val probe: StickerPackProbe,
+    val isImporting: Boolean = false
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatsoViewModel(application: Application) : AndroidViewModel(application) {
@@ -147,6 +181,13 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     private val _updateUiState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val updateUiState: StateFlow<UpdateUiState> = _updateUiState.asStateFlow()
 
+    private val _pendingIncomingShare = MutableStateFlow<PendingIncomingShare?>(null)
+    val pendingIncomingShare: StateFlow<PendingIncomingShare?> = _pendingIncomingShare.asStateFlow()
+    private var incomingShareStagingJob: Job? = null
+
+    private val _pendingPackImport = MutableStateFlow<PendingPackImportUiState?>(null)
+    val pendingPackImport: StateFlow<PendingPackImportUiState?> = _pendingPackImport.asStateFlow()
+
     private val _nowClockMs = MutableStateFlow(System.currentTimeMillis())
     val nowClockMs: StateFlow<Long> = _nowClockMs.asStateFlow()
 
@@ -154,6 +195,12 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     val voicePlaybackState: StateFlow<VoicePlaybackState> = voicePlayer.state
 
     val favoriteStickers: StateFlow<List<FavoriteStickerEntity>> = repository.observeFavoriteStickers()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val stickerPacks: StateFlow<List<StickerPackEntity>> = repository.observeStickerPacks()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val packStickers: StateFlow<List<PackStickerEntity>> = repository.observePackStickers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val onboardingPreviewMaterial: CryptoEngine.IdentityKeyMaterial by lazy {
@@ -198,6 +245,155 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         _selectedTab.value = tab
         if (tab == HomeTab.CONNECT || tab == HomeTab.SETTINGS) {
             refreshEndpoints()
+        }
+    }
+
+    fun handleIncomingShareRequest(request: RawShareRequest) {
+        incomingShareStagingJob?.cancel()
+        val prevFiles = _pendingIncomingShare.value?.sharedFiles?.map { it.file }.orEmpty()
+        val shareId = UUID.randomUUID().toString()
+        val hasStreams = request.streamUris.isNotEmpty()
+        _pendingIncomingShare.value = PendingIncomingShare(
+            id = shareId,
+            directTargetPeerId = request.targetPeerId,
+            sharedText = request.sharedText,
+            sharedFiles = emptyList(),
+            isLoadingMedia = hasStreams,
+            isSending = false
+        )
+        incomingShareStagingJob = viewModelScope.launch {
+            if (prevFiles.isNotEmpty()) {
+                mediaStorage.clearSharedStagingFiles(prevFiles)
+            }
+            val validTargetPeerId = if (!request.targetPeerId.isNullOrBlank()) {
+                val allPeers = withContext(Dispatchers.IO) { repository.allPeersFlow.first() }
+                if (allPeers.any { it.peerId == request.targetPeerId }) request.targetPeerId else null
+            } else {
+                null
+            }
+            val staged = if (hasStreams) {
+                withContext(Dispatchers.IO) {
+                    request.streamUris.mapNotNull { uri ->
+                        val copied = mediaStorage.stageSharedUriToCache(uri) ?: return@mapNotNull null
+                        val mime = copied.mimeType.lowercase()
+                        val msgType = when {
+                            mime.startsWith("image/") -> MessageType.IMAGE
+                            mime.startsWith("video/") -> MessageType.VIDEO
+                            else -> MessageType.FILE
+                        }
+                        StagedSharedFile(
+                            file = copied.localFile,
+                            fileName = copied.fileName,
+                            mimeType = copied.mimeType,
+                            sizeBytes = copied.sizeBytes,
+                            messageType = msgType,
+                            detectedStickerPack = if (msgType == MessageType.FILE) {
+                                StickerPackArchiveHelper.probePackArchive(
+                                    file = copied.localFile,
+                                    displayNameHint = copied.fileName,
+                                    includePreviews = true
+                                )
+                            } else {
+                                null
+                            }
+                        )
+                    }
+                }
+            } else {
+                emptyList()
+            }
+            val active = _pendingIncomingShare.value ?: return@launch
+            if (active.id != shareId) return@launch
+
+            if (staged.isEmpty() && active.sharedText.isNullOrBlank()) {
+                _pendingIncomingShare.value = null
+                _snackbarMessage.value = str(R.string.share_load_failed)
+            } else {
+                _pendingIncomingShare.value = active.copy(
+                    directTargetPeerId = validTargetPeerId,
+                    sharedFiles = staged,
+                    isLoadingMedia = false
+                )
+            }
+        }
+    }
+
+    fun sendPendingShare(peerIds: Set<String>, captionOrText: String) {
+        val share = _pendingIncomingShare.value ?: return
+        if (share.isLoadingMedia || share.isSending || peerIds.isEmpty()) return
+        val cleanText = captionOrText.trim()
+        if (share.sharedFiles.isEmpty() && cleanText.isEmpty()) return
+
+        _pendingIncomingShare.value = share.copy(isSending = true)
+        viewModelScope.launch {
+            try {
+                peerIds.forEach { peerId ->
+                    share.sharedFiles.forEach { staged ->
+                        repository.sendLocalSavedFile(
+                            peerId = peerId,
+                            sourceFile = staged.file,
+                            messageType = staged.messageType,
+                            mimeType = staged.mimeType,
+                            displayName = staged.fileName
+                        )
+                    }
+                    if (cleanText.isNotEmpty()) {
+                        repository.sendText(peerId, cleanText)
+                    }
+                }
+                if (peerIds.size == 1) {
+                    _selectedTab.value = HomeTab.CHATS
+                    openConversation(peerIds.first())
+                }
+                _snackbarMessage.value = str(R.string.share_sent_success)
+            } finally {
+                mediaStorage.clearSharedStagingFiles(share.sharedFiles.map { it.file })
+                _pendingIncomingShare.value = null
+            }
+        }
+    }
+
+    fun dismissPendingShare() {
+        incomingShareStagingJob?.cancel()
+        incomingShareStagingJob = null
+        val current = _pendingIncomingShare.value
+        _pendingIncomingShare.value = null
+        if (current != null && current.sharedFiles.isNotEmpty()) {
+            viewModelScope.launch {
+                mediaStorage.clearSharedStagingFiles(current.sharedFiles.map { it.file })
+            }
+        }
+    }
+
+    fun importSharedStickerPack(stagedFile: StagedSharedFile, customName: String) {
+        val share = _pendingIncomingShare.value ?: return
+        if (share.isSending || share.isLoadingMedia) return
+        _pendingIncomingShare.value = share.copy(isSending = true)
+        viewModelScope.launch {
+            val imported = repository.importStickerPackArchive(
+                sourceFile = stagedFile.file,
+                customName = customName,
+                displayNameHint = stagedFile.fileName
+            )
+            if (imported != null) {
+                mediaStorage.clearSharedStagingFiles(share.sharedFiles.map { it.file })
+                _pendingIncomingShare.value = null
+                _snackbarMessage.value = str(
+                    R.string.sticker_pack_imported_msg,
+                    imported.pack.name,
+                    imported.stickers.size
+                )
+            } else {
+                _pendingIncomingShare.value = share.copy(isSending = false)
+                _snackbarMessage.value = str(R.string.sticker_pack_import_invalid)
+            }
+        }
+    }
+
+    fun refreshSharingShortcuts() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val peers = repository.allPeersFlow.first()
+            ChatsoSharingShortcuts.syncContactShortcuts(getApplication(), peers)
         }
     }
 
@@ -731,11 +927,139 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun sendFavoriteSticker(sticker: FavoriteStickerEntity, replyTo: MessageEntity? = null) {
+        sendSavedStickerFile(sticker.localPath, sticker.mimeType, replyTo)
+    }
+
+    fun sendSavedStickerFile(
+        localPath: String,
+        mimeType: String,
+        replyTo: MessageEntity? = null
+    ) {
         val peerId = _activePeerId.value ?: return
         viewModelScope.launch {
-            val ok = repository.sendFavoriteSticker(peerId, sticker, replyTo)
+            val ok = repository.sendSavedStickerFile(peerId, localPath, mimeType, replyTo)
             if (!ok) {
                 _snackbarMessage.value = str(R.string.msg_message_queued)
+            }
+        }
+    }
+
+    fun toggleFavoriteStickerFile(localPath: String, mimeType: String) {
+        viewModelScope.launch {
+            when (repository.toggleFavoriteStickerFile(localPath, mimeType)) {
+                true -> _snackbarMessage.value = str(R.string.msg_sticker_favorited)
+                false -> _snackbarMessage.value = str(R.string.msg_sticker_unfavorited)
+                null -> Unit
+            }
+        }
+    }
+
+    fun removePackSticker(stickerId: String) {
+        viewModelScope.launch {
+            repository.removePackSticker(stickerId)
+        }
+    }
+
+    fun renameStickerPack(packId: String, newName: String) {
+        viewModelScope.launch {
+            repository.renameStickerPack(packId, newName)
+        }
+    }
+
+    fun deleteStickerPack(packId: String) {
+        viewModelScope.launch {
+            repository.deleteStickerPack(packId)
+            _snackbarMessage.value = str(R.string.sticker_pack_deleted_msg)
+        }
+    }
+
+    fun requestImportStickerPackFromFile(filePath: String, displayName: String?) {
+        val file = File(filePath)
+        if (!file.exists()) {
+            _snackbarMessage.value = str(R.string.sticker_pack_import_invalid)
+            return
+        }
+        viewModelScope.launch {
+            val probe = StickerPackArchiveHelper.probePackArchive(
+                file = file,
+                displayNameHint = displayName,
+                includePreviews = true
+            )
+            if (probe == null) {
+                _snackbarMessage.value = str(R.string.sticker_pack_import_invalid)
+            } else {
+                _pendingPackImport.value = PendingPackImportUiState(
+                    sourceFile = file,
+                    displayNameHint = displayName ?: file.name,
+                    deleteSourceOnFinish = false,
+                    probe = probe
+                )
+            }
+        }
+    }
+
+    fun requestImportStickerPackFromUri(uri: Uri) {
+        viewModelScope.launch {
+            val staged = mediaStorage.stageSharedUriToCache(uri)
+            if (staged == null) {
+                _snackbarMessage.value = str(R.string.sticker_pack_import_invalid)
+                return@launch
+            }
+            val probe = StickerPackArchiveHelper.probePackArchive(
+                file = staged.localFile,
+                displayNameHint = staged.fileName,
+                includePreviews = true
+            )
+            if (probe == null) {
+                mediaStorage.clearSharedStagingFiles(listOf(staged.localFile))
+                _snackbarMessage.value = str(R.string.sticker_pack_import_invalid)
+            } else {
+                _pendingPackImport.value = PendingPackImportUiState(
+                    sourceFile = staged.localFile,
+                    displayNameHint = staged.fileName,
+                    deleteSourceOnFinish = true,
+                    probe = probe
+                )
+            }
+        }
+    }
+
+    fun confirmPendingPackImport(customName: String) {
+        val pending = _pendingPackImport.value ?: return
+        if (pending.isImporting) return
+        _pendingPackImport.value = pending.copy(isImporting = true)
+        viewModelScope.launch {
+            try {
+                val imported = repository.importStickerPackArchive(
+                    sourceFile = pending.sourceFile,
+                    customName = customName,
+                    displayNameHint = pending.displayNameHint
+                )
+                if (imported != null) {
+                    _snackbarMessage.value = str(
+                        R.string.sticker_pack_imported_msg,
+                        imported.pack.name,
+                        imported.stickers.size
+                    )
+                    _pendingPackImport.value = null
+                } else {
+                    _pendingPackImport.value = pending.copy(isImporting = false)
+                    _snackbarMessage.value = str(R.string.sticker_pack_import_invalid)
+                }
+            } finally {
+                if (pending.deleteSourceOnFinish) {
+                    mediaStorage.clearSharedStagingFiles(listOf(pending.sourceFile))
+                }
+            }
+        }
+    }
+
+    fun dismissPendingPackImport() {
+        val current = _pendingPackImport.value ?: return
+        _pendingPackImport.value = null
+        if (current.deleteSourceOnFinish) {
+            viewModelScope.launch {
+                mediaStorage.clearSharedStagingFiles(listOf(current.sourceFile))
             }
         }
     }

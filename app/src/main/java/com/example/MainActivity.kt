@@ -75,10 +75,14 @@ import com.example.data.ThemeMode
 import com.example.data.ThemePalette
 import com.example.network.ChatsoConnectionService
 import com.example.network.ChatsoNotificationHelper
+import com.example.network.ChatsoSharingShortcuts
 import com.example.network.NetworkUtils
+import com.example.network.RawShareRequest
+import com.example.network.ShareIntentParser
 import com.example.ui.ChatsoViewModel
 import com.example.ui.HomeTab
 import com.example.ui.UpdateUiState
+import com.example.ui.components.ImportStickerPackDialog
 import com.example.ui.screens.ChatDetailScreen
 import com.example.ui.screens.ChatsListScreen
 import com.example.ui.screens.ConnectScreen
@@ -86,12 +90,14 @@ import com.example.ui.screens.DevModeScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.ShareTargetSheet
 import com.example.ui.theme.AppIconManager
 import com.example.ui.theme.ChatsoTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
     private val pendingNotificationPeerId = MutableStateFlow<String?>(null)
+    private val pendingShareRequest = MutableStateFlow<RawShareRequest?>(null)
 
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(LocaleHelper.wrapContext(newBase))
@@ -102,26 +108,39 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         pendingNotificationPeerId.value =
             intent?.getStringExtra(ChatsoNotificationHelper.EXTRA_PEER_ID)
+        ShareIntentParser.parse(intent)?.let { req ->
+            pendingShareRequest.value = req
+            ShareIntentParser.markConsumed(intent)
+        }
         setContent {
             val peerIdToOpen by pendingNotificationPeerId.collectAsStateWithLifecycle()
+            val shareRequest by pendingShareRequest.collectAsStateWithLifecycle()
             ChatsoRootApp(
                 notificationPeerId = peerIdToOpen,
-                onConsumedNotificationPeer = { pendingNotificationPeerId.value = null }
+                onConsumedNotificationPeer = { pendingNotificationPeerId.value = null },
+                shareRequest = shareRequest,
+                onConsumedShareRequest = { pendingShareRequest.value = null }
             )
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         val peerId = intent.getStringExtra(ChatsoNotificationHelper.EXTRA_PEER_ID)
         if (!peerId.isNullOrBlank()) {
             pendingNotificationPeerId.value = peerId
+        }
+        ShareIntentParser.parse(intent)?.let { req ->
+            pendingShareRequest.value = req
+            ShareIntentParser.markConsumed(intent)
         }
     }
 
     override fun onStart() {
         super.onStart()
         AppIconManager.clearTemporarySuppression()
+        ChatsoSharingShortcuts.resyncLastKnownShortcuts(this)
         (application as? ChatsoApplication)?.container?.let { container ->
             container.isAppInForeground = true
             container.repository.onAppForegroundChanged(true)
@@ -144,10 +163,13 @@ class MainActivity : ComponentActivity() {
 fun ChatsoRootApp(
     viewModel: ChatsoViewModel = viewModel(),
     notificationPeerId: String? = null,
-    onConsumedNotificationPeer: () -> Unit = {}
+    onConsumedNotificationPeer: () -> Unit = {},
+    shareRequest: RawShareRequest? = null,
+    onConsumedShareRequest: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val identity by viewModel.identityState.collectAsStateWithLifecycle()
+    val pendingShare by viewModel.pendingIncomingShare.collectAsStateWithLifecycle()
     val systemDark = isSystemInDarkTheme()
 
     val isDarkTheme = when (identity?.themeMode) {
@@ -162,6 +184,12 @@ fun ChatsoRootApp(
     val notifPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { _ -> }
+
+    LaunchedEffect(shareRequest) {
+        val req = shareRequest ?: return@LaunchedEffect
+        viewModel.handleIncomingShareRequest(req)
+        onConsumedShareRequest()
+    }
 
     LaunchedEffect(identity?.isInitialized, identity?.backgroundConnectionEnabled) {
         val id = identity ?: return@LaunchedEffect
@@ -230,6 +258,12 @@ fun ChatsoRootApp(
                 }
             }
         } else if (!currentIdentity.isInitialized) {
+            val onboardingPendingText = stringResource(R.string.share_onboarding_pending)
+            LaunchedEffect(pendingShare?.id) {
+                if (pendingShare != null) {
+                    viewModel.postMessage(onboardingPendingText)
+                }
+            }
             Scaffold(
                 snackbarHost = { SnackbarHost(snackbarHostState) },
                 containerColor = MaterialTheme.colorScheme.background
@@ -372,6 +406,8 @@ private fun ChatsoAuthenticatedShell(
     val voiceRecordingState by viewModel.voiceRecordingState.collectAsStateWithLifecycle()
     val voicePlaybackState by viewModel.voicePlaybackState.collectAsStateWithLifecycle()
     val favoriteStickers by viewModel.favoriteStickers.collectAsStateWithLifecycle()
+    val stickerPacks by viewModel.stickerPacks.collectAsStateWithLifecycle()
+    val packStickers by viewModel.packStickers.collectAsStateWithLifecycle()
     val unreadDivider by viewModel.unreadDivider.collectAsStateWithLifecycle()
     val serverRunning by viewModel.serverRunning.collectAsStateWithLifecycle()
     val totalMessageCount by viewModel.totalMessageCount.collectAsStateWithLifecycle()
@@ -380,6 +416,8 @@ private fun ChatsoAuthenticatedShell(
     val scheduledFakeDelay by viewModel.scheduledFakeDelayRemainingSec.collectAsStateWithLifecycle()
     val bridgeTelemetry by viewModel.bridgeTelemetry.collectAsStateWithLifecycle()
     val isRunningBridgeTest by viewModel.isRunningBridgeTest.collectAsStateWithLifecycle()
+    val pendingShare by viewModel.pendingIncomingShare.collectAsStateWithLifecycle()
+    val pendingPackImport by viewModel.pendingPackImport.collectAsStateWithLifecycle()
 
     var showDevTools by rememberSaveable { mutableStateOf(false) }
 
@@ -398,13 +436,23 @@ private fun ChatsoAuthenticatedShell(
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isExpanded = maxWidth >= 840.dp
 
-        BackHandler(enabled = !isExpanded && activePeerId != null) {
+        BackHandler(enabled = pendingPackImport != null) {
+            if (pendingPackImport?.isImporting != true) {
+                viewModel.dismissPendingPackImport()
+            }
+        }
+        BackHandler(enabled = pendingPackImport == null && pendingShare != null) {
+            if (pendingShare?.isSending != true) {
+                viewModel.dismissPendingShare()
+            }
+        }
+        BackHandler(enabled = pendingPackImport == null && pendingShare == null && !isExpanded && activePeerId != null) {
             viewModel.closeConversation()
         }
-        BackHandler(enabled = activePeerId == null && selectedTab == HomeTab.SETTINGS && showDevTools) {
+        BackHandler(enabled = pendingPackImport == null && pendingShare == null && activePeerId == null && selectedTab == HomeTab.SETTINGS && showDevTools) {
             showDevTools = false
         }
-        BackHandler(enabled = activePeerId == null && !(selectedTab == HomeTab.SETTINGS && showDevTools) && selectedTab != HomeTab.CHATS) {
+        BackHandler(enabled = pendingPackImport == null && pendingShare == null && activePeerId == null && !(selectedTab == HomeTab.SETTINGS && showDevTools) && selectedTab != HomeTab.CHATS) {
             viewModel.selectTab(HomeTab.CHATS)
         }
 
@@ -580,7 +628,16 @@ private fun ChatsoAuthenticatedShell(
                                     onReconnect = viewModel::reconnectActivePeer,
                                     onDeleteMessage = viewModel::deleteSingleMessage,
                                     onDeleteConversation = viewModel::deleteActiveConversation,
-                                    onNotify = viewModel::postMessage
+                                    onNotify = viewModel::postMessage,
+                                    stickerPacks = stickerPacks,
+                                    packStickers = packStickers,
+                                    onSendStickerFile = viewModel::sendSavedStickerFile,
+                                    onToggleFavoriteStickerFile = viewModel::toggleFavoriteStickerFile,
+                                    onRemovePackSticker = viewModel::removePackSticker,
+                                    onRenameStickerPack = viewModel::renameStickerPack,
+                                    onDeleteStickerPack = viewModel::deleteStickerPack,
+                                    onImportStickerPackFromFile = viewModel::requestImportStickerPackFromFile,
+                                    onImportStickerPackFromUri = viewModel::requestImportStickerPackFromUri
                                 )
                             } else {
                                 Box(
@@ -751,7 +808,16 @@ private fun ChatsoAuthenticatedShell(
                             onReconnect = viewModel::reconnectActivePeer,
                             onDeleteMessage = viewModel::deleteSingleMessage,
                             onDeleteConversation = viewModel::deleteActiveConversation,
-                            onNotify = viewModel::postMessage
+                            onNotify = viewModel::postMessage,
+                            stickerPacks = stickerPacks,
+                            packStickers = packStickers,
+                            onSendStickerFile = viewModel::sendSavedStickerFile,
+                            onToggleFavoriteStickerFile = viewModel::toggleFavoriteStickerFile,
+                            onRemovePackSticker = viewModel::removePackSticker,
+                            onRenameStickerPack = viewModel::renameStickerPack,
+                            onDeleteStickerPack = viewModel::deleteStickerPack,
+                            onImportStickerPackFromFile = viewModel::requestImportStickerPackFromFile,
+                            onImportStickerPackFromUri = viewModel::requestImportStickerPackFromUri
                         )
                     }
                 }
@@ -947,6 +1013,33 @@ private fun ChatsoAuthenticatedShell(
                     }
                 }
             }
+        }
+
+        val activeShare = pendingShare
+        if (activeShare != null) {
+            ShareTargetSheet(
+                share = activeShare,
+                peers = peers,
+                connectedPeerIds = connectedPeerIds,
+                foregroundPeerIds = foregroundPeerIds,
+                onSend = viewModel::sendPendingShare,
+                onImportStickerPack = viewModel::importSharedStickerPack,
+                onGoToConnect = {
+                    viewModel.dismissPendingShare()
+                    viewModel.closeConversation()
+                    viewModel.selectTab(HomeTab.CONNECT)
+                },
+                onDismiss = viewModel::dismissPendingShare
+            )
+        }
+
+        val activePackImport = pendingPackImport
+        if (activePackImport != null) {
+            ImportStickerPackDialog(
+                state = activePackImport,
+                onConfirmImport = viewModel::confirmPendingPackImport,
+                onDismiss = viewModel::dismissPendingPackImport
+            )
         }
     }
 }

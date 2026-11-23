@@ -22,32 +22,44 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +80,8 @@ import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
 import com.example.R
 import com.example.data.FavoriteStickerEntity
+import com.example.data.PackStickerEntity
+import com.example.data.StickerPackEntity
 import com.example.ui.theme.AppIconManager
 import com.example.ui.theme.DangerCoral
 import java.io.File
@@ -78,15 +92,125 @@ enum class ComposerTrayMode {
     ATTACHMENTS
 }
 
+private data class UnifiedStickerEntry(
+    val key: String,
+    val localPath: String,
+    val mimeType: String,
+    val sha256: String,
+    val favoriteEntity: FavoriteStickerEntity?,
+    val packStickerEntity: PackStickerEntity?,
+    val isFavorited: Boolean
+)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun StickersTrayContent(
     favoriteStickers: List<FavoriteStickerEntity>,
     onSendFavoriteSticker: (FavoriteStickerEntity) -> Unit,
     onRemoveFavoriteSticker: (String) -> Unit,
+    stickerPacks: List<StickerPackEntity> = emptyList(),
+    packStickers: List<PackStickerEntity> = emptyList(),
+    onSendStickerFile: (localPath: String, mimeType: String) -> Unit = { _, _ -> },
+    onToggleFavoriteStickerFile: (localPath: String, mimeType: String) -> Unit = { _, _ -> },
+    onRemovePackSticker: (String) -> Unit = {},
+    onRenameStickerPack: (packId: String, newName: String) -> Unit = { _, _ -> },
+    onDeleteStickerPack: (String) -> Unit = {},
+    onPickStickerPackUri: (Uri) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var pendingDeleteSticker by remember { mutableStateOf<FavoriteStickerEntity?>(null) }
+    var selectedTabKey by rememberSaveable { mutableStateOf("all") }
+    var actionSticker by remember { mutableStateOf<UnifiedStickerEntry?>(null) }
+    var pendingRenamePack by remember { mutableStateOf<StickerPackEntity?>(null) }
+    var pendingDeletePack by remember { mutableStateOf<StickerPackEntity?>(null) }
+
+    val packArchivePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            onPickStickerPackUri(uri)
+        }
+    }
+
+    val activePack: StickerPackEntity? = if (selectedTabKey.startsWith("pack:")) {
+        val packId = selectedTabKey.removePrefix("pack:")
+        stickerPacks.firstOrNull { it.packId == packId }
+    } else {
+        null
+    }
+    val effectiveTabKey = when {
+        selectedTabKey == "favorites" -> "favorites"
+        activePack != null -> selectedTabKey
+        else -> "all"
+    }
+
+    val favoriteBySha = remember(favoriteStickers) {
+        favoriteStickers.associateBy { it.sha256 }
+    }
+
+    val allUnified = remember(favoriteStickers, packStickers, favoriteBySha) {
+        val seenSha = HashSet<String>()
+        val list = mutableListOf<UnifiedStickerEntry>()
+        favoriteStickers.forEach { fav ->
+            if (seenSha.add(fav.sha256)) {
+                list += UnifiedStickerEntry(
+                    key = "fav_${fav.stickerId}",
+                    localPath = fav.localPath,
+                    mimeType = fav.mimeType,
+                    sha256 = fav.sha256,
+                    favoriteEntity = fav,
+                    packStickerEntity = null,
+                    isFavorited = true
+                )
+            }
+        }
+        packStickers.forEach { ps ->
+            if (seenSha.add(ps.sha256)) {
+                val favMatch = favoriteBySha[ps.sha256]
+                list += UnifiedStickerEntry(
+                    key = "pack_${ps.stickerId}",
+                    localPath = ps.localPath,
+                    mimeType = ps.mimeType,
+                    sha256 = ps.sha256,
+                    favoriteEntity = favMatch,
+                    packStickerEntity = ps,
+                    isFavorited = favMatch != null
+                )
+            }
+        }
+        list
+    }
+
+    val displayedStickers = remember(effectiveTabKey, allUnified, favoriteStickers, packStickers, favoriteBySha) {
+        when {
+            effectiveTabKey == "all" -> allUnified
+            effectiveTabKey == "favorites" -> favoriteStickers.map { fav ->
+                UnifiedStickerEntry(
+                    key = "fav_${fav.stickerId}",
+                    localPath = fav.localPath,
+                    mimeType = fav.mimeType,
+                    sha256 = fav.sha256,
+                    favoriteEntity = fav,
+                    packStickerEntity = null,
+                    isFavorited = true
+                )
+            }
+            activePack != null -> packStickers
+                .filter { it.packId == activePack.packId }
+                .map { ps ->
+                    val favMatch = favoriteBySha[ps.sha256]
+                    UnifiedStickerEntry(
+                        key = "pack_${ps.stickerId}",
+                        localPath = ps.localPath,
+                        mimeType = ps.mimeType,
+                        sha256 = ps.sha256,
+                        favoriteEntity = favMatch,
+                        packStickerEntity = ps,
+                        isFavorited = favMatch != null
+                    )
+                }
+            else -> allUnified
+        }
+    }
 
     Surface(
         shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
@@ -97,53 +221,148 @@ fun StickersTrayContent(
             .testTag("stickers_tray")
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Row(
+            LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_sticker_smiley),
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Text(
-                        text = stringResource(R.string.favorite_stickers_title),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                item(key = "tab_all") {
+                    StickerFilterPill(
+                        label = stringResource(R.string.stickers_tab_all),
+                        badgeCount = allUnified.size.takeIf { it > 0 },
+                        selected = effectiveTabKey == "all",
+                        iconPath = null,
+                        leadingIconVector = null,
+                        onClick = { selectedTabKey = "all" },
+                        modifier = Modifier.testTag("stickers_tab_all")
                     )
                 }
-                if (favoriteStickers.isNotEmpty()) {
+                item(key = "tab_favorites") {
+                    StickerFilterPill(
+                        label = stringResource(R.string.stickers_tab_favorites),
+                        badgeCount = favoriteStickers.size.takeIf { it > 0 },
+                        selected = effectiveTabKey == "favorites",
+                        iconPath = null,
+                        leadingIconVector = Icons.Filled.Star,
+                        onClick = { selectedTabKey = "favorites" },
+                        modifier = Modifier.testTag("stickers_tab_favorites")
+                    )
+                }
+                items(stickerPacks, key = { "pack_${it.packId}" }) { pack ->
+                    val tabKey = "pack:${pack.packId}"
+                    StickerFilterPill(
+                        label = pack.name,
+                        badgeCount = null,
+                        selected = effectiveTabKey == tabKey,
+                        iconPath = pack.iconPath,
+                        leadingIconVector = null,
+                        onClick = { selectedTabKey = tabKey },
+                        onLongClick = { pendingRenamePack = pack },
+                        modifier = Modifier.testTag("stickers_tab_pack_${pack.packId}")
+                    )
+                }
+                item(key = "tab_import") {
                     Surface(
+                        onClick = {
+                            AppIconManager.suppressNextFlush()
+                            packArchivePickerLauncher.launch(arrayOf("*/*"))
+                        },
                         shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("stickers_import_pack_button")
                     ) {
-                        Text(
-                            text = favoriteStickers.size.toString(),
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Add,
+                                contentDescription = stringResource(R.string.stickers_import_btn),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = stringResource(R.string.stickers_import_btn),
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-            if (favoriteStickers.isEmpty()) {
+            if (activePack != null) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f))
+                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = activePack.name,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val metaLine = buildString {
+                            append(stringResource(R.string.stickers_pack_count, displayedStickers.size))
+                            if (activePack.author.isNotBlank()) {
+                                append(" · ")
+                                append(activePack.author)
+                            }
+                        }
+                        Text(
+                            text = metaLine,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { pendingRenamePack = activePack },
+                            modifier = Modifier.testTag("sticker_pack_rename_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Edit,
+                                contentDescription = stringResource(R.string.sticker_pack_rename_title),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = { pendingDeletePack = activePack },
+                            modifier = Modifier.testTag("sticker_pack_delete_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.DeleteOutline,
+                                contentDescription = stringResource(R.string.delete_message_action),
+                                tint = DangerCoral,
+                                modifier = Modifier.size(19.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (displayedStickers.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 28.dp),
+                        .padding(horizontal = 24.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
@@ -153,14 +372,14 @@ fun StickersTrayContent(
                         Surface(
                             shape = CircleShape,
                             color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            modifier = Modifier.size(52.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_sticker_smiley),
                                     contentDescription = null,
                                     tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(26.dp)
+                                    modifier = Modifier.size(24.dp)
                                 )
                             }
                         }
@@ -171,11 +390,33 @@ fun StickersTrayContent(
                             textAlign = TextAlign.Center
                         )
                         Text(
-                            text = stringResource(R.string.favorite_stickers_empty_body),
+                            text = if (effectiveTabKey == "favorites") {
+                                stringResource(R.string.favorite_stickers_empty_body)
+                            } else {
+                                stringResource(R.string.stickers_all_empty_body)
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
                         )
+                        if (effectiveTabKey == "all") {
+                            OutlinedButton(
+                                onClick = {
+                                    AppIconManager.suppressNextFlush()
+                                    packArchivePickerLauncher.launch(arrayOf("*/*"))
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.testTag("stickers_empty_import_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.stickers_import_btn))
+                            }
+                        }
                     }
                 }
             } else {
@@ -187,9 +428,9 @@ fun StickersTrayContent(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(
-                        items = favoriteStickers,
-                        key = { it.stickerId }
-                    ) { sticker ->
+                        items = displayedStickers,
+                        key = { it.key }
+                    ) { entry ->
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = MaterialTheme.colorScheme.surfaceContainer,
@@ -197,10 +438,16 @@ fun StickersTrayContent(
                                 .aspectRatio(1f)
                                 .clip(RoundedCornerShape(14.dp))
                                 .combinedClickable(
-                                    onClick = { onSendFavoriteSticker(sticker) },
-                                    onLongClick = { pendingDeleteSticker = sticker }
+                                    onClick = {
+                                        if (entry.favoriteEntity != null && entry.packStickerEntity == null) {
+                                            onSendFavoriteSticker(entry.favoriteEntity)
+                                        } else {
+                                            onSendStickerFile(entry.localPath, entry.mimeType)
+                                        }
+                                    },
+                                    onLongClick = { actionSticker = entry }
                                 )
-                                .testTag("favorite_sticker_item_${sticker.stickerId}")
+                                .testTag("sticker_grid_item_${entry.key}")
                         ) {
                             Box(
                                 modifier = Modifier
@@ -209,7 +456,7 @@ fun StickersTrayContent(
                                 contentAlignment = Alignment.Center
                             ) {
                                 AsyncImage(
-                                    model = File(sticker.localPath),
+                                    model = File(entry.localPath),
                                     contentDescription = stringResource(R.string.sticker_label),
                                     contentScale = ContentScale.Fit,
                                     modifier = Modifier.fillMaxSize()
@@ -222,29 +469,212 @@ fun StickersTrayContent(
         }
     }
 
-    pendingDeleteSticker?.let { target ->
+    actionSticker?.let { target ->
         AlertDialog(
-            onDismissRequest = { pendingDeleteSticker = null },
-            title = { Text(stringResource(R.string.remove_favorite_sticker_title)) },
+            onDismissRequest = { actionSticker = null },
+            title = { Text(stringResource(R.string.sticker_actions_title)) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.size(88.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AsyncImage(
+                                model = File(target.localPath),
+                                contentDescription = stringResource(R.string.sticker_label),
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            if (target.favoriteEntity != null && effectiveTabKey == "favorites") {
+                                onRemoveFavoriteSticker(target.favoriteEntity.stickerId)
+                            } else {
+                                onToggleFavoriteStickerFile(target.localPath, target.mimeType)
+                            }
+                            actionSticker = null
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            imageVector = if (target.isFavorited) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (target.isFavorited) {
+                                stringResource(R.string.remove_favorite_sticker_btn)
+                            } else {
+                                stringResource(R.string.sticker_add_favorite_btn)
+                            }
+                        )
+                    }
+
+                    if (target.packStickerEntity != null) {
+                        TextButton(
+                            onClick = {
+                                onRemovePackSticker(target.packStickerEntity.stickerId)
+                                actionSticker = null
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = DangerCoral),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.sticker_remove_from_pack_btn))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { actionSticker = null }) {
+                    Text(stringResource(R.string.close_btn))
+                }
+            }
+        )
+    }
+
+    pendingRenamePack?.let { pack ->
+        var draftName by remember(pack.packId) { mutableStateOf(pack.name) }
+        AlertDialog(
+            onDismissRequest = { pendingRenamePack = null },
+            title = { Text(stringResource(R.string.sticker_pack_rename_title)) },
+            text = {
+                OutlinedTextField(
+                    value = draftName,
+                    onValueChange = { draftName = it },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.sticker_pack_name_label)) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
             confirmButton = {
                 Button(
                     onClick = {
-                        onRemoveFavoriteSticker(target.stickerId)
-                        pendingDeleteSticker = null
+                        onRenameStickerPack(pack.packId, draftName)
+                        pendingRenamePack = null
                     },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = DangerCoral
-                    )
+                    enabled = draftName.isNotBlank()
                 ) {
-                    Text(stringResource(R.string.remove_favorite_sticker_btn))
+                    Text(stringResource(R.string.save_btn))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteSticker = null }) {
+                TextButton(onClick = { pendingRenamePack = null }) {
                     Text(stringResource(R.string.cancel_btn))
                 }
             }
         )
+    }
+
+    pendingDeletePack?.let { pack ->
+        AlertDialog(
+            onDismissRequest = { pendingDeletePack = null },
+            title = { Text(stringResource(R.string.sticker_pack_delete_title, pack.name)) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        onDeleteStickerPack(pack.packId)
+                        pendingDeletePack = null
+                        selectedTabKey = "all"
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = DangerCoral)
+                ) {
+                    Text(stringResource(R.string.delete_message_action))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeletePack = null }) {
+                    Text(stringResource(R.string.cancel_btn))
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun StickerFilterPill(
+    label: String,
+    badgeCount: Int?,
+    selected: Boolean,
+    iconPath: String?,
+    leadingIconVector: ImageVector?,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    val contentColor = if (selected) {
+        MaterialTheme.colorScheme.onPrimary
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    Surface(
+        shape = CircleShape,
+        color = containerColor,
+        contentColor = contentColor,
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .clip(CircleShape)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            if (!iconPath.isNullOrBlank() && File(iconPath).exists()) {
+                AsyncImage(
+                    model = File(iconPath),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                )
+            } else if (leadingIconVector != null) {
+                Icon(
+                    imageVector = leadingIconVector,
+                    contentDescription = null,
+                    modifier = Modifier.size(15.dp)
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (badgeCount != null) {
+                Text(
+                    text = badgeCount.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = contentColor.copy(alpha = 0.8f)
+                )
+            }
+        }
     }
 }
 

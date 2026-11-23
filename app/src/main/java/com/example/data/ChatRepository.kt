@@ -710,6 +710,12 @@ class ChatRepository(
     fun observeFavoriteStickers(): Flow<List<FavoriteStickerEntity>> =
         chatDao.observeFavoriteStickers()
 
+    fun observeStickerPacks(): Flow<List<StickerPackEntity>> =
+        chatDao.observeStickerPacks()
+
+    fun observePackStickers(): Flow<List<PackStickerEntity>> =
+        chatDao.observePackStickers()
+
     suspend fun isMessageStickerFavorited(message: MessageEntity): Boolean {
         if (message.type != MessageType.STICKER.name) return false
         val path = message.mediaLocalPath ?: return false
@@ -722,7 +728,12 @@ class ChatRepository(
     suspend fun toggleFavoriteSticker(message: MessageEntity): Boolean? {
         if (message.type != MessageType.STICKER.name) return null
         val path = message.mediaLocalPath ?: return null
-        val sourceFile = File(path)
+        val mime = message.mimeType?.takeIf { it.isNotBlank() } ?: "image/webp"
+        return toggleFavoriteStickerFile(path, mime)
+    }
+
+    suspend fun toggleFavoriteStickerFile(localPath: String, mimeType: String): Boolean? {
+        val sourceFile = File(localPath)
         if (!sourceFile.exists() || sourceFile.length() <= 0L) return null
         val sha256 = mediaStorage.computeFileSha256(sourceFile) ?: return null
         val existing = chatDao.getFavoriteStickerByHash(sha256)
@@ -731,7 +742,7 @@ class ChatRepository(
             mediaStorage.deleteMediaFile(existing.localPath)
             false
         } else {
-            val mime = message.mimeType?.takeIf { it.isNotBlank() } ?: "image/webp"
+            val mime = mimeType.takeIf { it.isNotBlank() } ?: "image/webp"
             val savedFile = mediaStorage.saveFavoriteStickerCopy(sourceFile, mime, sha256)
                 ?: return null
             chatDao.upsertFavoriteSticker(
@@ -753,12 +764,84 @@ class ChatRepository(
         mediaStorage.deleteMediaFile(existing.localPath)
     }
 
+    suspend fun importStickerPackArchive(
+        sourceFile: File,
+        customName: String? = null,
+        displayNameHint: String? = null
+    ): ImportedStickerPackResult? {
+        val imported = StickerPackArchiveHelper.importPackToDirectory(
+            file = sourceFile,
+            stickerPacksRootDir = mediaStorage.stickerPacksDir,
+            packNameOverride = customName,
+            displayNameHint = displayNameHint
+        ) ?: return null
+        chatDao.upsertStickerPack(imported.pack)
+        chatDao.insertPackStickers(imported.stickers)
+        return imported
+    }
+
+    suspend fun importStickerPackUri(
+        uri: Uri,
+        customName: String? = null
+    ): ImportedStickerPackResult? {
+        val staged = mediaStorage.stageSharedUriToCache(uri) ?: return null
+        return try {
+            importStickerPackArchive(
+                sourceFile = staged.localFile,
+                customName = customName,
+                displayNameHint = staged.fileName
+            )
+        } finally {
+            mediaStorage.clearSharedStagingFiles(listOf(staged.localFile))
+        }
+    }
+
+    suspend fun renameStickerPack(packId: String, newName: String) {
+        val clean = newName.trim().take(64)
+        if (clean.isEmpty()) return
+        chatDao.renameStickerPack(packId, clean)
+    }
+
+    suspend fun deleteStickerPack(packId: String) {
+        chatDao.deletePackStickersByPackId(packId)
+        chatDao.deleteStickerPackById(packId)
+        mediaStorage.deleteStickerPackDir(packId)
+    }
+
+    suspend fun removePackSticker(stickerId: String) {
+        val existing = chatDao.getPackStickerById(stickerId) ?: return
+        chatDao.deletePackStickerById(stickerId)
+        val pack = chatDao.getStickerPackById(existing.packId)
+        val remaining = chatDao.getPackStickersByPackId(existing.packId)
+        if (remaining.isEmpty()) {
+            chatDao.deleteStickerPackById(existing.packId)
+            mediaStorage.deleteStickerPackDir(existing.packId)
+            return
+        }
+        if (pack != null && pack.iconPath == existing.localPath) {
+            chatDao.upsertStickerPack(pack.copy(iconPath = remaining.first().localPath))
+        }
+        mediaStorage.deleteMediaFile(existing.localPath)
+    }
+
     suspend fun sendFavoriteSticker(
         peerId: String,
         sticker: FavoriteStickerEntity,
         replyTo: MessageEntity? = null
+    ): Boolean = sendSavedStickerFile(
+        peerId = peerId,
+        localPath = sticker.localPath,
+        mimeType = sticker.mimeType,
+        replyTo = replyTo
+    )
+
+    suspend fun sendSavedStickerFile(
+        peerId: String,
+        localPath: String,
+        mimeType: String,
+        replyTo: MessageEntity? = null
     ): Boolean {
-        val sourceFile = File(sticker.localPath)
+        val sourceFile = File(localPath)
         if (!sourceFile.exists() || sourceFile.length() <= 0L) return false
         val duplicated = mediaStorage.duplicateFileToPrivateMedia(
             sourceFile = sourceFile,
@@ -770,7 +853,7 @@ class ChatRepository(
             messageType = MessageType.STICKER,
             file = duplicated,
             fileName = duplicated.name,
-            mimeType = sticker.mimeType.ifBlank { "image/webp" },
+            mimeType = mimeType.ifBlank { "image/webp" },
             audioDurationMs = 0L,
             replyTo = replyTo
         )
@@ -1295,6 +1378,7 @@ class ChatRepository(
             nodeManager.disconnectPeer(peerId)
             chatDao.deleteAllMessagesForPeer(peerId)
             chatDao.deletePeer(peerId)
+            com.example.network.ChatsoSharingShortcuts.removeContactShortcut(appContext, peerId)
         } finally {
             deletingPeerIds.remove(peerId)
         }
