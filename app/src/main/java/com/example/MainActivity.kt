@@ -418,6 +418,7 @@ private fun ChatsoAuthenticatedShell(
     val isRunningBridgeTest by viewModel.isRunningBridgeTest.collectAsStateWithLifecycle()
     val pendingShare by viewModel.pendingIncomingShare.collectAsStateWithLifecycle()
     val pendingPackImport by viewModel.pendingPackImport.collectAsStateWithLifecycle()
+    val irohStatus by viewModel.irohStatus.collectAsStateWithLifecycle()
 
     var showDevTools by rememberSaveable { mutableStateOf(false) }
 
@@ -661,7 +662,9 @@ private fun ChatsoAuthenticatedShell(
                                 discoveredPeers = discoveredPeers,
                                 isScanning = isScanning,
                                 isConnecting = isConnecting,
+                                irohStatus = irohStatus,
                                 onConnectManualIp = viewModel::connectByManualIp,
+                                onConnectIroh = viewModel::connectByIroh,
                                 onConnectDiscoveredPeer = viewModel::connectToDiscoveredPeer,
                                 onConnectQrRaw = viewModel::connectFromQrString,
                                 onDecodeQrFromImage = viewModel::decodeQrFromGalleryUri,
@@ -734,7 +737,13 @@ private fun ChatsoAuthenticatedShell(
                                     isCheckingUpdates = updateUiState is UpdateUiState.Checking,
                                     onToggleDevMode = viewModel::setDevModeEnabled,
                                     onOpenDevTools = { showDevTools = true },
-                                    onToggleBridgeMode = viewModel::toggleBridgeMode
+                                    onToggleBridgeMode = viewModel::toggleBridgeMode,
+                                    irohStatus = irohStatus,
+                                    onChangeIrohMode = viewModel::setIrohRelayMode,
+                                    onSelectIrohPublicServer = viewModel::setIrohPublicRelayUrl,
+                                    onSaveIrohPrivateRelay = viewModel::setIrohPrivateRelayUrl,
+                                    onReconnectIroh = viewModel::reconnectIrohRelay,
+                                    onNotify = viewModel::postMessage
                                 )
                             }
                         }
@@ -937,7 +946,9 @@ private fun ChatsoAuthenticatedShell(
                                 discoveredPeers = discoveredPeers,
                                 isScanning = isScanning,
                                 isConnecting = isConnecting,
+                                irohStatus = irohStatus,
                                 onConnectManualIp = viewModel::connectByManualIp,
+                                onConnectIroh = viewModel::connectByIroh,
                                 onConnectDiscoveredPeer = viewModel::connectToDiscoveredPeer,
                                 onConnectQrRaw = viewModel::connectFromQrString,
                                 onDecodeQrFromImage = viewModel::decodeQrFromGalleryUri,
@@ -1005,7 +1016,13 @@ private fun ChatsoAuthenticatedShell(
                                         isCheckingUpdates = updateUiState is UpdateUiState.Checking,
                                         onToggleDevMode = viewModel::setDevModeEnabled,
                                         onOpenDevTools = { showDevTools = true },
-                                        onToggleBridgeMode = viewModel::toggleBridgeMode
+                                        onToggleBridgeMode = viewModel::toggleBridgeMode,
+                                        irohStatus = irohStatus,
+                                        onChangeIrohMode = viewModel::setIrohRelayMode,
+                                        onSelectIrohPublicServer = viewModel::setIrohPublicRelayUrl,
+                                        onSaveIrohPrivateRelay = viewModel::setIrohPrivateRelayUrl,
+                                        onReconnectIroh = viewModel::reconnectIrohRelay,
+                                        onNotify = viewModel::postMessage
                                     )
                                 }
                             }

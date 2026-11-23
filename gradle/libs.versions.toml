@@ -25,6 +25,7 @@ datastorePreferences = "1.1.7"
 robolectric = "4.16.1"
 zxingCore = "3.5.3"
 media3 = "1.11.1"
+irohKmp = "0.2.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -63,6 +64,7 @@ androidx-media3-transformer = { group = "androidx.media3", name = "media3-transf
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxingCore" }
+iroh-kmp = { group = "app.azula.iroh", name = "iroh-kmp", version.ref = "irohKmp" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

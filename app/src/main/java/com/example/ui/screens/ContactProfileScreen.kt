@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Lan
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -249,6 +250,32 @@ fun ContactProfileScreen(
                             }
                         }
                     }
+
+                    if (peer.irohNodeId.isNotBlank()) {
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            modifier = Modifier.testTag("contact_profile_iroh_badge")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Public,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = stringResource(R.string.iroh_via_relay_badge),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -307,16 +334,15 @@ fun ContactProfileScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(vertical = 6.dp, horizontal = 12.dp)) {
-                        val endpointText = if (peer.lastIp.isNotBlank()) {
-                            "${peer.lastIp}:${peer.lastPort}"
-                        } else if (peer.viaBridgePeerId.isNotBlank()) {
-                            if (!bridgePeerName.isNullOrBlank()) {
+                        val endpointText = when {
+                            peer.lastIp.isNotBlank() -> "${peer.lastIp}:${peer.lastPort}"
+                            peer.viaBridgePeerId.isNotBlank() -> if (!bridgePeerName.isNullOrBlank()) {
                                 "${stringResource(R.string.contact_via_bridge)} ($bridgePeerName)"
                             } else {
                                 stringResource(R.string.contact_via_bridge)
                             }
-                        } else {
-                            "—"
+                            peer.irohNodeId.isNotBlank() -> stringResource(R.string.contact_via_iroh)
+                            else -> "—"
                         }
                         ContactProfileInfoRow(
                             icon = Icons.Filled.Lan,
@@ -324,6 +350,30 @@ fun ContactProfileScreen(
                             value = endpointText,
                             monospace = true
                         )
+                        if (peer.irohNodeId.isNotBlank()) {
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+                            val irohDisplayValue = if (peer.irohRelayUrl.isNotBlank()) {
+                                "${peer.irohNodeId}\n${peer.irohRelayUrl}"
+                            } else {
+                                peer.irohNodeId
+                            }
+                            val irohCopyValue = if (peer.irohRelayUrl.isNotBlank()) {
+                                "${peer.irohNodeId}@${peer.irohRelayUrl}"
+                            } else {
+                                peer.irohNodeId
+                            }
+                            ContactProfileInfoRow(
+                                icon = Icons.Filled.Public,
+                                label = stringResource(R.string.contact_iroh_id_label),
+                                value = irohDisplayValue,
+                                monospace = true,
+                                onCopy = {
+                                    clipboard.copyText("Iroh Endpoint ID", irohCopyValue)
+                                    onNotify(copiedMsg)
+                                },
+                                rowTestTag = "contact_profile_iroh_row"
+                            )
+                        }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
                         ContactProfileInfoRow(
                             icon = Icons.Filled.Timer,

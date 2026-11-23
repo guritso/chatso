@@ -347,4 +347,37 @@
     <string name="sticker_add_favorite_btn">お気に入りに追加</string>
     <string name="sticker_remove_from_pack_btn">パックから削除</string>
     <string name="sticker_actions_title">スタンプ設定</string>
+
+    <string name="connect_iroh_tab">Iroh</string>
+    <string name="iroh_title">Iroh P2P リレー</string>
+    <string name="iroh_status_online">オンライン</string>
+    <string name="iroh_status_starting">接続中…</string>
+    <string name="iroh_status_disabled">オフ</string>
+    <string name="iroh_status_error">エラー</string>
+    <string name="iroh_your_id_label">あなたの Iroh ID</string>
+    <string name="iroh_active_relay_label">使用中のリレー</string>
+    <string name="iroh_peer_id_label">相手の Iroh ID・チケット・招待リンク</string>
+    <string name="iroh_peer_id_hint">Endpoint ID、iroh://…、chatso://…、id@relay を貼り付け</string>
+    <string name="iroh_relay_optional_label">相手のリレー URL（任意）</string>
+    <string name="iroh_relay_optional_hint">https://relay.example.com</string>
+    <string name="iroh_connect_hint">公開またはプライベート Iroh リレーを使い、VPN やポート開放なしでインターネット経由で接続します。</string>
+    <string name="iroh_invalid_input">有効な Iroh Endpoint ID、チケット、または招待リンクを入力してください。</string>
+    <string name="iroh_disabled_hint">Iroh リレーは無効です。設定 &gt; ネットワークで公開またはプライベートを有効にしてください。</string>
+    <string name="iroh_mode_section">Iroh リレー</string>
+    <string name="iroh_mode_desc">LAN/VPN の代替として NAT・ファイアウォール越えでインターネット接続します。</string>
+    <string name="iroh_mode_public">公開</string>
+    <string name="iroh_mode_private">プライベート</string>
+    <string name="iroh_mode_off">オフ</string>
+    <string name="iroh_public_server_label">公開リレーサーバー</string>
+    <string name="iroh_public_auto_label">自動（全公開サーバー）</string>
+    <string name="iroh_private_url_label">プライベートリレー URL</string>
+    <string name="iroh_private_url_hint">https://my-relay.example.com</string>
+    <string name="iroh_private_url_invalid">有効な http:// または https:// のリレー URL を入力してください。</string>
+    <string name="iroh_reconnect_btn">再接続</string>
+    <string name="iroh_qr_chip">Iroh リレー</string>
+    <string name="iroh_via_relay_badge">Iroh リレー経由</string>
+    <string name="msg_iroh_mode_updated">Iroh リレーを「%1$s」に設定しました。</string>
+    <string name="msg_iroh_private_saved">プライベート Iroh リレー URL を保存しました。</string>
+    <string name="contact_iroh_id_label">Iroh Endpoint ID</string>
+    <string name="contact_via_iroh">Iroh P2P リレー</string>
 </resources>

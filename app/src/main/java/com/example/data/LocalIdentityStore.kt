@@ -45,6 +45,11 @@ class LocalIdentityStore(
         val DEV_MODE_ENABLED = booleanPreferencesKey("dev_mode_enabled")
         val BRIDGE_ENABLED = booleanPreferencesKey("bridge_enabled")
         val INSTANCE_ID = stringPreferencesKey("instance_id")
+        val IROH_RELAY_MODE = stringPreferencesKey("iroh_relay_mode")
+        val IROH_PUBLIC_RELAY_URL = stringPreferencesKey("iroh_public_relay_url")
+        val IROH_PRIVATE_RELAY_URL = stringPreferencesKey("iroh_private_relay_url")
+        val IROH_SECRET_KEY = stringPreferencesKey("iroh_secret_key_b64")
+        val IROH_ENDPOINT_ID = stringPreferencesKey("iroh_endpoint_id")
     }
 
     val identityFlow: Flow<LocalIdentity> = store.data.map { prefs ->
@@ -52,6 +57,8 @@ class LocalIdentityStore(
         val theme = ThemeMode.entries.firstOrNull { it.name == themeStr } ?: ThemeMode.SYSTEM
         val palette = ThemePalette.fromName(prefs[Keys.THEME_PALETTE])
         val lang = AppLanguage.fromCode(prefs[Keys.LANGUAGE])
+        val irohModeStr = prefs[Keys.IROH_RELAY_MODE] ?: IrohRelayMode.PUBLIC.name
+        val irohMode = IrohRelayMode.entries.firstOrNull { it.name == irohModeStr } ?: IrohRelayMode.PUBLIC
         LocalIdentity(
             isInitialized = prefs[Keys.INITIALIZED] ?: false,
             username = prefs[Keys.USERNAME] ?: "",
@@ -72,7 +79,12 @@ class LocalIdentityStore(
             batteryPromptDismissed = prefs[Keys.BATTERY_PROMPT_DISMISSED] ?: false,
             devModeEnabled = prefs[Keys.DEV_MODE_ENABLED] ?: false,
             bridgeEnabled = prefs[Keys.BRIDGE_ENABLED] ?: false,
-            instanceId = prefs[Keys.INSTANCE_ID] ?: ""
+            instanceId = prefs[Keys.INSTANCE_ID] ?: "",
+            irohRelayMode = irohMode,
+            irohPublicRelayUrl = prefs[Keys.IROH_PUBLIC_RELAY_URL] ?: "",
+            irohPrivateRelayUrl = prefs[Keys.IROH_PRIVATE_RELAY_URL] ?: "",
+            irohSecretKeyBase64 = prefs[Keys.IROH_SECRET_KEY] ?: "",
+            irohEndpointId = prefs[Keys.IROH_ENDPOINT_ID] ?: ""
         )
     }
 
@@ -82,6 +94,22 @@ class LocalIdentityStore(
             val current = prefs[Keys.INSTANCE_ID]
             resolved = if (current.isNullOrBlank()) {
                 generateInstanceId().also { prefs[Keys.INSTANCE_ID] = it }
+            } else {
+                current
+            }
+            if ((prefs[Keys.IROH_SECRET_KEY] ?: "").isBlank()) {
+                prefs[Keys.IROH_SECRET_KEY] = generateIrohSecretKeyBase64()
+            }
+        }
+        return resolved
+    }
+
+    suspend fun ensureIrohSecretKeyBase64(): String {
+        var resolved = ""
+        store.edit { prefs ->
+            val current = prefs[Keys.IROH_SECRET_KEY]
+            resolved = if (current.isNullOrBlank()) {
+                generateIrohSecretKeyBase64().also { prefs[Keys.IROH_SECRET_KEY] = it }
             } else {
                 current
             }
@@ -117,6 +145,12 @@ class LocalIdentityStore(
             prefs[Keys.QR_INVITE_TOKEN] = inviteToken
             if ((prefs[Keys.INSTANCE_ID] ?: "").isBlank()) {
                 prefs[Keys.INSTANCE_ID] = generateInstanceId()
+            }
+            if ((prefs[Keys.IROH_SECRET_KEY] ?: "").isBlank()) {
+                prefs[Keys.IROH_SECRET_KEY] = generateIrohSecretKeyBase64()
+            }
+            if ((prefs[Keys.IROH_RELAY_MODE] ?: "").isBlank()) {
+                prefs[Keys.IROH_RELAY_MODE] = IrohRelayMode.PUBLIC.name
             }
             if (prefs[Keys.BACKGROUND_CONN_ENABLED] == null) {
                 prefs[Keys.BACKGROUND_CONN_ENABLED] = true
@@ -215,6 +249,34 @@ class LocalIdentityStore(
         }
     }
 
+    suspend fun setIrohRelayMode(mode: IrohRelayMode) {
+        store.edit { prefs ->
+            prefs[Keys.IROH_RELAY_MODE] = mode.name
+        }
+    }
+
+    suspend fun setIrohPublicRelayUrl(url: String) {
+        store.edit { prefs ->
+            prefs[Keys.IROH_PUBLIC_RELAY_URL] = url.trim()
+        }
+    }
+
+    suspend fun setIrohPrivateRelayUrl(url: String) {
+        store.edit { prefs ->
+            prefs[Keys.IROH_PRIVATE_RELAY_URL] = url.trim()
+        }
+    }
+
+    suspend fun setIrohEndpointIdCache(endpointId: String) {
+        val clean = endpointId.trim()
+        if (clean.isBlank()) return
+        store.edit { prefs ->
+            if (prefs[Keys.IROH_ENDPOINT_ID] != clean) {
+                prefs[Keys.IROH_ENDPOINT_ID] = clean
+            }
+        }
+    }
+
     private fun generateInviteToken(): String {
         return Base64.encodeToString(
             CryptoEngine.randomBytes(12),
@@ -226,6 +288,13 @@ class LocalIdentityStore(
         return Base64.encodeToString(
             CryptoEngine.randomBytes(16),
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+        )
+    }
+
+    private fun generateIrohSecretKeyBase64(): String {
+        return Base64.encodeToString(
+            CryptoEngine.randomBytes(32),
+            Base64.NO_WRAP
         )
     }
 }

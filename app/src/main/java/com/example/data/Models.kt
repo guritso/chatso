@@ -160,6 +160,49 @@ object ReactionCodec {
     }
 }
 
+enum class IrohRelayMode {
+    PUBLIC,
+    PRIVATE,
+    DISABLED
+}
+
+data class IrohPublicRelayServer(
+    val id: String,
+    val label: String,
+    val url: String
+)
+
+object IrohPublicRelays {
+    const val AUTO_URL = ""
+
+    val servers: List<IrohPublicRelayServer> = listOf(
+        IrohPublicRelayServer("auto", "Auto (n0 Public Relays)", AUTO_URL),
+        IrohPublicRelayServer("use1", "US East (use1-1)", "https://use1-1.relay.iroh.network"),
+        IrohPublicRelayServer("euc1", "EU Central (euc1-1)", "https://euc1-1.relay.iroh.network"),
+        IrohPublicRelayServer("euw1", "EU West (euw1-1)", "https://euw1-1.relay.iroh.network"),
+        IrohPublicRelayServer("aps1", "Asia Pacific (aps1-1)", "https://aps1-1.relay.iroh.network")
+    )
+}
+
+enum class IrohRelayState {
+    DISABLED,
+    STARTING,
+    ONLINE,
+    ERROR
+}
+
+data class IrohRelayStatus(
+    val mode: IrohRelayMode = IrohRelayMode.PUBLIC,
+    val state: IrohRelayState = IrohRelayState.DISABLED,
+    val endpointId: String = "",
+    val activeRelayUrl: String = "",
+    val configuredRelayUrl: String = "",
+    val errorMessage: String = ""
+) {
+    val isOnline: Boolean
+        get() = state == IrohRelayState.ONLINE && endpointId.isNotBlank()
+}
+
 data class LocalIdentity(
     val isInitialized: Boolean = false,
     val username: String = "",
@@ -180,7 +223,12 @@ data class LocalIdentity(
     val batteryPromptDismissed: Boolean = false,
     val devModeEnabled: Boolean = false,
     val bridgeEnabled: Boolean = false,
-    val instanceId: String = ""
+    val instanceId: String = "",
+    val irohRelayMode: IrohRelayMode = IrohRelayMode.PUBLIC,
+    val irohPublicRelayUrl: String = "",
+    val irohPrivateRelayUrl: String = "",
+    val irohSecretKeyBase64: String = "",
+    val irohEndpointId: String = ""
 ) {
     companion object {
         const val DEFAULT_TCP_PORT = 42850

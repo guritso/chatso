@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ImageSearch
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Radar
@@ -60,6 +61,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -88,13 +90,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.R
 import com.example.data.DiscoveredPeer
+import com.example.data.IrohRelayMode
+import com.example.data.IrohRelayState
+import com.example.data.IrohRelayStatus
 import com.example.data.LocalIdentity
 import com.example.data.NetworkEndpointInfo
+import com.example.network.IrohRelayUrlUtils
 import com.example.network.QrCodeHelper
 import com.example.ui.components.ChatsoAvatar
 import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.example.ui.theme.OnlineEmerald
 import com.example.ui.theme.StealthIndigo
+import com.example.ui.theme.WarningAmber
 import java.util.concurrent.Executors
 
 @Composable
@@ -105,7 +112,9 @@ fun ConnectScreen(
     discoveredPeers: List<DiscoveredPeer>,
     isScanning: Boolean,
     isConnecting: Boolean,
+    irohStatus: IrohRelayStatus = IrohRelayStatus(),
     onConnectManualIp: (ip: String, port: String) -> Unit,
+    onConnectIroh: (input: String, relayUrl: String) -> Unit = { _, _ -> },
     onConnectDiscoveredPeer: (DiscoveredPeer) -> Unit,
     onConnectQrRaw: (String) -> Unit,
     onDecodeQrFromImage: (Uri) -> Unit,
@@ -119,6 +128,7 @@ fun ConnectScreen(
     val modes = listOf(
         stringResource(R.string.connect_lan_tab),
         stringResource(R.string.connect_qr_tab),
+        stringResource(R.string.connect_iroh_tab),
         stringResource(R.string.connect_manual_tab)
     )
 
@@ -177,12 +187,20 @@ fun ConnectScreen(
                 identity = identity,
                 endpoints = endpoints,
                 boundPort = boundPort,
+                irohStatus = irohStatus,
                 onConnectQrRaw = onConnectQrRaw,
                 onDecodeQrFromImage = onDecodeQrFromImage,
                 onRotateQrToken = onRotateQrToken,
                 onNotify = onNotify
             )
-            2 -> ManualIpConnectPane(
+            2 -> IrohRelayConnectPane(
+                identity = identity,
+                irohStatus = irohStatus,
+                isConnecting = isConnecting,
+                onConnectIroh = onConnectIroh,
+                onNotify = onNotify
+            )
+            3 -> ManualIpConnectPane(
                 endpoints = endpoints,
                 boundPort = boundPort,
                 isConnecting = isConnecting,
@@ -395,6 +413,7 @@ private fun QrConnectPane(
     identity: LocalIdentity,
     endpoints: List<NetworkEndpointInfo>,
     boundPort: Int,
+    irohStatus: IrohRelayStatus,
     onConnectQrRaw: (String) -> Unit,
     onDecodeQrFromImage: (Uri) -> Unit,
     onRotateQrToken: () -> Unit,
@@ -405,9 +424,25 @@ private fun QrConnectPane(
     var showScanner by rememberSaveable { mutableStateOf(false) }
     var pastedInviteText by rememberSaveable { mutableStateOf("") }
     var selectedIpIndex by rememberSaveable { mutableIntStateOf(0) }
-    val activeIp = endpoints.getOrNull(selectedIpIndex)?.ipAddress
-        ?: endpoints.firstOrNull()?.ipAddress
-        ?: "127.0.0.1"
+
+    val localIrohId = if (irohStatus.mode != IrohRelayMode.DISABLED) {
+        irohStatus.endpointId.ifBlank { identity.irohEndpointId }
+    } else {
+        ""
+    }
+    val localIrohRelay = if (irohStatus.mode != IrohRelayMode.DISABLED) {
+        irohStatus.activeRelayUrl.ifBlank { irohStatus.configuredRelayUrl }
+    } else {
+        ""
+    }
+    val irohOnlySelected = selectedIpIndex == -1 && localIrohId.isNotBlank()
+    val activeIp = if (irohOnlySelected) {
+        ""
+    } else {
+        endpoints.getOrNull(selectedIpIndex)?.ipAddress
+            ?: endpoints.firstOrNull()?.ipAddress
+            ?: if (localIrohId.isNotBlank()) "" else "127.0.0.1"
+    }
 
     val inviteUri = remember(
         activeIp,
@@ -415,15 +450,19 @@ private fun QrConnectPane(
         identity.publicKeyBase64,
         identity.username,
         identity.qrInviteToken,
-        identity.instanceId
+        identity.instanceId,
+        localIrohId,
+        localIrohRelay
     ) {
         QrCodeHelper.buildInviteUri(
             ip = activeIp,
-            port = boundPort,
+            port = if (activeIp.isNotBlank()) boundPort else 0,
             publicKeyBase64 = identity.publicKeyBase64,
             username = identity.username,
             inviteToken = identity.qrInviteToken,
-            instanceId = identity.instanceId
+            instanceId = identity.instanceId,
+            irohNodeId = localIrohId,
+            irohRelayUrl = localIrohRelay
         )
     }
 
@@ -518,16 +557,22 @@ private fun QrConnectPane(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "$activeIp:$boundPort",
+                        text = if (activeIp.isNotBlank()) {
+                            "$activeIp:$boundPort"
+                        } else if (localIrohId.isNotBlank()) {
+                            IrohRelayUrlUtils.shortEndpointId(localIrohId)
+                        } else {
+                            "—"
+                        },
                         fontFamily = JetBrainsMonoFontFamily,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
 
-                    if (endpoints.size > 1) {
+                    if (endpoints.size > 1 || (endpoints.isNotEmpty() && localIrohId.isNotBlank())) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            endpoints.take(3).forEachIndexed { idx, ep ->
+                            endpoints.take(2).forEachIndexed { idx, ep ->
                                 FilterChip(
                                     selected = selectedIpIndex == idx,
                                     onClick = { selectedIpIndex = idx },
@@ -538,6 +583,20 @@ private fun QrConnectPane(
                                             softWrap = false
                                         )
                                     }
+                                )
+                            }
+                            if (localIrohId.isNotBlank()) {
+                                FilterChip(
+                                    selected = irohOnlySelected,
+                                    onClick = { selectedIpIndex = -1 },
+                                    label = {
+                                        Text(
+                                            text = stringResource(R.string.iroh_qr_chip),
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("qr_iroh_only_chip")
                                 )
                             }
                         }
@@ -894,6 +953,256 @@ private fun ManualIpConnectPane(
                         clipboard.copyText("Chatso IP", preferredAddr)
                         onNotify(copiedMsg)
                     }
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.ContentCopy,
+                        contentDescription = stringResource(R.string.copy_btn)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun IrohRelayConnectPane(
+    identity: LocalIdentity,
+    irohStatus: IrohRelayStatus,
+    isConnecting: Boolean,
+    onConnectIroh: (input: String, relayUrl: String) -> Unit,
+    onNotify: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val clipboard = rememberClipboard()
+    var peerInput by rememberSaveable { mutableStateOf("") }
+    var relayUrlInput by rememberSaveable { mutableStateOf("") }
+    val copiedMsg = stringResource(R.string.msg_copied)
+    val emptyClipboardMsg = stringResource(R.string.msg_clipboard_empty)
+
+    val localEndpointId = irohStatus.endpointId.ifBlank { identity.irohEndpointId }
+    val activeRelay = irohStatus.activeRelayUrl.ifBlank { irohStatus.configuredRelayUrl }
+    val (statusLabel, statusColor) = when (irohStatus.state) {
+        IrohRelayState.ONLINE -> stringResource(R.string.iroh_status_online) to OnlineEmerald
+        IrohRelayState.STARTING -> stringResource(R.string.iroh_status_starting) to WarningAmber
+        IrohRelayState.ERROR -> stringResource(R.string.iroh_status_error) to MaterialTheme.colorScheme.error
+        IrohRelayState.DISABLED -> stringResource(R.string.iroh_status_disabled) to MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Card(
+            shape = MaterialTheme.shapes.large,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Filled.Public,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.iroh_title),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = statusColor.copy(alpha = 0.14f),
+                        modifier = Modifier.testTag("connect_iroh_status_badge")
+                    ) {
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = statusColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = if (irohStatus.mode == IrohRelayMode.DISABLED) {
+                        stringResource(R.string.iroh_disabled_hint)
+                    } else {
+                        stringResource(R.string.iroh_connect_hint)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (irohStatus.mode == IrohRelayMode.DISABLED) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+
+                if (irohStatus.state == IrohRelayState.ERROR && irohStatus.errorMessage.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = irohStatus.errorMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = peerInput,
+                    onValueChange = { peerInput = it.trim() },
+                    label = { Text(stringResource(R.string.iroh_peer_id_label)) },
+                    placeholder = { Text(stringResource(R.string.iroh_peer_id_hint)) },
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
+                    trailingIcon = {
+                        IconButton(
+                            onClick = {
+                                val clipText = clipboard.primaryClip
+                                    ?.takeIf { it.itemCount > 0 }
+                                    ?.getItemAt(0)
+                                    ?.coerceToText(context)
+                                    ?.toString()
+                                    ?.trim()
+                                    .orEmpty()
+                                if (clipText.isBlank()) {
+                                    onNotify(emptyClipboardMsg)
+                                } else {
+                                    peerInput = clipText
+                                }
+                            },
+                            modifier = Modifier
+                                .minimumInteractiveComponentSize()
+                                .testTag("connect_iroh_paste_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.ContentPaste,
+                                contentDescription = stringResource(R.string.paste_btn)
+                            )
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("connect_iroh_input")
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = relayUrlInput,
+                    onValueChange = { relayUrlInput = it.trim() },
+                    label = { Text(stringResource(R.string.iroh_relay_optional_label)) },
+                    placeholder = { Text(stringResource(R.string.iroh_relay_optional_hint)) },
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("connect_iroh_relay_input")
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = { onConnectIroh(peerInput, relayUrlInput) },
+                    enabled = !isConnecting &&
+                        peerInput.isNotBlank() &&
+                        irohStatus.mode != IrohRelayMode.DISABLED,
+                    shape = MaterialTheme.shapes.medium,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("connect_iroh_button")
+                ) {
+                    if (isConnecting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.connecting_btn),
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    } else {
+                        Icon(imageVector = Icons.Filled.Public, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.connect_btn),
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    }
+                }
+            }
+        }
+
+        Card(
+            shape = MaterialTheme.shapes.medium,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.iroh_your_id_label),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = localEndpointId.ifBlank { "—" },
+                        fontFamily = JetBrainsMonoFontFamily,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("connect_iroh_local_id")
+                    )
+                    if (activeRelay.isNotBlank()) {
+                        Text(
+                            text = "${stringResource(R.string.iroh_active_relay_label)}: $activeRelay",
+                            fontFamily = JetBrainsMonoFontFamily,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                IconButton(
+                    enabled = localEndpointId.isNotBlank(),
+                    onClick = {
+                        val copyPayload = if (irohStatus.mode == IrohRelayMode.PRIVATE && activeRelay.isNotBlank()) {
+                            "$localEndpointId@$activeRelay"
+                        } else {
+                            localEndpointId
+                        }
+                        clipboard.copyText("Chatso Iroh ID", copyPayload)
+                        onNotify(copiedMsg)
+                    },
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .testTag("connect_iroh_copy_id_button")
                 ) {
                     Icon(
                         imageVector = Icons.Filled.ContentCopy,

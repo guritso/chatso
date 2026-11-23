@@ -6,6 +6,9 @@ import com.example.R
 import com.example.crypto.CryptoEngine
 import com.example.media.VideoCompressor
 import com.example.network.DiscoveryManager
+import com.example.network.IrohRelayUrlUtils
+import com.example.network.IrohTransport
+import com.example.network.NativeIrohTransport
 import com.example.network.NetworkUtils
 import com.example.network.P2PEventListener
 import com.example.network.P2PNodeManager
@@ -41,12 +44,14 @@ class ChatRepository(
     private val chatDao: ChatDao,
     val identityStore: LocalIdentityStore,
     val mediaStorage: MediaStorageHelper,
-    private val isAppInForegroundProvider: () -> Boolean = { true }
+    private val isAppInForegroundProvider: () -> Boolean = { true },
+    irohTransport: IrohTransport = NativeIrohTransport()
 ) : P2PEventListener {
 
     private val appContext = context.applicationContext
     val discoveryManager = DiscoveryManager(appContext, scope)
-    val nodeManager = P2PNodeManager(scope, discoveryManager, this)
+    val nodeManager = P2PNodeManager(scope, discoveryManager, this, irohTransport)
+    val irohStatus: StateFlow<IrohRelayStatus> = nodeManager.irohStatus
 
     val allPeersFlow: Flow<List<PeerEntity>> = chatDao.observeAllPeers()
 
@@ -143,6 +148,18 @@ class ChatRepository(
             }
         }
         scope.launch(Dispatchers.IO) {
+            var wasIrohOnline = false
+            nodeManager.irohStatus.collect { status ->
+                if (status.isOnline && status.endpointId.isNotBlank()) {
+                    runCatching { identityStore.setIrohEndpointIdCache(status.endpointId) }
+                    if (!wasIrohOnline && identityStore.getSnapshot().isInitialized) {
+                        autoConnectActiveChats(force = true)
+                    }
+                }
+                wasIrohOnline = status.isOnline
+            }
+        }
+        scope.launch(Dispatchers.IO) {
             while (isActive) {
                 cleanupExpiredMessages()
                 delay(1000L)
@@ -151,7 +168,9 @@ class ChatRepository(
         autoConnectJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(12_000L)
-                if (identityStore.getSnapshot().isInitialized && nodeManager.serverRunning.value) {
+                if (identityStore.getSnapshot().isInitialized &&
+                    (nodeManager.serverRunning.value || nodeManager.irohStatus.value.isOnline)
+                ) {
                     autoConnectActiveChats(force = false)
                 }
             }
@@ -335,6 +354,28 @@ class ChatRepository(
         )
     }
 
+    suspend fun connectViaIroh(
+        targetEndpointId: String,
+        targetRelayUrl: String = "",
+        expectedPubKeyBase64: String = "",
+        inviteToken: String = "",
+        expectedInstanceId: String = ""
+    ): Result<String> {
+        return nodeManager.connectViaIroh(
+            targetEndpointId = targetEndpointId,
+            targetRelayUrl = targetRelayUrl,
+            expectedPubKeyBase64 = expectedPubKeyBase64,
+            inviteToken = inviteToken,
+            expectedInstanceId = expectedInstanceId
+        )
+    }
+
+    suspend fun reconnectIrohRelay() {
+        nodeManager.reconnectIrohRelay()
+    }
+
+    fun parseIrohTicket(raw: String): Pair<String, String>? = nodeManager.parseIrohTicket(raw)
+
     fun isDevSimulatedOnline(peerId: String): Boolean =
         peerId.startsWith(DEV_FAKE_PEER_PREFIX) && _devOnlineFakePeers.value.contains(peerId)
 
@@ -448,22 +489,43 @@ class ChatRepository(
             }
 
             if (peer != null && peer.lastIp.isNotBlank() && peer.lastPort in 1..65535 && peer.viaBridgePeerId.isNotBlank()) {
-                return@withLock finalizeAttempt(
-                    nodeManager.connectToPeer(
+                if (nodeManager.connectToPeer(
                         host = peer.lastIp,
                         port = peer.lastPort,
                         expectedPubKeyBase64 = peer.publicKeyBase64,
                         isAutoReconnect = isAutoReconnect,
                         expectedInstanceId = peer.instanceId
                     ).isSuccess
-                )
+                ) {
+                    return@withLock finalizeAttempt(true)
+                }
+            }
+
+            if (peer != null &&
+                peer.irohNodeId.isNotBlank() &&
+                identityStore.getSnapshot().irohRelayMode != IrohRelayMode.DISABLED
+            ) {
+                if (nodeManager.connectViaIroh(
+                        targetEndpointId = peer.irohNodeId,
+                        targetRelayUrl = peer.irohRelayUrl,
+                        expectedPubKeyBase64 = peer.publicKeyBase64,
+                        isAutoReconnect = isAutoReconnect,
+                        expectedInstanceId = peer.instanceId
+                    ).isSuccess
+                ) {
+                    return@withLock finalizeAttempt(true)
+                }
             }
             false
         }
     }
 
     suspend fun autoConnectActiveChats(force: Boolean = false) {
-        if (!identityStore.getSnapshot().isInitialized || !nodeManager.serverRunning.value) return
+        if (!identityStore.getSnapshot().isInitialized ||
+            (!nodeManager.serverRunning.value && !nodeManager.irohStatus.value.isOnline)
+        ) {
+            return
+        }
         val savedPeers = chatDao.getAllPeersOnce()
             .filter { peer ->
                 !peer.peerId.startsWith(DEV_FAKE_PEER_PREFIX) &&
@@ -482,7 +544,8 @@ class ChatRepository(
             val hasDirectEndpoint = peer.viaBridgePeerId.isBlank() && peer.lastIp.isNotBlank() && peer.lastPort in 1..65535
             val hasBridgeRoute = peer.viaBridgePeerId.isNotBlank() &&
                 nodeManager.connectedPeers.value.contains(peer.viaBridgePeerId)
-            if (!hasDirectEndpoint && !hasBridgeRoute) continue
+            val hasIrohEndpoint = peer.irohNodeId.isNotBlank() && nodeManager.irohStatus.value.isOnline
+            if (!hasDirectEndpoint && !hasBridgeRoute && !hasIrohEndpoint) continue
 
             val lastAttempt = lastAutoConnectAttemptMs[peer.peerId] ?: 0L
             if (!force && now - lastAttempt < 10_000L) continue
@@ -500,7 +563,9 @@ class ChatRepository(
         }
         if (nodeManager.connectedPeers.value.contains(targetPeerId)) return true
         val peer = chatDao.getPeerById(targetPeerId) ?: return false
-        if (peer.publicKeyBase64.isBlank() || peer.lastIp.isBlank() || peer.lastPort !in 1..65535) {
+        val hasTcp = peer.lastIp.isNotBlank() && peer.lastPort in 1..65535
+        val hasIroh = peer.irohNodeId.isNotBlank() && identityStore.getSnapshot().irohRelayMode != IrohRelayMode.DISABLED
+        if (peer.publicKeyBase64.isBlank() || (!hasTcp && !hasIroh)) {
             return false
         }
         val mutex = connectMutexByPeer.computeIfAbsent(targetPeerId) { Mutex() }
@@ -508,13 +573,26 @@ class ChatRepository(
             if (deletingPeerIds.contains(targetPeerId)) return@withLock false
             if (nodeManager.connectedPeers.value.contains(targetPeerId)) return@withLock true
             val startGen = deleteGenerationByPeer[targetPeerId]?.get() ?: 0L
-            val ok = nodeManager.connectToPeer(
-                host = peer.lastIp,
-                port = peer.lastPort,
-                expectedPubKeyBase64 = peer.publicKeyBase64,
-                isAutoReconnect = isAutoReconnect,
-                expectedInstanceId = peer.instanceId
-            ).isSuccess
+            var ok = if (hasTcp) {
+                nodeManager.connectToPeer(
+                    host = peer.lastIp,
+                    port = peer.lastPort,
+                    expectedPubKeyBase64 = peer.publicKeyBase64,
+                    isAutoReconnect = isAutoReconnect,
+                    expectedInstanceId = peer.instanceId
+                ).isSuccess
+            } else {
+                false
+            }
+            if (!ok && hasIroh) {
+                ok = nodeManager.connectViaIroh(
+                    targetEndpointId = peer.irohNodeId,
+                    targetRelayUrl = peer.irohRelayUrl,
+                    expectedPubKeyBase64 = peer.publicKeyBase64,
+                    isAutoReconnect = isAutoReconnect,
+                    expectedInstanceId = peer.instanceId
+                ).isSuccess
+            }
             if (!ok) return@withLock false
             val endGen = deleteGenerationByPeer[targetPeerId]?.get() ?: 0L
             if (endGen != startGen || deletingPeerIds.contains(targetPeerId) || chatDao.getPeerById(targetPeerId) == null) {
@@ -1430,7 +1508,9 @@ class ChatRepository(
         username: String,
         avatarBase64: String?,
         viaBridgePeerId: String,
-        remoteInstanceId: String
+        remoteInstanceId: String,
+        remoteIrohId: String,
+        remoteIrohRelayUrl: String
     ) {
         if (deletingPeerIds.contains(peerId) || transientTestPeerIds.contains(peerId)) return
         if (chatDao.getPeerById(peerId) == null) return
@@ -1444,7 +1524,9 @@ class ChatRepository(
             viaBridgePeerId = viaBridgePeerId,
             remoteInstanceId = remoteInstanceId,
             isInviteAuthorized = false,
-            allowRestoreDismissed = false
+            allowRestoreDismissed = false,
+            remoteIrohId = remoteIrohId,
+            remoteIrohRelayUrl = remoteIrohRelayUrl
         )
     }
 
@@ -1481,7 +1563,9 @@ class ChatRepository(
         viaBridgePeerId: String,
         remoteInstanceId: String,
         isInviteAuthorized: Boolean,
-        allowRestoreDismissed: Boolean
+        allowRestoreDismissed: Boolean,
+        remoteIrohId: String,
+        remoteIrohRelayUrl: String
     ) {
         if (deletingPeerIds.contains(peerId) || transientTestPeerIds.contains(peerId)) return
         val existing = chatDao.getPeerById(peerId)
@@ -1514,7 +1598,23 @@ class ChatRepository(
             existing.publicKeyBase64 != publicKeyBase64
         val identityAlert = keyChanged || (instanceChanged && !isInviteAuthorized)
 
-        val resolvedName = if (username.isNotBlank() && username != remoteIp) {
+        val resolvedIp = if (remoteIp.isNotBlank()) remoteIp else existing?.lastIp.orEmpty()
+        val resolvedPort = if (remoteIp.isNotBlank() && remoteListenPort in 1..65535) {
+            remoteListenPort
+        } else {
+            existing?.lastPort ?: LocalIdentity.DEFAULT_TCP_PORT
+        }
+        val resolvedIrohId = remoteIrohId.ifBlank { existing?.irohNodeId.orEmpty() }
+        val resolvedIrohRelay = remoteIrohRelayUrl.ifBlank { existing?.irohRelayUrl.orEmpty() }
+        val isFallbackIrohName = resolvedIrohId.isNotBlank() &&
+            (username == IrohRelayUrlUtils.shortEndpointId(resolvedIrohId) || username == resolvedIrohId)
+
+        val resolvedName = if (
+            username.isNotBlank() &&
+            username != remoteIp &&
+            username != "Iroh Peer" &&
+            !isFallbackIrohName
+        ) {
             username
         } else {
             existing?.username ?: username.ifBlank { "P2P Contact" }
@@ -1527,8 +1627,8 @@ class ChatRepository(
             publicKeyBase64 = publicKeyBase64,
             fingerprint = CryptoEngine.formatFingerprintFromBase64(publicKeyBase64),
             avatarPath = avatarPath,
-            lastIp = remoteIp,
-            lastPort = remoteListenPort,
+            lastIp = resolvedIp,
+            lastPort = resolvedPort,
             isVerified = if (keyChanged || (instanceChanged && !isInviteAuthorized)) false else (existing?.isVerified ?: false),
             peerVerifiedMe = if (keyChanged || (instanceChanged && !isInviteAuthorized)) false else (existing?.peerVerifiedMe ?: false),
             keyChangedWarning = identityAlert,
@@ -1538,7 +1638,9 @@ class ChatRepository(
             lastActivityAt = existing?.lastActivityAt ?: System.currentTimeMillis(),
             unreadCount = existing?.unreadCount ?: 0,
             viaBridgePeerId = viaBridgePeerId,
-            instanceId = resolvedInstanceId
+            instanceId = resolvedInstanceId,
+            irohNodeId = resolvedIrohId,
+            irohRelayUrl = resolvedIrohRelay
         )
         chatDao.upsertPeer(updated)
         if (!peerId.startsWith(DEV_FAKE_PEER_PREFIX)) {

@@ -347,4 +347,37 @@
     <string name="sticker_add_favorite_btn">Añadir a favoritas</string>
     <string name="sticker_remove_from_pack_btn">Quitar del paquete</string>
     <string name="sticker_actions_title">Opciones de sticker</string>
+
+    <string name="connect_iroh_tab">Iroh</string>
+    <string name="iroh_title">Relay P2P Iroh</string>
+    <string name="iroh_status_online">En línea</string>
+    <string name="iroh_status_starting">Conectando…</string>
+    <string name="iroh_status_disabled">Apagado</string>
+    <string name="iroh_status_error">Error</string>
+    <string name="iroh_your_id_label">Tu ID de Iroh</string>
+    <string name="iroh_active_relay_label">Relay activo</string>
+    <string name="iroh_peer_id_label">ID de Iroh, ticket o enlace de invitación</string>
+    <string name="iroh_peer_id_hint">Pega Endpoint ID, iroh://…, chatso://… o id@relay</string>
+    <string name="iroh_relay_optional_label">URL del relay del contacto (opcional)</string>
+    <string name="iroh_relay_optional_hint">https://relay.ejemplo.com</string>
+    <string name="iroh_connect_hint">Funciona por internet sin VPN ni abrir puertos usando relays públicos o privados de Iroh.</string>
+    <string name="iroh_invalid_input">Introduce un Endpoint ID de Iroh, ticket o enlace válido.</string>
+    <string name="iroh_disabled_hint">El relay Iroh está desactivado. Activa el modo Público o Privado en Ajustes &gt; Red para conectar.</string>
+    <string name="iroh_mode_section">Relay Iroh</string>
+    <string name="iroh_mode_desc">Conecta por internet tras NAT/cortafuegos como alternativa a LAN/VPN.</string>
+    <string name="iroh_mode_public">Público</string>
+    <string name="iroh_mode_private">Privado</string>
+    <string name="iroh_mode_off">Apagado</string>
+    <string name="iroh_public_server_label">Servidor relay público</string>
+    <string name="iroh_public_auto_label">Auto (Todos los públicos)</string>
+    <string name="iroh_private_url_label">URL(s) del relay privado</string>
+    <string name="iroh_private_url_hint">https://mi-relay.ejemplo.com</string>
+    <string name="iroh_private_url_invalid">Introduce URL(s) http:// o https:// válida(s).</string>
+    <string name="iroh_reconnect_btn">Reconectar</string>
+    <string name="iroh_qr_chip">Relay Iroh</string>
+    <string name="iroh_via_relay_badge">Vía Relay Iroh</string>
+    <string name="msg_iroh_mode_updated">Relay Iroh cambiado a %1$s.</string>
+    <string name="msg_iroh_private_saved">URL del relay privado guardada.</string>
+    <string name="contact_iroh_id_label">Iroh Endpoint ID</string>
+    <string name="contact_via_iroh">Relay P2P Iroh</string>
 </resources>

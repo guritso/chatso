@@ -347,4 +347,37 @@
     <string name="sticker_add_favorite_btn">添加到收藏</string>
     <string name="sticker_remove_from_pack_btn">从贴纸包移除</string>
     <string name="sticker_actions_title">贴纸选项</string>
+
+    <string name="connect_iroh_tab">Iroh</string>
+    <string name="iroh_title">Iroh P2P 中继</string>
+    <string name="iroh_status_online">在线</string>
+    <string name="iroh_status_starting">连接中…</string>
+    <string name="iroh_status_disabled">关闭</string>
+    <string name="iroh_status_error">错误</string>
+    <string name="iroh_your_id_label">我的 Iroh ID</string>
+    <string name="iroh_active_relay_label">当前中继</string>
+    <string name="iroh_peer_id_label">对方 Iroh ID、凭证或邀请链接</string>
+    <string name="iroh_peer_id_hint">粘贴 Endpoint ID、iroh://…、chatso://… 或 id@relay</string>
+    <string name="iroh_relay_optional_label">对方中继 URL（可选）</string>
+    <string name="iroh_relay_optional_hint">https://relay.example.com</string>
+    <string name="iroh_connect_hint">通过公共或私有 Iroh 中继在互联网上直连或转发，无需 VPN 或端口映射。</string>
+    <string name="iroh_invalid_input">请输入有效的 Iroh Endpoint ID、凭证或邀请链接。</string>
+    <string name="iroh_disabled_hint">Iroh 中继已关闭。请在 设置 &gt; 网络 中启用公共或私有模式。</string>
+    <string name="iroh_mode_section">Iroh 中继</string>
+    <string name="iroh_mode_desc">替代局域网/VPN，通过公私中继实现跨 NAT 互联网连接。</string>
+    <string name="iroh_mode_public">公共</string>
+    <string name="iroh_mode_private">私有</string>
+    <string name="iroh_mode_off">关闭</string>
+    <string name="iroh_public_server_label">公共中继服务器</string>
+    <string name="iroh_public_auto_label">自动（全部公共节点）</string>
+    <string name="iroh_private_url_label">私有中继 URL</string>
+    <string name="iroh_private_url_hint">https://my-relay.example.com</string>
+    <string name="iroh_private_url_invalid">请输入有效的 http:// 或 https:// 中继地址。</string>
+    <string name="iroh_reconnect_btn">重新连接</string>
+    <string name="iroh_qr_chip">Iroh 中继</string>
+    <string name="iroh_via_relay_badge">通过 Iroh 中继</string>
+    <string name="msg_iroh_mode_updated">Iroh 中继已切换为%1$s。</string>
+    <string name="msg_iroh_private_saved">私有 Iroh 中继地址已保存。</string>
+    <string name="contact_iroh_id_label">Iroh Endpoint ID</string>
+    <string name="contact_via_iroh">Iroh P2P 中继</string>
 </resources>

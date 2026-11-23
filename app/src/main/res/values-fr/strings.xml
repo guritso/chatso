@@ -347,4 +347,37 @@
     <string name="sticker_add_favorite_btn">Ajouter aux favoris</string>
     <string name="sticker_remove_from_pack_btn">Retirer du pack</string>
     <string name="sticker_actions_title">Options du sticker</string>
+
+    <string name="connect_iroh_tab">Iroh</string>
+    <string name="iroh_title">Relais P2P Iroh</string>
+    <string name="iroh_status_online">En ligne</string>
+    <string name="iroh_status_starting">Connexion…</string>
+    <string name="iroh_status_disabled">Désactivé</string>
+    <string name="iroh_status_error">Erreur</string>
+    <string name="iroh_your_id_label">Votre ID Iroh</string>
+    <string name="iroh_active_relay_label">Relais actif</string>
+    <string name="iroh_peer_id_label">ID Iroh, ticket ou lien d’invitation</string>
+    <string name="iroh_peer_id_hint">Collez Endpoint ID, iroh://…, chatso://… ou id@relay</string>
+    <string name="iroh_relay_optional_label">URL du relais du contact (optionnel)</string>
+    <string name="iroh_relay_optional_hint">https://relay.exemple.com</string>
+    <string name="iroh_connect_hint">Fonctionne sur Internet sans VPN ni redirection de port via les relais publics ou privés Iroh.</string>
+    <string name="iroh_invalid_input">Saisissez un Endpoint ID Iroh, ticket ou lien valide.</string>
+    <string name="iroh_disabled_hint">Le relais Iroh est désactivé. Activez le mode Public ou Privé dans Paramètres &gt; Réseau.</string>
+    <string name="iroh_mode_section">Relais Iroh</string>
+    <string name="iroh_mode_desc">Connexion Internet à travers NAT/pare-feu comme alternative au LAN/VPN.</string>
+    <string name="iroh_mode_public">Public</string>
+    <string name="iroh_mode_private">Privé</string>
+    <string name="iroh_mode_off">Désactivé</string>
+    <string name="iroh_public_server_label">Serveur relais public</string>
+    <string name="iroh_public_auto_label">Auto (Serveurs publics)</string>
+    <string name="iroh_private_url_label">URL du relais privé</string>
+    <string name="iroh_private_url_hint">https://mon-relais.exemple.com</string>
+    <string name="iroh_private_url_invalid">Saisissez une ou plusieurs URL http:// ou https:// valides.</string>
+    <string name="iroh_reconnect_btn">Reconnecter</string>
+    <string name="iroh_qr_chip">Relais Iroh</string>
+    <string name="iroh_via_relay_badge">Via Relais Iroh</string>
+    <string name="msg_iroh_mode_updated">Relais Iroh réglé sur %1$s.</string>
+    <string name="msg_iroh_private_saved">URL du relais privé Iroh enregistrée.</string>
+    <string name="contact_iroh_id_label">Iroh Endpoint ID</string>
+    <string name="contact_via_iroh">Relais P2P Iroh</string>
 </resources>

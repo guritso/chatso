@@ -20,7 +20,9 @@ data class QrInvitePayload(
     val publicKeyBase64: String,
     val username: String,
     val inviteToken: String,
-    val instanceId: String = ""
+    val instanceId: String = "",
+    val irohNodeId: String = "",
+    val irohRelayUrl: String = ""
 )
 
 object QrCodeHelper {
@@ -31,31 +33,53 @@ object QrCodeHelper {
         publicKeyBase64: String,
         username: String,
         inviteToken: String,
-        instanceId: String = ""
+        instanceId: String = "",
+        irohNodeId: String = "",
+        irohRelayUrl: String = ""
     ): String {
         val builder = Uri.Builder()
             .scheme("chatso")
             .authority("connect")
-            .appendQueryParameter("ip", ip.trim())
-            .appendQueryParameter("port", port.toString())
+        if (ip.isNotBlank() && port in 1..65535) {
+            builder.appendQueryParameter("ip", ip.trim())
+            builder.appendQueryParameter("port", port.toString())
+        }
+        builder
             .appendQueryParameter("pub", publicKeyBase64.trim())
             .appendQueryParameter("name", username.trim())
             .appendQueryParameter("token", inviteToken.trim())
         if (instanceId.isNotBlank()) {
             builder.appendQueryParameter("inst", instanceId.trim())
         }
+        if (irohNodeId.isNotBlank()) {
+            builder.appendQueryParameter("iroh", irohNodeId.trim())
+        }
+        if (irohRelayUrl.isNotBlank()) {
+            builder.appendQueryParameter("relay", irohRelayUrl.trim())
+        }
         return builder.build().toString()
     }
 
-    fun parseInviteUri(rawText: String): QrInvitePayload? {
+    fun parseInviteUri(
+        rawText: String,
+        ticketParser: ((String) -> Pair<String, String>?)? = null
+    ): QrInvitePayload? {
         return try {
             val trimmed = rawText.trim()
-            if (trimmed.startsWith("chatso://")) {
+            if (trimmed.isEmpty()) return null
+            if (trimmed.startsWith("chatso://", ignoreCase = true)) {
                 val uri = Uri.parse(trimmed)
-                val ip = uri.getQueryParameter("ip")?.takeIf { it.isNotBlank() } ?: return null
-                val port = uri.getQueryParameter("port")?.toIntOrNull() ?: return null
+                val ip = uri.getQueryParameter("ip")?.trim().orEmpty()
+                val port = uri.getQueryParameter("port")?.toIntOrNull() ?: 0
+                val iroh = uri.getQueryParameter("iroh")?.trim().orEmpty()
+                val relay = uri.getQueryParameter("relay")?.trim()
+                    ?.let { IrohRelayUrlUtils.normalizeSingleRelayUrl(it) ?: it }
+                    .orEmpty()
+                val hasTcp = ip.isNotBlank() && port in 1..65535
+                if (!hasTcp && iroh.isBlank()) return null
                 val pub = uri.getQueryParameter("pub") ?: ""
-                val name = uri.getQueryParameter("name") ?: "Contact"
+                val name = uri.getQueryParameter("name")?.takeIf { it.isNotBlank() }
+                    ?: if (ip.isNotBlank()) ip else IrohRelayUrlUtils.shortEndpointId(iroh)
                 val token = uri.getQueryParameter("token") ?: ""
                 val inst = uri.getQueryParameter("inst") ?: ""
                 QrInvitePayload(
@@ -64,19 +88,116 @@ object QrCodeHelper {
                     publicKeyBase64 = pub,
                     username = name,
                     inviteToken = token,
-                    instanceId = inst
+                    instanceId = inst,
+                    irohNodeId = iroh,
+                    irohRelayUrl = relay
                 )
-            } else if (trimmed.contains(":")) {
-                // Also support plain ip:port strings
-                val host = trimmed.substringBeforeLast(":").trim()
-                val port = trimmed.substringAfterLast(":").trim().toIntOrNull() ?: return null
-                QrInvitePayload(ip = host, port = port, publicKeyBase64 = "", username = host, inviteToken = "")
+            } else if (trimmed.startsWith("iroh://", ignoreCase = true)) {
+                val uri = Uri.parse(trimmed)
+                val iroh = uri.host?.trim().orEmpty().ifBlank { uri.getQueryParameter("id")?.trim().orEmpty() }
+                if (iroh.isBlank()) return null
+                val relay = uri.getQueryParameter("relay")?.trim()
+                    ?.let { IrohRelayUrlUtils.normalizeSingleRelayUrl(it) ?: it }
+                    .orEmpty()
+                val pub = uri.getQueryParameter("pub") ?: ""
+                val name = uri.getQueryParameter("name")?.takeIf { it.isNotBlank() }
+                    ?: IrohRelayUrlUtils.shortEndpointId(iroh)
+                val token = uri.getQueryParameter("token") ?: ""
+                val inst = uri.getQueryParameter("inst") ?: ""
+                QrInvitePayload(
+                    ip = "",
+                    port = 0,
+                    publicKeyBase64 = pub,
+                    username = name,
+                    inviteToken = token,
+                    instanceId = inst,
+                    irohNodeId = iroh,
+                    irohRelayUrl = relay
+                )
             } else {
-                null
+                ticketParser?.invoke(trimmed)?.let { (id, relay) ->
+                    return QrInvitePayload(
+                        ip = "",
+                        port = 0,
+                        publicKeyBase64 = "",
+                        username = IrohRelayUrlUtils.shortEndpointId(id),
+                        inviteToken = "",
+                        irohNodeId = id,
+                        irohRelayUrl = relay
+                    )
+                }
+                if (trimmed.contains("@")) {
+                    val candidateId = trimmed.substringBefore("@").trim()
+                    val candidateRelay = trimmed.substringAfter("@").trim()
+                    if (IrohRelayUrlUtils.looksLikeIrohEndpointId(candidateId)) {
+                        val normalizedRelay = IrohRelayUrlUtils.normalizeSingleRelayUrl(candidateRelay) ?: return null
+                        return QrInvitePayload(
+                            ip = "",
+                            port = 0,
+                            publicKeyBase64 = "",
+                            username = IrohRelayUrlUtils.shortEndpointId(candidateId),
+                            inviteToken = "",
+                            irohNodeId = candidateId,
+                            irohRelayUrl = normalizedRelay
+                        )
+                    }
+                }
+                if (IrohRelayUrlUtils.looksLikeIrohEndpointId(trimmed)) {
+                    QrInvitePayload(
+                        ip = "",
+                        port = 0,
+                        publicKeyBase64 = "",
+                        username = IrohRelayUrlUtils.shortEndpointId(trimmed),
+                        inviteToken = "",
+                        irohNodeId = trimmed,
+                        irohRelayUrl = ""
+                    )
+                } else if (trimmed.contains(":") && !trimmed.startsWith("http", ignoreCase = true)) {
+                    // Also support plain ip:port strings
+                    val host = trimmed.substringBeforeLast(":").trim()
+                    val port = trimmed.substringAfterLast(":").trim().toIntOrNull() ?: return null
+                    if (host.isBlank() || port !in 1..65535) return null
+                    QrInvitePayload(ip = host, port = port, publicKeyBase64 = "", username = host, inviteToken = "")
+                } else {
+                    null
+                }
             }
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun parseIrohConnectInput(
+        rawText: String,
+        explicitRelayUrl: String = "",
+        ticketParser: ((String) -> Pair<String, String>?)? = null
+    ): QrInvitePayload? {
+        val cleanRelay = explicitRelayUrl.trim()
+        val normalizedExplicitRelay = if (cleanRelay.isNotEmpty()) {
+            IrohRelayUrlUtils.normalizeSingleRelayUrl(cleanRelay) ?: return null
+        } else {
+            ""
+        }
+        val parsed = parseInviteUri(rawText, ticketParser)
+        if (parsed != null && parsed.irohNodeId.isNotBlank()) {
+            val resolvedRelay = normalizedExplicitRelay.ifBlank { parsed.irohRelayUrl }
+            return parsed.copy(irohRelayUrl = resolvedRelay)
+        }
+        val trimmed = rawText.trim()
+        // Fallback: allow valid endpoint IDs in non-standard base32/hex length if user pasted directly
+        val noWhitespace = trimmed.none { it.isWhitespace() }
+        if (noWhitespace && trimmed.length >= 32 && !trimmed.contains(":") && !trimmed.contains("/") && !trimmed.contains("@")) {
+            return QrInvitePayload(
+                ip = "",
+                port = 0,
+                publicKeyBase64 = "",
+                username = IrohRelayUrlUtils.shortEndpointId(trimmed),
+                inviteToken = "",
+                irohNodeId = trimmed,
+                irohRelayUrl = normalizedExplicitRelay
+            )
+        }
+        return null
     }
 
     fun generateQrBitmap(content: String, sizePx: Int = 640): Bitmap? {

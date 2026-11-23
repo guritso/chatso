@@ -13,6 +13,8 @@ import com.example.data.AppLanguage
 import com.example.data.BridgeTelemetry
 import com.example.data.DiscoveredPeer
 import com.example.data.FavoriteStickerEntity
+import com.example.data.IrohRelayMode
+import com.example.data.IrohRelayStatus
 import com.example.data.LocalIdentity
 import com.example.data.LocalSavedMediaItem
 import com.example.data.LocaleHelper
@@ -34,6 +36,7 @@ import com.example.media.VoiceRecorderController
 import com.example.media.VoiceRecordingState
 import com.example.network.ChatsoConnectionService
 import com.example.network.ChatsoSharingShortcuts
+import com.example.network.IrohRelayUrlUtils
 import com.example.network.NetworkUtils
 import com.example.network.QrCodeHelper
 import com.example.network.RawShareRequest
@@ -131,6 +134,7 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
 
     val boundPort: StateFlow<Int> = repository.nodeManager.boundPort
     val serverRunning: StateFlow<Boolean> = repository.nodeManager.serverRunning
+    val irohStatus: StateFlow<IrohRelayStatus> = repository.irohStatus
     val typingPeers: StateFlow<Set<String>> = repository.typingPeers
     val activeTransfers: StateFlow<List<ActiveTransferInfo>> = repository.activeTransfers
     val unreadDivider: StateFlow<UnreadDividerInfo?> = repository.unreadDivider
@@ -532,6 +536,50 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun setIrohRelayMode(mode: IrohRelayMode) {
+        viewModelScope.launch {
+            identityStore.setIrohRelayMode(mode)
+            val modeLabel = when (mode) {
+                IrohRelayMode.PUBLIC -> str(R.string.iroh_mode_public)
+                IrohRelayMode.PRIVATE -> str(R.string.iroh_mode_private)
+                IrohRelayMode.DISABLED -> str(R.string.iroh_mode_off)
+            }
+            _snackbarMessage.value = str(R.string.msg_iroh_mode_updated, modeLabel)
+        }
+    }
+
+    fun setIrohPublicRelayUrl(url: String) {
+        viewModelScope.launch {
+            val clean = if (url.isBlank()) "" else (IrohRelayUrlUtils.normalizeSingleRelayUrl(url) ?: "")
+            identityStore.setIrohPublicRelayUrl(clean)
+        }
+    }
+
+    fun setIrohPrivateRelayUrl(rawUrl: String): Boolean {
+        val parsed = IrohRelayUrlUtils.parseRelayUrlList(rawUrl)
+        if (parsed == null) {
+            _snackbarMessage.value = str(R.string.iroh_private_url_invalid)
+            return false
+        }
+        val normalized = parsed.joinToString(", ")
+        viewModelScope.launch {
+            identityStore.setIrohPrivateRelayUrl(normalized)
+            if (identityStore.getSnapshot().irohRelayMode != IrohRelayMode.PRIVATE) {
+                identityStore.setIrohRelayMode(IrohRelayMode.PRIVATE)
+            }
+            _snackbarMessage.value = str(R.string.msg_iroh_private_saved)
+        }
+        return true
+    }
+
+    fun reconnectIrohRelay() {
+        viewModelScope.launch {
+            repository.reconnectIrohRelay()
+        }
+    }
+
+    fun parseIrohTicket(raw: String): Pair<String, String>? = repository.parseIrohTicket(raw)
+
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch {
             identityStore.setThemeMode(mode)
@@ -828,18 +876,89 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun connectFromQrString(rawQr: String) {
-        val parsed = QrCodeHelper.parseInviteUri(rawQr)
+        val parsed = QrCodeHelper.parseInviteUri(rawQr, ::parseIrohTicket)
         if (parsed == null) {
             _snackbarMessage.value = str(R.string.msg_invalid_qr)
             return
         }
-        connectInternal(
-            ip = parsed.ip,
-            port = parsed.port,
-            expectedPub = parsed.publicKeyBase64,
-            inviteToken = parsed.inviteToken,
-            expectedInstanceId = parsed.instanceId
+        if (_isConnecting.value) return
+        viewModelScope.launch {
+            _isConnecting.value = true
+            try {
+                val hasTcp = parsed.ip.isNotBlank() && parsed.port in 1..65535
+                var result: Result<String>? = if (hasTcp) {
+                    repository.connectDirect(
+                        ip = parsed.ip,
+                        port = parsed.port,
+                        expectedPubKeyBase64 = parsed.publicKeyBase64,
+                        inviteToken = parsed.inviteToken,
+                        expectedInstanceId = parsed.instanceId
+                    )
+                } else {
+                    null
+                }
+                if ((result == null || result.isFailure) && parsed.irohNodeId.isNotBlank()) {
+                    result = repository.connectViaIroh(
+                        targetEndpointId = parsed.irohNodeId,
+                        targetRelayUrl = parsed.irohRelayUrl,
+                        expectedPubKeyBase64 = parsed.publicKeyBase64,
+                        inviteToken = parsed.inviteToken,
+                        expectedInstanceId = parsed.instanceId
+                    )
+                }
+                val finalResult = result
+                    ?: Result.failure(IllegalStateException(str(R.string.msg_invalid_qr)))
+                finalResult.fold(
+                    onSuccess = { peerId ->
+                        _selectedTab.value = HomeTab.CHATS
+                        openConversation(peerId)
+                    },
+                    onFailure = { err ->
+                        _snackbarMessage.value = err.message
+                            ?: parsed.ip.ifBlank { IrohRelayUrlUtils.shortEndpointId(parsed.irohNodeId) }
+                    }
+                )
+            } finally {
+                _isConnecting.value = false
+            }
+        }
+    }
+
+    fun connectByIroh(inputText: String, relayUrlInput: String = "") {
+        val parsed = QrCodeHelper.parseIrohConnectInput(
+            rawText = inputText,
+            explicitRelayUrl = relayUrlInput,
+            ticketParser = ::parseIrohTicket
         )
+        if (parsed == null || parsed.irohNodeId.isBlank()) {
+            _snackbarMessage.value = str(R.string.iroh_invalid_input)
+            return
+        }
+        if (_isConnecting.value) return
+        viewModelScope.launch {
+            _isConnecting.value = true
+            try {
+                val result = repository.connectViaIroh(
+                    targetEndpointId = parsed.irohNodeId,
+                    targetRelayUrl = parsed.irohRelayUrl,
+                    expectedPubKeyBase64 = parsed.publicKeyBase64,
+                    inviteToken = parsed.inviteToken,
+                    expectedInstanceId = parsed.instanceId
+                )
+                result.fold(
+                    onSuccess = { peerId ->
+                        _selectedTab.value = HomeTab.CHATS
+                        openConversation(peerId)
+                    },
+                    onFailure = { err ->
+                        _snackbarMessage.value = err.message
+                            ?: IrohRelayUrlUtils.shortEndpointId(parsed.irohNodeId)
+                    }
+                )
+            } finally {
+                _isConnecting.value = false
+            }
+        }
     }
 
     fun decodeQrFromGalleryUri(uri: Uri) {

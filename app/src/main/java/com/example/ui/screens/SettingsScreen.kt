@@ -38,6 +38,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DoneAll
@@ -47,6 +48,8 @@ import androidx.compose.material.icons.filled.Lan
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -56,6 +59,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -95,6 +99,10 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import com.example.BuildConfig
 import com.example.R
 import com.example.data.AppLanguage
+import com.example.data.IrohPublicRelays
+import com.example.data.IrohRelayMode
+import com.example.data.IrohRelayState
+import com.example.data.IrohRelayStatus
 import com.example.data.LocalIdentity
 import com.example.data.NetworkEndpointInfo
 import com.example.data.ThemeMode
@@ -125,9 +133,16 @@ fun SettingsScreen(
     isCheckingUpdates: Boolean,
     onToggleDevMode: (Boolean) -> Unit,
     onOpenDevTools: () -> Unit,
-    onToggleBridgeMode: (Boolean) -> Unit = {}
+    onToggleBridgeMode: (Boolean) -> Unit = {},
+    irohStatus: IrohRelayStatus = IrohRelayStatus(),
+    onChangeIrohMode: (IrohRelayMode) -> Unit = {},
+    onSelectIrohPublicServer: (String) -> Unit = {},
+    onSaveIrohPrivateRelay: (String) -> Unit = {},
+    onReconnectIroh: () -> Unit = {},
+    onNotify: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
+    val clipboard = rememberClipboard()
     var showLicensesDialog by remember { mutableStateOf(false) }
     var themeExpanded by rememberSaveable { mutableStateOf(false) }
     var languageExpanded by rememberSaveable { mutableStateOf(false) }
@@ -901,6 +916,263 @@ fun SettingsScreen(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp))
+
+                        // Iroh Relay subsection (Public / Private / Off)
+                        val copiedMsg = stringResource(R.string.msg_copied)
+                        val (irohBadgeText, irohBadgeColor) = when (irohStatus.state) {
+                            IrohRelayState.ONLINE -> stringResource(R.string.iroh_status_online) to OnlineEmerald
+                            IrohRelayState.STARTING -> stringResource(R.string.iroh_status_starting) to WarningAmber
+                            IrohRelayState.ERROR -> stringResource(R.string.iroh_status_error) to MaterialTheme.colorScheme.error
+                            IrohRelayState.DISABLED -> stringResource(R.string.iroh_status_disabled) to MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Filled.Public,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.iroh_mode_section),
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(999.dp),
+                                color = irohBadgeColor.copy(alpha = 0.14f),
+                                modifier = Modifier.testTag("settings_iroh_status_badge")
+                            ) {
+                                Text(
+                                    text = irohBadgeText,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = irohBadgeColor,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.iroh_mode_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        val irohModes = listOf(
+                            IrohRelayMode.PUBLIC to stringResource(R.string.iroh_mode_public),
+                            IrohRelayMode.PRIVATE to stringResource(R.string.iroh_mode_private),
+                            IrohRelayMode.DISABLED to stringResource(R.string.iroh_mode_off)
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            irohModes.forEachIndexed { idx, (mode, label) ->
+                                val tag = when (mode) {
+                                    IrohRelayMode.PUBLIC -> "settings_iroh_mode_public"
+                                    IrohRelayMode.PRIVATE -> "settings_iroh_mode_private"
+                                    IrohRelayMode.DISABLED -> "settings_iroh_mode_off"
+                                }
+                                SegmentedButton(
+                                    selected = identity.irohRelayMode == mode,
+                                    onClick = { onChangeIrohMode(mode) },
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = idx,
+                                        count = irohModes.size
+                                    ),
+                                    modifier = Modifier.testTag(tag)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+
+                        if (identity.irohRelayMode == IrohRelayMode.PUBLIC) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = stringResource(R.string.iroh_public_server_label),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                IrohPublicRelays.servers.forEach { server ->
+                                    val isSelected = identity.irohPublicRelayUrl.trim() == server.url
+                                    val label = if (server.url.isEmpty()) {
+                                        stringResource(R.string.iroh_public_auto_label)
+                                    } else {
+                                        server.label
+                                    }
+                                    FilterChip(
+                                        selected = isSelected,
+                                        onClick = { onSelectIrohPublicServer(server.url) },
+                                        label = {
+                                            Text(
+                                                text = label,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        },
+                                        modifier = Modifier.testTag("settings_iroh_public_${server.id}")
+                                    )
+                                }
+                            }
+                        } else if (identity.irohRelayMode == IrohRelayMode.PRIVATE) {
+                            var privateRelayInput by rememberSaveable(identity.irohPrivateRelayUrl) {
+                                mutableStateOf(identity.irohPrivateRelayUrl)
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = privateRelayInput,
+                                    onValueChange = { privateRelayInput = it },
+                                    label = { Text(stringResource(R.string.iroh_private_url_label)) },
+                                    placeholder = { Text(stringResource(R.string.iroh_private_url_hint)) },
+                                    singleLine = true,
+                                    shape = MaterialTheme.shapes.medium,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("settings_iroh_private_input")
+                                )
+                                Button(
+                                    onClick = { onSaveIrohPrivateRelay(privateRelayInput) },
+                                    shape = MaterialTheme.shapes.medium,
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                                    modifier = Modifier
+                                        .defaultMinSize(minWidth = 88.dp)
+                                        .height(52.dp)
+                                        .testTag("settings_iroh_private_apply_button")
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.apply_btn),
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            }
+                        }
+
+                        if (identity.irohRelayMode != IrohRelayMode.DISABLED) {
+                            val localEndpointId = irohStatus.endpointId.ifBlank { identity.irohEndpointId }
+                            val activeRelayUrl = irohStatus.activeRelayUrl.ifBlank { irohStatus.configuredRelayUrl }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                shape = MaterialTheme.shapes.medium,
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = stringResource(R.string.iroh_your_id_label),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = localEndpointId.ifBlank { "—" },
+                                                fontFamily = JetBrainsMonoFontFamily,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        if (localEndpointId.isNotBlank()) {
+                                            IconButton(
+                                                onClick = {
+                                                    val payload = if (
+                                                        identity.irohRelayMode == IrohRelayMode.PRIVATE &&
+                                                        activeRelayUrl.isNotBlank()
+                                                    ) {
+                                                        "$localEndpointId@$activeRelayUrl"
+                                                    } else {
+                                                        localEndpointId
+                                                    }
+                                                    clipboard.copyText("Chatso Iroh ID", payload)
+                                                    onNotify(copiedMsg)
+                                                },
+                                                modifier = Modifier
+                                                    .minimumInteractiveComponentSize()
+                                                    .testTag("settings_iroh_copy_id_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.ContentCopy,
+                                                    contentDescription = stringResource(R.string.copy_btn),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                        OutlinedButton(
+                                            onClick = onReconnectIroh,
+                                            shape = MaterialTheme.shapes.small,
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                            modifier = Modifier
+                                                .minimumInteractiveComponentSize()
+                                                .testTag("settings_iroh_reconnect_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Filled.Refresh,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = stringResource(R.string.iroh_reconnect_btn),
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
+                                        }
+                                    }
+                                    if (activeRelayUrl.isNotBlank()) {
+                                        Text(
+                                            text = "${stringResource(R.string.iroh_active_relay_label)}: $activeRelayUrl",
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (irohStatus.state == IrohRelayState.ERROR && irohStatus.errorMessage.isNotBlank()) {
+                                        Text(
+                                            text = irohStatus.errorMessage,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
                                 }
                             }
                         }

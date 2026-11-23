@@ -6,6 +6,9 @@ import com.example.crypto.SessionCipher
 import com.example.data.BridgeRouteInfo
 import com.example.data.BridgeTelemetry
 import com.example.data.DeliveryStatus
+import com.example.data.IrohRelayMode
+import com.example.data.IrohRelayState
+import com.example.data.IrohRelayStatus
 import com.example.data.LocalIdentity
 import com.example.data.MessageType
 import com.example.data.ReplySenderTags
@@ -64,7 +67,9 @@ interface P2PEventListener {
         viaBridgePeerId: String = "",
         remoteInstanceId: String = "",
         isInviteAuthorized: Boolean = false,
-        allowRestoreDismissed: Boolean = true
+        allowRestoreDismissed: Boolean = true,
+        remoteIrohId: String = "",
+        remoteIrohRelayUrl: String = ""
     ) {
         onPeerHandshaked(
             peerId = peerId,
@@ -103,7 +108,9 @@ interface P2PEventListener {
         username: String,
         avatarBase64: String?,
         viaBridgePeerId: String = "",
-        remoteInstanceId: String = ""
+        remoteInstanceId: String = "",
+        remoteIrohId: String = "",
+        remoteIrohRelayUrl: String = ""
     ) {
         onPeerProfileUpdated(
             peerId = peerId,
@@ -168,7 +175,8 @@ interface P2PEventListener {
 class P2PNodeManager(
     private val scope: CoroutineScope,
     private val discoveryManager: DiscoveryManager,
-    private val listener: P2PEventListener
+    private val listener: P2PEventListener,
+    private val irohTransport: IrohTransport = NativeIrohTransport()
 ) {
     companion object {
         private const val KIND_HANDSHAKE_HELLO: Byte = 0x03
@@ -185,11 +193,14 @@ class P2PNodeManager(
         val peerId: String,
         val socket: Socket?,
         val output: DataOutputStream?,
+        val irohChannel: IrohPeerChannel? = null,
         val cipher: SessionCipher,
         val bridgePeerId: String? = null,
         val remotePubB64: String = "",
         val remoteIp: String = "",
         val remoteInstanceId: String = "",
+        @Volatile var remoteIrohId: String = "",
+        @Volatile var remoteIrohRelayUrl: String = "",
         val isInviteAuthorized: Boolean = false,
         @Volatile var remoteListenPort: Int = LocalIdentity.DEFAULT_TCP_PORT,
         @Volatile var remoteUsername: String = "",
@@ -204,7 +215,9 @@ class P2PNodeManager(
         var closed: Boolean = false
 
         val isClosed: Boolean
-            get() = closed || socket?.isClosed == true ||
+            get() = closed ||
+                socket?.isClosed == true ||
+                irohChannel?.isClosed == true ||
                 (bridgePeerId != null && sessions[bridgePeerId]?.isClosed != false)
 
         suspend fun sendEncryptedFrame(kind: Byte, plaintext: ByteArray): Unit = withContext(Dispatchers.IO) {
@@ -222,6 +235,8 @@ class P2PNodeManager(
                         put("data", Base64.encodeToString(encrypted, Base64.NO_WRAP))
                     }.toString().toByteArray(Charsets.UTF_8)
                     relay.sendEncryptedFrame(KIND_ENCRYPTED_CONTROL, envelope)
+                } else if (irohChannel != null) {
+                    irohChannel.writeFrame(kind, encrypted)
                 } else {
                     val out = output ?: throw java.io.IOException("Direct output unavailable")
                     out.writeByte(kind.toInt())
@@ -236,6 +251,10 @@ class P2PNodeManager(
             closed = true
             try {
                 socket?.close()
+            } catch (_: Exception) {
+            }
+            try {
+                irohChannel?.close()
             } catch (_: Exception) {
             }
         }
@@ -267,6 +286,15 @@ class P2PNodeManager(
 
     private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
+    private val irohLifecycleMutex = Mutex()
+    private var irohSession: IrohEndpointSession? = null
+    private var irohAcceptJob: Job? = null
+    private var irohLifecycleJob: Job? = null
+    private var activeIrohConfigKey: String? = null
+
+    private val _irohStatus = MutableStateFlow(IrohRelayStatus())
+    val irohStatus: StateFlow<IrohRelayStatus> = _irohStatus.asStateFlow()
+
     private val sessions = ConcurrentHashMap<String, ActivePeerSession>()
     private val pendingBridgedHandshakes =
         ConcurrentHashMap<String, CompletableDeferred<Pair<Byte, ByteArray>>>()
@@ -333,15 +361,20 @@ class P2PNodeManager(
         }
     }
 
+    fun parseIrohTicket(ticket: String): Pair<String, String>? = irohTransport.parseTicket(ticket)
+
     fun updateIdentityAndEnsureServer(identity: LocalIdentity) {
         val portChanged = currentIdentity.listenPort != identity.listenPort
         val bridgeChanged = currentIdentity.bridgeEnabled != identity.bridgeEnabled
+        val prevConfigKey = buildIrohConfig(currentIdentity).first
+        val nextConfigKey = buildIrohConfig(identity).first
         val wasInit = currentIdentity.isInitialized
         currentIdentity = identity
         discoveryManager.applyIdentityPolicy(identity)
 
         if (!identity.isInitialized) {
             stopServer()
+            stopIroh()
             refreshBridgeTelemetry()
             return
         }
@@ -355,7 +388,176 @@ class P2PNodeManager(
                 }
             }
         }
+
+        val needsIrohEnsure = prevConfigKey != nextConfigKey ||
+            (identity.irohRelayMode != IrohRelayMode.DISABLED &&
+                _irohStatus.value.state != IrohRelayState.ERROR &&
+                _irohStatus.value.state != IrohRelayState.STARTING &&
+                irohSession?.isClosed != false)
+        if (needsIrohEnsure) {
+            scheduleIrohSync(forceRestart = prevConfigKey != nextConfigKey)
+        }
         refreshBridgeTelemetry()
+    }
+
+    suspend fun reconnectIrohRelay() = withContext(Dispatchers.IO) {
+        irohLifecycleMutex.withLock {
+            ensureIrohStartedLocked(forceRestart = true)
+        }
+    }
+
+    private fun configuredRelayUrlSummary(identity: LocalIdentity): String {
+        return when (identity.irohRelayMode) {
+            IrohRelayMode.DISABLED -> ""
+            IrohRelayMode.PUBLIC -> identity.irohPublicRelayUrl.trim()
+            IrohRelayMode.PRIVATE -> identity.irohPrivateRelayUrl.trim()
+        }
+    }
+
+    private fun buildIrohConfig(identity: LocalIdentity): Pair<String, IrohTransportConfig?> {
+        if (!identity.isInitialized || identity.irohRelayMode == IrohRelayMode.DISABLED) {
+            return "DISABLED" to null
+        }
+        val relayUrls = when (identity.irohRelayMode) {
+            IrohRelayMode.DISABLED -> emptyList()
+            IrohRelayMode.PUBLIC -> {
+                val single = identity.irohPublicRelayUrl.trim()
+                if (single.isEmpty()) {
+                    emptyList()
+                } else {
+                    listOfNotNull(IrohRelayUrlUtils.normalizeSingleRelayUrl(single))
+                }
+            }
+            IrohRelayMode.PRIVATE -> {
+                IrohRelayUrlUtils.parseRelayUrlList(identity.irohPrivateRelayUrl).orEmpty()
+            }
+        }
+        val secretBytes = identity.irohSecretKeyBase64.trim().takeIf { it.isNotBlank() }?.let { b64 ->
+            runCatching { Base64.decode(b64, Base64.NO_WRAP) }.getOrNull()?.takeIf { it.size == 32 }
+        }
+        val key = "${identity.irohRelayMode.name}|${relayUrls.joinToString(",")}|${identity.irohPrivateRelayUrl.trim()}|${identity.irohSecretKeyBase64}"
+        return key to IrohTransportConfig(
+            mode = identity.irohRelayMode,
+            relayUrls = relayUrls,
+            secretKey = secretBytes
+        )
+    }
+
+    private fun scheduleIrohSync(forceRestart: Boolean) {
+        irohLifecycleJob?.cancel()
+        irohLifecycleJob = scope.launch(Dispatchers.IO) {
+            irohLifecycleMutex.withLock {
+                ensureIrohStartedLocked(forceRestart = forceRestart)
+            }
+        }
+    }
+
+    private suspend fun ensureIrohStartedLocked(forceRestart: Boolean) {
+        val identity = currentIdentity
+        val (configKey, transportConfig) = buildIrohConfig(identity)
+        if (transportConfig == null) {
+            stopIrohLocked(identity)
+            return
+        }
+        val existingSession = irohSession
+        if (!forceRestart && configKey == activeIrohConfigKey) {
+            if (existingSession != null && !existingSession.isClosed) {
+                return
+            }
+            if (_irohStatus.value.state == IrohRelayState.ERROR) {
+                return
+            }
+        }
+
+        stopIrohLocked(identity, keepState = true)
+        activeIrohConfigKey = configKey
+
+        val configuredUrl = configuredRelayUrlSummary(identity)
+        if (identity.irohRelayMode == IrohRelayMode.PRIVATE && transportConfig.relayUrls.isEmpty()) {
+            _irohStatus.value = IrohRelayStatus(
+                mode = IrohRelayMode.PRIVATE,
+                state = IrohRelayState.ERROR,
+                endpointId = identity.irohEndpointId,
+                configuredRelayUrl = configuredUrl,
+                errorMessage = "Private relay URL is required"
+            )
+            return
+        }
+
+        _irohStatus.value = IrohRelayStatus(
+            mode = identity.irohRelayMode,
+            state = IrohRelayState.STARTING,
+            endpointId = identity.irohEndpointId,
+            configuredRelayUrl = configuredUrl
+        )
+
+        try {
+            val started = irohTransport.startEndpoint(transportConfig)
+            if (activeIrohConfigKey != configKey || currentIdentity.irohRelayMode == IrohRelayMode.DISABLED) {
+                runCatching { started.close() }
+                return
+            }
+            irohSession = started
+            val endpointId = started.endpointId.ifBlank { identity.irohEndpointId }
+            val activeRelay = started.activeRelayUrl.ifBlank { configuredUrl }
+            _irohStatus.value = IrohRelayStatus(
+                mode = identity.irohRelayMode,
+                state = IrohRelayState.ONLINE,
+                endpointId = endpointId,
+                activeRelayUrl = activeRelay,
+                configuredRelayUrl = configuredUrl
+            )
+            irohAcceptJob = scope.launch(Dispatchers.IO) {
+                while (isActive && !started.isClosed) {
+                    val channel = try {
+                        started.acceptPeerChannel()
+                    } catch (ce: kotlinx.coroutines.CancellationException) {
+                        throw ce
+                    } catch (_: Throwable) {
+                        if (started.isClosed) break else continue
+                    }
+                    if (channel == null) {
+                        if (started.isClosed) break else continue
+                    }
+                    launch(Dispatchers.IO) {
+                        handleInboundIrohChannel(channel)
+                    }
+                }
+            }
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            _irohStatus.value = IrohRelayStatus(
+                mode = identity.irohRelayMode,
+                state = IrohRelayState.ERROR,
+                endpointId = identity.irohEndpointId,
+                configuredRelayUrl = configuredUrl,
+                errorMessage = t.message ?: "Failed to start Iroh relay"
+            )
+        }
+    }
+
+    private fun stopIrohLocked(identity: LocalIdentity = currentIdentity, keepState: Boolean = false) {
+        irohAcceptJob?.cancel()
+        irohAcceptJob = null
+        val prev = irohSession
+        irohSession = null
+        runCatching { prev?.close() }
+        activeIrohConfigKey = null
+        if (!keepState) {
+            _irohStatus.value = IrohRelayStatus(
+                mode = identity.irohRelayMode,
+                state = IrohRelayState.DISABLED,
+                endpointId = identity.irohEndpointId,
+                configuredRelayUrl = configuredRelayUrlSummary(identity)
+            )
+        }
+    }
+
+    fun stopIroh() {
+        irohLifecycleJob?.cancel()
+        irohLifecycleJob = null
+        stopIrohLocked(currentIdentity, keepState = false)
     }
 
     private fun restartServer(preferredPort: Int) {
@@ -466,6 +668,9 @@ class P2PNodeManager(
                 nonceBase64 = clientNonceB64
             )
 
+            val localIrohStatus = _irohStatus.value
+            val localIrohId = localIrohStatus.endpointId.ifBlank { identity.irohEndpointId }
+            val localIrohRelay = localIrohStatus.activeRelayUrl.ifBlank { localIrohStatus.configuredRelayUrl }
             val helloBytes = JSONObject().apply {
                 put("pub", identity.publicKeyBase64)
                 put("eph", ephPubB64)
@@ -475,6 +680,8 @@ class P2PNodeManager(
                 put("token", inviteToken)
                 put("auto", isAutoReconnect)
                 put("inst", localInst)
+                if (localIrohId.isNotBlank()) put("irohId", localIrohId)
+                if (localIrohRelay.isNotBlank()) put("irohRelay", localIrohRelay)
             }.toString().toByteArray(Charsets.UTF_8)
 
             out.writeByte(KIND_HANDSHAKE_HELLO.toInt())
@@ -510,6 +717,8 @@ class P2PNodeManager(
             val serverSigB64 = welcomeJson.getString("sig")
             val serverListenPort = welcomeJson.optInt("port", port)
             val serverInstanceId = welcomeJson.optString("inst", "")
+            val serverIrohId = welcomeJson.optString("irohId", "")
+            val serverIrohRelay = welcomeJson.optString("irohRelay", "")
 
             if (expectedPubKeyBase64.isNotBlank() && expectedPubKeyBase64 != serverPubB64) {
                 socket.close()
@@ -595,6 +804,8 @@ class P2PNodeManager(
                 remotePubB64 = serverPubB64,
                 remoteIp = cleanHost,
                 remoteInstanceId = serverInstanceId,
+                remoteIrohId = serverIrohId,
+                remoteIrohRelayUrl = serverIrohRelay,
                 isInviteAuthorized = inviteToken.isNotBlank(),
                 remoteListenPort = serverListenPort,
                 remoteUsername = if (isSelfLoopback) "${identity.username} (Localhost)" else cleanHost
@@ -616,13 +827,16 @@ class P2PNodeManager(
                 viaBridgePeerId = "",
                 remoteInstanceId = serverInstanceId,
                 isInviteAuthorized = inviteToken.isNotBlank(),
-                allowRestoreDismissed = !isAutoReconnect
+                allowRestoreDismissed = !isAutoReconnect,
+                remoteIrohId = serverIrohId,
+                remoteIrohRelayUrl = serverIrohRelay
             )
 
             scope.launch(Dispatchers.IO) {
                 runSessionReadLoop(
                     session = session,
                     inp = inp,
+                    irohChannel = null,
                     remotePubB64 = serverPubB64,
                     remoteIp = cleanHost,
                     remoteListenPort = serverListenPort,
@@ -631,6 +845,231 @@ class P2PNodeManager(
             }
             Result.success(sessionPeerId)
         } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun connectViaIroh(
+        targetEndpointId: String,
+        targetRelayUrl: String = "",
+        expectedPubKeyBase64: String = "",
+        inviteToken: String = "",
+        isAutoReconnect: Boolean = false,
+        expectedInstanceId: String = ""
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val identity = currentIdentity
+        if (!identity.isInitialized) {
+            return@withContext Result.failure(IllegalStateException("Local identity is not initialized yet"))
+        }
+        if (identity.irohRelayMode == IrohRelayMode.DISABLED) {
+            return@withContext Result.failure(IllegalStateException("Iroh relay is disabled in Settings"))
+        }
+        val cleanTargetId = targetEndpointId.trim()
+        if (cleanTargetId.isEmpty()) {
+            return@withContext Result.failure(IllegalArgumentException("Missing Iroh Endpoint ID"))
+        }
+        val endpointSession = irohSession?.takeIf { !it.isClosed } ?: run {
+            irohLifecycleMutex.withLock {
+                ensureIrohStartedLocked(forceRestart = false)
+            }
+            irohSession?.takeIf { !it.isClosed }
+        } ?: return@withContext Result.failure(
+            IllegalStateException(_irohStatus.value.errorMessage.ifBlank { "Iroh relay is offline" })
+        )
+
+        val localEndpointId = endpointSession.endpointId.ifBlank { identity.irohEndpointId }
+        if (localEndpointId.isNotBlank() && cleanTargetId == localEndpointId) {
+            return@withContext Result.failure(SecurityException("Cannot connect to your own Iroh Endpoint ID"))
+        }
+
+        val cleanRelayUrl = targetRelayUrl.trim().let { raw ->
+            if (raw.isEmpty()) "" else (IrohRelayUrlUtils.normalizeSingleRelayUrl(raw) ?: raw)
+        }
+        val localInst = effectiveInstanceId(identity)
+        var channel: IrohPeerChannel? = null
+        try {
+            channel = endpointSession.connectPeerChannel(
+                targetEndpointId = cleanTargetId,
+                targetRelayUrl = cleanRelayUrl
+            )
+            val privKey = CryptoEngine.unwrapPrivateKey(identity.wrappedPrivateKeyBase64)
+            val ephKp = CryptoEngine.generateIdentityKeyPair()
+            val ephPubB64 = Base64.encodeToString(ephKp.public.encoded, Base64.NO_WRAP)
+            val clientNonceB64 = Base64.encodeToString(CryptoEngine.randomBytes(16), Base64.NO_WRAP)
+            val signatureB64 = CryptoEngine.signHandshake(
+                identityPrivateKey = privKey,
+                roleTag = "CLIENT",
+                identityPubBase64 = identity.publicKeyBase64,
+                ephemeralPubBase64 = ephPubB64,
+                nonceBase64 = clientNonceB64
+            )
+            val localRelayUrl = endpointSession.activeRelayUrl.ifBlank { configuredRelayUrlSummary(identity) }
+            val helloBytes = JSONObject().apply {
+                put("pub", identity.publicKeyBase64)
+                put("eph", ephPubB64)
+                put("nonce", clientNonceB64)
+                put("sig", signatureB64)
+                put("port", _boundPort.value)
+                put("token", inviteToken)
+                put("auto", isAutoReconnect)
+                put("inst", localInst)
+                if (localEndpointId.isNotBlank()) put("irohId", localEndpointId)
+                if (localRelayUrl.isNotBlank()) put("irohRelay", localRelayUrl)
+            }.toString().toByteArray(Charsets.UTF_8)
+
+            channel.writeFrame(KIND_HANDSHAKE_HELLO, helloBytes)
+
+            val response = withTimeoutOrNull(10_000L) { channel.readFrame(MAX_FRAME_BYTES) }
+                ?: run {
+                    channel.close()
+                    return@withContext Result.failure(IllegalStateException("Timed out waiting for Iroh peer handshake"))
+                }
+            val (respKind, respBytes) = response
+            if (respKind == KIND_HANDSHAKE_REJECT) {
+                channel.close()
+                val reason = runCatching {
+                    JSONObject(String(respBytes, Charsets.UTF_8)).optString("reason")
+                }.getOrDefault("Connection rejected by peer privacy policy")
+                return@withContext Result.failure(SecurityException(reason))
+            }
+            if (respKind != KIND_HANDSHAKE_WELCOME) {
+                channel.close()
+                return@withContext Result.failure(IllegalStateException("Unexpected protocol frame on Iroh channel"))
+            }
+
+            val welcomeJson = JSONObject(String(respBytes, Charsets.UTF_8))
+            val serverPubB64 = welcomeJson.getString("pub")
+            val serverEphB64 = welcomeJson.getString("eph")
+            val serverNonceB64 = welcomeJson.getString("nonce")
+            val serverSigB64 = welcomeJson.getString("sig")
+            val serverListenPort = welcomeJson.optInt("port", LocalIdentity.DEFAULT_TCP_PORT)
+            val serverInstanceId = welcomeJson.optString("inst", "")
+            val serverIrohId = welcomeJson.optString("irohId", "").ifBlank { cleanTargetId }
+            val serverIrohRelay = welcomeJson.optString("irohRelay", "").ifBlank { cleanRelayUrl }
+
+            if (expectedPubKeyBase64.isNotBlank() && expectedPubKeyBase64 != serverPubB64) {
+                channel.close()
+                return@withContext Result.failure(
+                    SecurityException("Public key mismatch against QR invite. Possible interception blocked.")
+                )
+            }
+            if (expectedInstanceId.isNotBlank() &&
+                serverInstanceId.isNotBlank() &&
+                expectedInstanceId != serverInstanceId
+            ) {
+                channel.close()
+                return@withContext Result.failure(
+                    SecurityException("Peer installation ID mismatch. Scan QR invite to verify.")
+                )
+            }
+
+            val validSig = CryptoEngine.verifyHandshake(
+                roleTag = "SERVER",
+                identityPubBase64 = serverPubB64,
+                ephemeralPubBase64 = serverEphB64,
+                nonceBase64 = serverNonceB64,
+                signatureBase64 = serverSigB64
+            )
+            if (!validSig) {
+                channel.close()
+                return@withContext Result.failure(
+                    SecurityException("Invalid ECDSA cryptographic signature during Iroh handshake")
+                )
+            }
+
+            val rawPeerId = CryptoEngine.computePeerIdFromBase64(serverPubB64)
+            if (rawPeerId == identity.peerId || (serverInstanceId.isNotBlank() && serverInstanceId == localInst)) {
+                channel.close()
+                return@withContext Result.failure(
+                    SecurityException("Conflicting Chatso installation identity rejected.")
+                )
+            }
+            val savedInst = listener.getKnownPeerInstanceId(rawPeerId)
+            if (savedInst.isNotBlank() &&
+                serverInstanceId.isNotBlank() &&
+                savedInst != serverInstanceId &&
+                inviteToken.isBlank()
+            ) {
+                channel.close()
+                return@withContext Result.failure(
+                    SecurityException("Contact switched app installation. Re-verify via QR invite.")
+                )
+            }
+
+            val cipher = CryptoEngine.deriveSessionCipher(
+                isInitiator = true,
+                localEphemeralPrivate = ephKp.private,
+                remoteEphemeralPubBase64 = serverEphB64,
+                clientIdentityPubBase64 = identity.publicKeyBase64,
+                clientEphPubBase64 = ephPubB64,
+                clientNonceBase64 = clientNonceB64,
+                serverIdentityPubBase64 = serverPubB64,
+                serverEphPubBase64 = serverEphB64,
+                serverNonceBase64 = serverNonceB64
+            )
+
+            if (isAutoReconnect && !listener.isKnownPeer(rawPeerId)) {
+                channel.close()
+                return@withContext Result.failure(
+                    IllegalStateException("Auto-reconnect aborted for removed conversation")
+                )
+            }
+
+            val displayFallbackName = IrohRelayUrlUtils.shortEndpointId(serverIrohId)
+            val session = ActivePeerSession(
+                peerId = rawPeerId,
+                socket = null,
+                output = null,
+                irohChannel = channel,
+                cipher = cipher,
+                remotePubB64 = serverPubB64,
+                remoteIp = "",
+                remoteInstanceId = serverInstanceId,
+                remoteIrohId = serverIrohId,
+                remoteIrohRelayUrl = serverIrohRelay,
+                isInviteAuthorized = inviteToken.isNotBlank(),
+                remoteListenPort = serverListenPort,
+                remoteUsername = displayFallbackName
+            )
+            registerActiveSession(rawPeerId, session)
+
+            sendProfileSync(session, identity)
+            if (identity.bridgeEnabled) {
+                broadcastBridgePeers()
+            }
+
+            listener.onPeerHandshakedWithMeta(
+                peerId = rawPeerId,
+                publicKeyBase64 = serverPubB64,
+                remoteIp = "",
+                remoteListenPort = serverListenPort,
+                username = displayFallbackName,
+                avatarBase64 = null,
+                viaBridgePeerId = "",
+                remoteInstanceId = serverInstanceId,
+                isInviteAuthorized = inviteToken.isNotBlank(),
+                allowRestoreDismissed = !isAutoReconnect,
+                remoteIrohId = serverIrohId,
+                remoteIrohRelayUrl = serverIrohRelay
+            )
+
+            scope.launch(Dispatchers.IO) {
+                runSessionReadLoop(
+                    session = session,
+                    inp = null,
+                    irohChannel = channel,
+                    remotePubB64 = serverPubB64,
+                    remoteIp = "",
+                    remoteListenPort = serverListenPort,
+                    isSelfLoopbackResponder = false
+                )
+            }
+            Result.success(rawPeerId)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            runCatching { channel?.close() }
+            throw ce
+        } catch (e: Exception) {
+            runCatching { channel?.close() }
             Result.failure(e)
         }
     }
@@ -676,6 +1115,9 @@ class P2PNodeManager(
                 nonceBase64 = clientNonceB64
             )
 
+            val localIrohStatus = _irohStatus.value
+            val localIrohId = localIrohStatus.endpointId.ifBlank { identity.irohEndpointId }
+            val localIrohRelay = localIrohStatus.activeRelayUrl.ifBlank { localIrohStatus.configuredRelayUrl }
             val helloBytes = JSONObject().apply {
                 put("pub", identity.publicKeyBase64)
                 put("eph", ephPubB64)
@@ -685,6 +1127,8 @@ class P2PNodeManager(
                 put("token", inviteToken)
                 put("auto", isAutoReconnect)
                 put("inst", localInst)
+                if (localIrohId.isNotBlank()) put("irohId", localIrohId)
+                if (localIrohRelay.isNotBlank()) put("irohRelay", localIrohRelay)
             }.toString().toByteArray(Charsets.UTF_8)
 
             val envelope = JSONObject().apply {
@@ -728,6 +1172,8 @@ class P2PNodeManager(
             val serverSigB64 = welcomeJson.getString("sig")
             val serverListenPort = welcomeJson.optInt("port", LocalIdentity.DEFAULT_TCP_PORT)
             val serverInstanceId = welcomeJson.optString("inst", "")
+            val serverIrohId = welcomeJson.optString("irohId", "")
+            val serverIrohRelay = welcomeJson.optString("irohRelay", "")
 
             if (expectedPubKeyBase64.isNotBlank() && expectedPubKeyBase64 != serverPubB64) {
                 return@withContext Result.failure(
@@ -800,6 +1246,8 @@ class P2PNodeManager(
                 remotePubB64 = serverPubB64,
                 remoteIp = bridgeSession.remoteIp,
                 remoteInstanceId = serverInstanceId,
+                remoteIrohId = serverIrohId,
+                remoteIrohRelayUrl = serverIrohRelay,
                 isInviteAuthorized = inviteToken.isNotBlank(),
                 remoteListenPort = serverListenPort,
                 remoteUsername = targetPeerId
@@ -817,7 +1265,9 @@ class P2PNodeManager(
                 viaBridgePeerId = bridgePeerId,
                 remoteInstanceId = serverInstanceId,
                 isInviteAuthorized = inviteToken.isNotBlank(),
-                allowRestoreDismissed = !isAutoReconnect
+                allowRestoreDismissed = !isAutoReconnect,
+                remoteIrohId = serverIrohId,
+                remoteIrohRelayUrl = serverIrohRelay
             )
             Result.success(targetPeerId)
         } catch (e: Exception) {
@@ -881,6 +1331,8 @@ class P2PNodeManager(
             val inviteToken = helloJson.optString("token", "")
             val isAutoReconnect = helloJson.optBoolean("auto", false)
             val clientInstanceId = helloJson.optString("inst", "")
+            val clientIrohId = helloJson.optString("irohId", "")
+            val clientIrohRelay = helloJson.optString("irohRelay", "")
 
             val validSig = CryptoEngine.verifyHandshake(
                 roleTag = "CLIENT",
@@ -954,6 +1406,9 @@ class P2PNodeManager(
                 nonceBase64 = serverNonceB64
             )
 
+            val localIrohStatus = _irohStatus.value
+            val localIrohId = localIrohStatus.endpointId.ifBlank { identity.irohEndpointId }
+            val localIrohRelay = localIrohStatus.activeRelayUrl.ifBlank { localIrohStatus.configuredRelayUrl }
             val welcomeBytes = JSONObject().apply {
                 put("pub", identity.publicKeyBase64)
                 put("eph", serverEphB64)
@@ -961,6 +1416,8 @@ class P2PNodeManager(
                 put("sig", serverSigB64)
                 put("port", _boundPort.value)
                 put("inst", localInst)
+                if (localIrohId.isNotBlank()) put("irohId", localIrohId)
+                if (localIrohRelay.isNotBlank()) put("irohRelay", localIrohRelay)
             }.toString().toByteArray(Charsets.UTF_8)
 
             out.writeByte(KIND_HANDSHAKE_WELCOME.toInt())
@@ -997,6 +1454,7 @@ class P2PNodeManager(
                 runSessionReadLoop(
                     session = responderSession,
                     inp = inp,
+                    irohChannel = null,
                     remotePubB64 = clientPubB64,
                     remoteIp = remoteIp,
                     remoteListenPort = clientListenPort,
@@ -1020,6 +1478,8 @@ class P2PNodeManager(
                     remotePubB64 = clientPubB64,
                     remoteIp = remoteIp,
                     remoteInstanceId = clientInstanceId,
+                    remoteIrohId = clientIrohId,
+                    remoteIrohRelayUrl = clientIrohRelay,
                     isInviteAuthorized = validToken,
                     remoteListenPort = clientListenPort,
                     remoteUsername = remoteIp,
@@ -1041,12 +1501,15 @@ class P2PNodeManager(
                         viaBridgePeerId = "",
                         remoteInstanceId = clientInstanceId,
                         isInviteAuthorized = validToken,
-                        allowRestoreDismissed = validToken
+                        allowRestoreDismissed = validToken,
+                        remoteIrohId = clientIrohId,
+                        remoteIrohRelayUrl = clientIrohRelay
                     )
                 }
                 runSessionReadLoop(
                     session = session,
                     inp = inp,
+                    irohChannel = null,
                     remotePubB64 = clientPubB64,
                     remoteIp = remoteIp,
                     remoteListenPort = clientListenPort,
@@ -1061,9 +1524,193 @@ class P2PNodeManager(
         }
     }
 
+    private suspend fun sendIrohRejectAndClose(channel: IrohPeerChannel, reason: String) {
+        runCatching {
+            val rej = JSONObject().apply { put("reason", reason) }.toString().toByteArray(Charsets.UTF_8)
+            channel.writeFrame(KIND_HANDSHAKE_REJECT, rej)
+        }
+        runCatching { channel.close() }
+    }
+
+    private suspend fun handleInboundIrohChannel(channel: IrohPeerChannel) {
+        val identity = currentIdentity
+        if (!identity.isInitialized || identity.irohRelayMode == IrohRelayMode.DISABLED) {
+            channel.close()
+            return
+        }
+        val localInst = effectiveInstanceId(identity)
+        try {
+            val firstFrame = withTimeoutOrNull(8_000L) { channel.readFrame(MAX_FRAME_BYTES) }
+            if (firstFrame == null) {
+                channel.close()
+                return
+            }
+            val (firstKind, firstPayload) = firstFrame
+            if (firstKind != KIND_HANDSHAKE_HELLO) {
+                channel.close()
+                return
+            }
+
+            val helloJson = JSONObject(String(firstPayload, Charsets.UTF_8))
+            val clientPubB64 = helloJson.getString("pub")
+            val clientEphB64 = helloJson.getString("eph")
+            val clientNonceB64 = helloJson.getString("nonce")
+            val clientSigB64 = helloJson.getString("sig")
+            val clientListenPort = helloJson.optInt("port", LocalIdentity.DEFAULT_TCP_PORT)
+            val inviteToken = helloJson.optString("token", "")
+            val isAutoReconnect = helloJson.optBoolean("auto", false)
+            val clientInstanceId = helloJson.optString("inst", "")
+            val clientIrohId = helloJson.optString("irohId", "").ifBlank { channel.remoteEndpointId }
+            val clientIrohRelay = helloJson.optString("irohRelay", "").ifBlank { channel.remoteRelayUrl }
+
+            val validSig = CryptoEngine.verifyHandshake(
+                roleTag = "CLIENT",
+                identityPubBase64 = clientPubB64,
+                ephemeralPubBase64 = clientEphB64,
+                nonceBase64 = clientNonceB64,
+                signatureBase64 = clientSigB64
+            )
+            if (!validSig) {
+                channel.close()
+                return
+            }
+
+            val remotePeerId = CryptoEngine.computePeerIdFromBase64(clientPubB64)
+            if (remotePeerId == identity.peerId || (clientInstanceId.isNotBlank() && clientInstanceId == localInst)) {
+                sendIrohRejectAndClose(channel, "Conflicting Chatso installation identity rejected.")
+                return
+            }
+
+            val isKnown = listener.isKnownPeer(remotePeerId)
+            val isDismissed = listener.isPeerDismissed(remotePeerId) ||
+                (clientInstanceId.isNotBlank() && listener.isInstanceDismissed(clientInstanceId))
+            val validToken = inviteToken.isNotBlank() && inviteToken == identity.qrInviteToken
+
+            val knownInstId = if (isKnown) listener.getKnownPeerInstanceId(remotePeerId) else ""
+            if (isKnown &&
+                knownInstId.isNotBlank() &&
+                clientInstanceId.isNotBlank() &&
+                knownInstId != clientInstanceId &&
+                !validToken
+            ) {
+                sendIrohRejectAndClose(channel, "Installation ID mismatch for saved contact. Scan QR invite to re-verify.")
+                return
+            }
+
+            if (isAutoReconnect && (isDismissed || (!isKnown && !validToken))) {
+                sendIrohRejectAndClose(channel, "Auto-reconnect skipped for unknown or removed conversation.")
+                return
+            }
+            if (identity.blockUnknownPeers && !isKnown && !validToken) {
+                sendIrohRejectAndClose(channel, "This device only accepts connections from saved contacts or QR invites.")
+                return
+            }
+            val silentDismissed = isDismissed && !isKnown && !validToken
+
+            val privKey = CryptoEngine.unwrapPrivateKey(identity.wrappedPrivateKeyBase64)
+            val serverEphKp = CryptoEngine.generateIdentityKeyPair()
+            val serverEphB64 = Base64.encodeToString(serverEphKp.public.encoded, Base64.NO_WRAP)
+            val serverNonceB64 = Base64.encodeToString(CryptoEngine.randomBytes(16), Base64.NO_WRAP)
+            val serverSigB64 = CryptoEngine.signHandshake(
+                identityPrivateKey = privKey,
+                roleTag = "SERVER",
+                identityPubBase64 = identity.publicKeyBase64,
+                ephemeralPubBase64 = serverEphB64,
+                nonceBase64 = serverNonceB64
+            )
+            val localIrohStatus = _irohStatus.value
+            val localIrohId = localIrohStatus.endpointId.ifBlank { identity.irohEndpointId }
+            val localIrohRelay = localIrohStatus.activeRelayUrl.ifBlank { localIrohStatus.configuredRelayUrl }
+            val welcomeBytes = JSONObject().apply {
+                put("pub", identity.publicKeyBase64)
+                put("eph", serverEphB64)
+                put("nonce", serverNonceB64)
+                put("sig", serverSigB64)
+                put("port", _boundPort.value)
+                put("inst", localInst)
+                if (localIrohId.isNotBlank()) put("irohId", localIrohId)
+                if (localIrohRelay.isNotBlank()) put("irohRelay", localIrohRelay)
+            }.toString().toByteArray(Charsets.UTF_8)
+
+            channel.writeFrame(KIND_HANDSHAKE_WELCOME, welcomeBytes)
+
+            val cipher = CryptoEngine.deriveSessionCipher(
+                isInitiator = false,
+                localEphemeralPrivate = serverEphKp.private,
+                remoteEphemeralPubBase64 = clientEphB64,
+                clientIdentityPubBase64 = clientPubB64,
+                clientEphPubBase64 = clientEphB64,
+                clientNonceBase64 = clientNonceB64,
+                serverIdentityPubBase64 = identity.publicKeyBase64,
+                serverEphPubBase64 = serverEphB64,
+                serverNonceBase64 = serverNonceB64
+            )
+
+            val dismissedAfterCrypto = !validToken &&
+                !listener.isKnownPeer(remotePeerId) &&
+                (listener.isPeerDismissed(remotePeerId) ||
+                    (clientInstanceId.isNotBlank() && listener.isInstanceDismissed(clientInstanceId)))
+            if (isAutoReconnect && dismissedAfterCrypto) {
+                channel.close()
+                return
+            }
+            val finalSilentDismissed = silentDismissed || dismissedAfterCrypto
+            val displayFallbackName = IrohRelayUrlUtils.shortEndpointId(clientIrohId).ifBlank { "Iroh Peer" }
+            val session = ActivePeerSession(
+                peerId = remotePeerId,
+                socket = null,
+                output = null,
+                irohChannel = channel,
+                cipher = cipher,
+                remotePubB64 = clientPubB64,
+                remoteIp = "",
+                remoteInstanceId = clientInstanceId,
+                remoteIrohId = clientIrohId,
+                remoteIrohRelayUrl = clientIrohRelay,
+                isInviteAuthorized = validToken,
+                remoteListenPort = clientListenPort,
+                remoteUsername = displayFallbackName,
+                isSilentDismissed = finalSilentDismissed
+            )
+            registerActiveSession(remotePeerId, session)
+            sendProfileSync(session, identity)
+            if (!finalSilentDismissed) {
+                if (identity.bridgeEnabled) {
+                    broadcastBridgePeers()
+                }
+                listener.onPeerHandshakedWithMeta(
+                    peerId = remotePeerId,
+                    publicKeyBase64 = clientPubB64,
+                    remoteIp = "",
+                    remoteListenPort = clientListenPort,
+                    username = displayFallbackName,
+                    avatarBase64 = null,
+                    viaBridgePeerId = "",
+                    remoteInstanceId = clientInstanceId,
+                    isInviteAuthorized = validToken,
+                    allowRestoreDismissed = validToken,
+                    remoteIrohId = clientIrohId,
+                    remoteIrohRelayUrl = clientIrohRelay
+                )
+            }
+            runSessionReadLoop(
+                session = session,
+                inp = null,
+                irohChannel = channel,
+                remotePubB64 = clientPubB64,
+                remoteIp = "",
+                remoteListenPort = clientListenPort,
+                isSelfLoopbackResponder = false
+            )
+        } catch (_: Exception) {
+            runCatching { channel.close() }
+        }
+    }
+
     private suspend fun runSessionReadLoop(
         session: ActivePeerSession,
-        inp: DataInputStream,
+        inp: DataInputStream?,
+        irohChannel: IrohPeerChannel?,
         remotePubB64: String,
         remoteIp: String,
         remoteListenPort: Int,
@@ -1071,11 +1718,20 @@ class P2PNodeManager(
     ) {
         try {
             while (scope.isActive && !session.isClosed) {
-                val kind = inp.readByte()
-                val length = inp.readInt()
-                if (length <= 0 || length > MAX_FRAME_BYTES) break
-                val encryptedPacket = ByteArray(length)
-                inp.readFully(encryptedPacket)
+                val kind: Byte
+                val encryptedPacket: ByteArray
+                if (irohChannel != null) {
+                    val (k, bytes) = irohChannel.readFrame(MAX_FRAME_BYTES)
+                    kind = k
+                    encryptedPacket = bytes
+                } else {
+                    val streamIn = inp ?: break
+                    kind = streamIn.readByte()
+                    val length = streamIn.readInt()
+                    if (length <= 0 || length > MAX_FRAME_BYTES) break
+                    encryptedPacket = ByteArray(length)
+                    streamIn.readFully(encryptedPacket)
+                }
 
                 val plaintext = session.cipher.decrypt(kind, encryptedPacket)
                 when (kind) {
@@ -1211,6 +1867,8 @@ class P2PNodeManager(
                 val isFg = json.optBoolean("fg", true)
                 val isDisc = json.optBoolean("disc", true)
                 val syncedInst = json.optString("inst", "")
+                val syncedIrohId = json.optString("irohId", "")
+                val syncedIrohRelay = json.optString("irohRelay", "")
                 if (syncedInst.isNotBlank() &&
                     session.remoteInstanceId.isNotBlank() &&
                     syncedInst != session.remoteInstanceId &&
@@ -1223,6 +1881,12 @@ class P2PNodeManager(
                 }
                 if (!avatarB64.isNullOrBlank()) {
                     session.remoteAvatarBase64 = avatarB64
+                }
+                if (syncedIrohId.isNotBlank()) {
+                    session.remoteIrohId = syncedIrohId
+                }
+                if (syncedIrohRelay.isNotBlank()) {
+                    session.remoteIrohRelayUrl = syncedIrohRelay
                 }
                 session.remoteListenPort = listenPort
                 session.remoteDiscoverable = isDisc
@@ -1237,7 +1901,9 @@ class P2PNodeManager(
                         username = name,
                         avatarBase64 = avatarB64,
                         viaBridgePeerId = session.bridgePeerId ?: "",
-                        remoteInstanceId = syncedInst.ifBlank { session.remoteInstanceId }
+                        remoteInstanceId = syncedInst.ifBlank { session.remoteInstanceId },
+                        remoteIrohId = syncedIrohId.ifBlank { session.remoteIrohId },
+                        remoteIrohRelayUrl = syncedIrohRelay.ifBlank { session.remoteIrohRelayUrl }
                     )
                     if (json.has("verifiedPeer")) {
                         listener.onPeerVerificationChanged(session.peerId, json.optBoolean("verifiedPeer", false))
@@ -1728,6 +2394,8 @@ class P2PNodeManager(
         val inviteToken = helloJson.optString("token", "")
         val isAutoReconnect = helloJson.optBoolean("auto", false)
         val clientInstanceId = helloJson.optString("inst", "")
+        val clientIrohId = helloJson.optString("irohId", "")
+        val clientIrohRelay = helloJson.optString("irohRelay", "")
         if (clientPubB64.isBlank() || clientEphB64.isBlank() || clientNonceB64.isBlank() || clientSigB64.isBlank()) {
             return
         }
@@ -1803,6 +2471,9 @@ class P2PNodeManager(
             nonceBase64 = serverNonceB64
         )
 
+        val localIrohStatus = _irohStatus.value
+        val localIrohId = localIrohStatus.endpointId.ifBlank { identity.irohEndpointId }
+        val localIrohRelay = localIrohStatus.activeRelayUrl.ifBlank { localIrohStatus.configuredRelayUrl }
         val welcomeBytes = JSONObject().apply {
             put("pub", identity.publicKeyBase64)
             put("eph", serverEphB64)
@@ -1810,6 +2481,8 @@ class P2PNodeManager(
             put("sig", serverSigB64)
             put("port", _boundPort.value)
             put("inst", localInst)
+            if (localIrohId.isNotBlank()) put("irohId", localIrohId)
+            if (localIrohRelay.isNotBlank()) put("irohRelay", localIrohRelay)
         }.toString().toByteArray(Charsets.UTF_8)
 
         val welcomeEnvelope = JSONObject().apply {
@@ -1850,6 +2523,8 @@ class P2PNodeManager(
             remotePubB64 = clientPubB64,
             remoteIp = bridgeSession.remoteIp,
             remoteInstanceId = clientInstanceId,
+            remoteIrohId = clientIrohId,
+            remoteIrohRelayUrl = clientIrohRelay,
             isInviteAuthorized = validToken,
             remoteListenPort = clientListenPort,
             remoteUsername = senderPeerId,
@@ -1883,7 +2558,9 @@ class P2PNodeManager(
                 viaBridgePeerId = bridgeSession.peerId,
                 remoteInstanceId = clientInstanceId,
                 isInviteAuthorized = validToken,
-                allowRestoreDismissed = validToken
+                allowRestoreDismissed = validToken,
+                remoteIrohId = clientIrohId,
+                remoteIrohRelayUrl = clientIrohRelay
             )
         }
     }
@@ -1940,7 +2617,9 @@ class P2PNodeManager(
             viaBridgePeerId = session.bridgePeerId ?: "",
             remoteInstanceId = session.remoteInstanceId,
             isInviteAuthorized = session.isInviteAuthorized,
-            allowRestoreDismissed = true
+            allowRestoreDismissed = true,
+            remoteIrohId = session.remoteIrohId,
+            remoteIrohRelayUrl = session.remoteIrohRelayUrl
         )
         refreshBridgeTelemetry()
     }
@@ -2013,6 +2692,9 @@ class P2PNodeManager(
     private suspend fun sendProfileSync(session: ActivePeerSession, identity: LocalIdentity) {
         val avatarB64 = localAvatarBase64Provider()
         val verifiedPeer = listener.isPeerVerifiedByMe(session.peerId)
+        val localIrohStatus = _irohStatus.value
+        val localIrohId = localIrohStatus.endpointId.ifBlank { identity.irohEndpointId }
+        val localIrohRelay = localIrohStatus.activeRelayUrl.ifBlank { localIrohStatus.configuredRelayUrl }
         val syncJson = JSONObject().apply {
             put("cmd", "PROFILE_SYNC")
             put("name", identity.username)
@@ -2021,6 +2703,8 @@ class P2PNodeManager(
             put("disc", identity.isDiscoverable)
             put("inst", effectiveInstanceId(identity))
             put("verifiedPeer", verifiedPeer)
+            if (localIrohId.isNotBlank()) put("irohId", localIrohId)
+            if (localIrohRelay.isNotBlank()) put("irohRelay", localIrohRelay)
             if (!avatarB64.isNullOrBlank()) put("avatar", avatarB64)
         }
         session.sendEncryptedFrame(
@@ -2390,6 +3074,7 @@ class P2PNodeManager(
 
     fun disconnectAll() {
         stopServer()
+        stopIroh()
         pendingBridgedHandshakes.values.forEach { it.cancel() }
         pendingBridgedHandshakes.clear()
         discoveryManager.clearAllBridgedPeers()

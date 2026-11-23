@@ -234,4 +234,32 @@ class DatabaseRobolectricTest {
         sqliteHelper.close()
         context.deleteDatabase(dbName)
     }
+
+    @Test
+    fun `migration 8 to 9 adds irohNodeId and irohRelayUrl columns to peers`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val dbName = "migration_8_9_test.db"
+        context.deleteDatabase(dbName)
+        val sqliteHelper = androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory().create(
+            androidx.sqlite.db.SupportSQLiteOpenHelper.Configuration.builder(context)
+                .name(dbName)
+                .callback(object : androidx.sqlite.db.SupportSQLiteOpenHelper.Callback(8) {
+                    override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("CREATE TABLE IF NOT EXISTS peers (peerId TEXT NOT NULL PRIMARY KEY, username TEXT NOT NULL DEFAULT '')")
+                        db.execSQL("INSERT INTO peers (peerId, username) VALUES ('p1', 'Alice')")
+                    }
+                    override fun onUpgrade(db: androidx.sqlite.db.SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+                })
+                .build()
+        )
+        val writable = sqliteHelper.writableDatabase
+        ChatDatabase.MIGRATION_8_9.migrate(writable)
+        writable.query("SELECT irohNodeId, irohRelayUrl FROM peers WHERE peerId = 'p1'").use { c ->
+            assertTrue(c.moveToFirst())
+            assertEquals("", c.getString(0))
+            assertEquals("", c.getString(1))
+        }
+        sqliteHelper.close()
+        context.deleteDatabase(dbName)
+    }
 }

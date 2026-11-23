@@ -64,6 +64,11 @@ android {
     includeInApk = false
     includeInBundle = true
   }
+  packaging {
+    jniLibs {
+      pickFirsts += listOf("lib/**/libjnidispatch.so")
+    }
+  }
 }
 
 dependencies {
@@ -94,6 +99,7 @@ dependencies {
   implementation(libs.coil.gif)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.zxing.core)
+  implementation(libs.iroh.kmp)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
