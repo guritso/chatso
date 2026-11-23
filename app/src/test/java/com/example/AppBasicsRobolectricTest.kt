@@ -295,8 +295,8 @@ class AppBasicsRobolectricTest {
         assertEquals(ThemePalette.PURPLE, store.getSnapshot().themePalette)
         assertFalse(store.getSnapshot().themeAdvanced)
         assertEquals(12, ThemePalette.entries.size)
-        assertEquals("1.2.6", BuildConfig.VERSION_NAME)
-        assertEquals(18, BuildConfig.VERSION_CODE)
+        assertEquals("1.2.7", BuildConfig.VERSION_NAME)
+        assertEquals(19, BuildConfig.VERSION_CODE)
 
         val lightPrimaries = ThemePalette.entries.map { palette ->
             store.setThemePalette(palette)
