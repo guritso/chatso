@@ -788,7 +788,8 @@ class ChatsoViewModel(application: Application) : AndroidViewModel(application) 
         if (_updateUiState.value is UpdateUiState.Checking) return
         viewModelScope.launch {
             _updateUiState.value = UpdateUiState.Checking
-            when (val res = UpdateChecker.checkLatestRelease()) {
+            val installedAbi = UpdateChecker.detectInstalledAbi(getApplication())
+            when (val res = UpdateChecker.checkLatestRelease(preferredAbi = installedAbi)) {
                 is UpdateCheckResult.UpdateAvailable -> {
                     _updateUiState.value = UpdateUiState.UpdateAvailable(res)
                 }

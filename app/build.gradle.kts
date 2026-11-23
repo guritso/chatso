@@ -38,8 +38,9 @@ android {
 
   buildTypes {
     release {
-      isCrunchPngs = false
-      isMinifyEnabled = false
+      isCrunchPngs = true
+      isMinifyEnabled = true
+      isShrinkResources = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
       // AI Studio.
@@ -50,6 +51,17 @@ android {
       // AI Studio.
       signingConfig = signingConfigs.getByName("debugConfig")
     }
+  }
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "armeabi-v7a", "x86_64")
+      isUniversalApk = false
+    }
+  }
+  androidResources {
+    localeFilters += listOf("en", "pt", "es", "fr", "de", "ja", "zh")
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -67,6 +79,22 @@ android {
   packaging {
     jniLibs {
       pickFirsts += listOf("lib/**/libjnidispatch.so")
+      excludes += listOf(
+        "lib/armeabi/**",
+        "lib/mips/**",
+        "lib/mips64/**",
+        "lib/x86/**"
+      )
+    }
+    resources {
+      excludes += listOf(
+        "/META-INF/{AL2.0,LGPL2.1}",
+        "META-INF/LICENSE*",
+        "META-INF/NOTICE*",
+        "META-INF/*.version",
+        "kotlin-tooling-metadata.json",
+        "DebugProbesKt.bin"
+      )
     }
   }
 }
@@ -82,7 +110,8 @@ dependencies {
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.graphics)
-  implementation(libs.androidx.compose.ui.tooling.preview)
+  // Unused in main source set (@Preview annotations are not used)
+  // implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
   implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)

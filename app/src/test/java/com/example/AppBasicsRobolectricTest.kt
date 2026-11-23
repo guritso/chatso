@@ -110,6 +110,92 @@ class AppBasicsRobolectricTest {
             "https://github.com/guritso/chatso/releases/download/v1.1.0/chatso-1.1.0.apk",
             avail.downloadUrl
         )
+
+        // Verify ABI-split release picks the exact matching APK for v7, arm64, and x86_64
+        val splitReleaseJson = """
+            {
+              "tag_name": "v1.3.0",
+              "html_url": "https://github.com/guritso/chatso/releases/tag/v1.3.0",
+              "body": "ABI splits + R8",
+              "assets": [
+                {
+                  "name": "Chatso-v1.3.0-armeabi-v7a-release.apk",
+                  "browser_download_url": "https://github.com/guritso/chatso/releases/download/v1.3.0/Chatso-v1.3.0-armeabi-v7a-release.apk"
+                },
+                {
+                  "name": "Chatso-v1.3.0-arm64-v8a-release.apk",
+                  "browser_download_url": "https://github.com/guritso/chatso/releases/download/v1.3.0/Chatso-v1.3.0-arm64-v8a-release.apk"
+                },
+                {
+                  "name": "Chatso-v1.3.0-x86_64-release.apk",
+                  "browser_download_url": "https://github.com/guritso/chatso/releases/download/v1.3.0/Chatso-v1.3.0-x86_64-release.apk"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val arm64Res = UpdateChecker.parseReleaseJson(splitReleaseJson, "1.2.5", "arm64-v8a") as UpdateCheckResult.UpdateAvailable
+        assertEquals("Chatso-v1.3.0-arm64-v8a-release.apk", arm64Res.assetName)
+        assertEquals(
+            "https://github.com/guritso/chatso/releases/download/v1.3.0/Chatso-v1.3.0-arm64-v8a-release.apk",
+            arm64Res.downloadUrl
+        )
+
+        val v7Res = UpdateChecker.parseReleaseJson(splitReleaseJson, "1.2.5", "armeabi-v7a") as UpdateCheckResult.UpdateAvailable
+        assertEquals("Chatso-v1.3.0-armeabi-v7a-release.apk", v7Res.assetName)
+        assertEquals(
+            "https://github.com/guritso/chatso/releases/download/v1.3.0/Chatso-v1.3.0-armeabi-v7a-release.apk",
+            v7Res.downloadUrl
+        )
+
+        val x86Res = UpdateChecker.parseReleaseJson(splitReleaseJson, "1.2.5", "x86_64") as UpdateCheckResult.UpdateAvailable
+        assertEquals("Chatso-v1.3.0-x86_64-release.apk", x86Res.assetName)
+        assertEquals(
+            "https://github.com/guritso/chatso/releases/download/v1.3.0/Chatso-v1.3.0-x86_64-release.apk",
+            x86Res.downloadUrl
+        )
+
+        // Verify short alias asset naming (v7, 64, x86) also resolves directly
+        val shortAliasJson = """
+            {
+              "tag_name": "v1.3.1",
+              "html_url": "https://github.com/guritso/chatso/releases/tag/v1.3.1",
+              "assets": [
+                { "name": "chatso-v7.apk", "browser_download_url": "https://example.com/v7.apk" },
+                { "name": "chatso-64.apk", "browser_download_url": "https://example.com/64.apk" },
+                { "name": "chatso-x86.apk", "browser_download_url": "https://example.com/x86.apk" }
+              ]
+            }
+        """.trimIndent()
+        assertEquals("https://example.com/v7.apk", (UpdateChecker.parseReleaseJson(shortAliasJson, "1.2.5", "armeabi-v7a") as UpdateCheckResult.UpdateAvailable).downloadUrl)
+        assertEquals("https://example.com/64.apk", (UpdateChecker.parseReleaseJson(shortAliasJson, "1.2.5", "arm64-v8a") as UpdateCheckResult.UpdateAvailable).downloadUrl)
+        assertEquals("https://example.com/x86.apk", (UpdateChecker.parseReleaseJson(shortAliasJson, "1.2.5", "x86_64") as UpdateCheckResult.UpdateAvailable).downloadUrl)
+
+        // Verify installed ABI detection prioritizes the APK's nativeLibraryDir / process bitness
+        assertEquals(
+            UpdateChecker.ABI_ARMEABI_V7A,
+            UpdateChecker.detectDeviceAbi(
+                supportedAbis = arrayOf("arm64-v8a", "armeabi-v7a"),
+                is64Bit = false,
+                nativeLibraryDir = "/data/app/~~abc/com.example/lib/arm"
+            )
+        )
+        assertEquals(
+            UpdateChecker.ABI_ARM64_V8A,
+            UpdateChecker.detectDeviceAbi(
+                supportedAbis = arrayOf("arm64-v8a", "armeabi-v7a"),
+                is64Bit = true,
+                nativeLibraryDir = "/data/app/~~abc/com.example/lib/arm64"
+            )
+        )
+        assertEquals(
+            UpdateChecker.ABI_X86_64,
+            UpdateChecker.detectDeviceAbi(
+                supportedAbis = arrayOf("x86_64", "x86"),
+                is64Bit = true,
+                nativeLibraryDir = "/data/app/~~abc/com.example/lib/x86_64"
+            )
+        )
     }
 
     @Test

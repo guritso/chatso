@@ -15,8 +15,10 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -338,12 +340,21 @@ fun ChatsoRootApp(
                         Text(stringResource(R.string.update_available_title, availableUpdate.latestVersion))
                     },
                     text = {
-                        Text(
-                            text = availableUpdate.releaseNotes.ifBlank { availableUpdate.htmlUrl },
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 8,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (availableUpdate.assetName.isNotBlank()) {
+                                Text(
+                                    text = availableUpdate.assetName,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Text(
+                                text = availableUpdate.releaseNotes.ifBlank { availableUpdate.htmlUrl },
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 8,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     },
                     confirmButton = {
                         Button(
