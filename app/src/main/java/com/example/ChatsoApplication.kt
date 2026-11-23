@@ -55,7 +55,9 @@ class ChatsoContainer(context: Context) {
                     }
                 }
                 .collect { peers ->
-                    ChatsoSharingShortcuts.syncContactShortcuts(context, peers)
+                    runCatching {
+                        ChatsoSharingShortcuts.syncContactShortcuts(context, peers)
+                    }
                 }
         }
         repository.onClearPeerNotification = { peerId ->
@@ -65,15 +67,17 @@ class ChatsoContainer(context: Context) {
             val activeOpen = repository.currentlyOpenPeerId
             if (!isAppInForeground || activeOpen != peerId) {
                 appScope.launch {
-                    val localName = identityStore.getSnapshot().username.ifBlank { "You" }
-                    ChatsoNotificationHelper.showIncomingMessageNotification(
-                        context = context,
-                        peerId = peerId,
-                        senderName = senderName,
-                        preview = preview,
-                        avatarPath = avatarPath,
-                        localUsername = localName
-                    )
+                    runCatching {
+                        val localName = identityStore.getSnapshot().username.ifBlank { "You" }
+                        ChatsoNotificationHelper.showIncomingMessageNotification(
+                            context = context,
+                            peerId = peerId,
+                            senderName = senderName,
+                            preview = preview,
+                            avatarPath = avatarPath,
+                            localUsername = localName
+                        )
+                    }
                 }
             }
         }
@@ -82,17 +86,19 @@ class ChatsoContainer(context: Context) {
                 val activeOpen = repository.currentlyOpenPeerId
                 if (!isAppInForeground || activeOpen != peerId) {
                     appScope.launch {
-                        val localName = identityStore.getSnapshot().username.ifBlank { "You" }
-                        ChatsoNotificationHelper.showIncomingReactionNotification(
-                            context = context,
-                            peerId = peerId,
-                            messageId = messageId,
-                            senderName = senderName,
-                            emoji = emoji,
-                            reactedSnippet = snippet,
-                            avatarPath = avatarPath,
-                            localUsername = localName
-                        )
+                        runCatching {
+                            val localName = identityStore.getSnapshot().username.ifBlank { "You" }
+                            ChatsoNotificationHelper.showIncomingReactionNotification(
+                                context = context,
+                                peerId = peerId,
+                                messageId = messageId,
+                                senderName = senderName,
+                                emoji = emoji,
+                                reactedSnippet = snippet,
+                                avatarPath = avatarPath,
+                                localUsername = localName
+                            )
+                        }
                     }
                 }
             }

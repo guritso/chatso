@@ -24,8 +24,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -56,6 +58,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -212,6 +215,13 @@ fun StickersTrayContent(
         }
     }
 
+    val gridState = rememberLazyGridState()
+    LaunchedEffect(effectiveTabKey) {
+        if (displayedStickers.isNotEmpty()) {
+            gridState.scrollToItem(0)
+        }
+    }
+
     Surface(
         shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -299,134 +309,103 @@ fun StickersTrayContent(
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 
-            if (activePack != null) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.55f))
-                        .padding(horizontal = 14.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = activePack.name,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        val metaLine = buildString {
-                            append(stringResource(R.string.stickers_pack_count, displayedStickers.size))
-                            if (activePack.author.isNotBlank()) {
-                                append(" · ")
-                                append(activePack.author)
-                            }
-                        }
-                        Text(
-                            text = metaLine,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(
-                            onClick = { pendingRenamePack = activePack },
-                            modifier = Modifier.testTag("sticker_pack_rename_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Edit,
-                                contentDescription = stringResource(R.string.sticker_pack_rename_title),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = { pendingDeletePack = activePack },
-                            modifier = Modifier.testTag("sticker_pack_delete_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.DeleteOutline,
-                                contentDescription = stringResource(R.string.delete_message_action),
-                                tint = DangerCoral,
-                                modifier = Modifier.size(19.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
             if (displayedStickers.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (activePack != null) {
+                        ActiveStickerPackHeader(
+                            pack = activePack,
+                            stickerCount = 0,
+                            onRename = { pendingRenamePack = activePack },
+                            onDelete = { pendingDeletePack = activePack },
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 24.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                            modifier = Modifier.size(48.dp)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_sticker_smiley),
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-                        Text(
-                            text = stringResource(R.string.favorite_stickers_empty_title),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center
-                        )
-                        Text(
-                            text = if (effectiveTabKey == "favorites") {
-                                stringResource(R.string.favorite_stickers_empty_body)
-                            } else {
-                                stringResource(R.string.stickers_all_empty_body)
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
-                        if (effectiveTabKey == "all") {
-                            OutlinedButton(
-                                onClick = {
-                                    AppIconManager.suppressNextFlush()
-                                    packArchivePickerLauncher.launch(arrayOf("*/*"))
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.testTag("stickers_empty_import_button")
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                modifier = Modifier.size(48.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Filled.Add,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(stringResource(R.string.stickers_import_btn))
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_sticker_smiley),
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = stringResource(R.string.favorite_stickers_empty_title),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                textAlign = TextAlign.Center
+                            )
+                            Text(
+                                text = if (effectiveTabKey == "favorites") {
+                                    stringResource(R.string.favorite_stickers_empty_body)
+                                } else {
+                                    stringResource(R.string.stickers_all_empty_body)
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                            if (effectiveTabKey == "all") {
+                                OutlinedButton(
+                                    onClick = {
+                                        AppIconManager.suppressNextFlush()
+                                        packArchivePickerLauncher.launch(arrayOf("*/*"))
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.testTag("stickers_empty_import_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Add,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(stringResource(R.string.stickers_import_btn))
+                                }
                             }
                         }
                     }
                 }
             } else {
                 LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Adaptive(minSize = 84.dp),
                     contentPadding = PaddingValues(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("stickers_grid")
                 ) {
+                    if (activePack != null) {
+                        item(
+                            key = "active_pack_header_${activePack.packId}",
+                            span = { GridItemSpan(maxLineSpan) }
+                        ) {
+                            ActiveStickerPackHeader(
+                                pack = activePack,
+                                stickerCount = displayedStickers.size,
+                                onRename = { pendingRenamePack = activePack },
+                                onDelete = { pendingDeletePack = activePack }
+                            )
+                        }
+                    }
                     items(
                         items = displayedStickers,
                         key = { it.key }
@@ -602,6 +581,80 @@ fun StickersTrayContent(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun ActiveStickerPackHeader(
+    pack: StickerPackEntity,
+    stickerCount: Int,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 1.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("sticker_pack_header_bar")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 14.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = pack.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                val metaLine = buildString {
+                    append(stringResource(R.string.stickers_pack_count, stickerCount))
+                    if (pack.author.isNotBlank()) {
+                        append(" · ")
+                        append(pack.author)
+                    }
+                }
+                Text(
+                    text = metaLine,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = onRename,
+                    modifier = Modifier.testTag("sticker_pack_rename_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Edit,
+                        contentDescription = stringResource(R.string.sticker_pack_rename_title),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.testTag("sticker_pack_delete_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.DeleteOutline,
+                        contentDescription = stringResource(R.string.delete_message_action),
+                        tint = DangerCoral,
+                        modifier = Modifier.size(19.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

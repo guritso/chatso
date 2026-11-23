@@ -3,14 +3,22 @@ package com.example
 import android.content.Context
 import android.net.Uri
 import android.os.Looper
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.ChatDatabase
 import com.example.data.DeliveryStatus
@@ -630,5 +638,56 @@ class StickerPackRobolectricTest {
         assertEquals("Meu Zap Pack", importedPackName)
 
         encFile.delete()
+    }
+
+    @Test
+    fun `pack rename and delete header scrolls away when scrolling down stickers`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val stickerFile = File(context.cacheDir, "scroll_test_sticker.webp").apply {
+            writeBytes(makeStaticWebpBytes(0x7A))
+        }
+        val pack = StickerPackEntity("pack_scroll", "Pacote Longo", "Author", stickerFile.absolutePath, 100L)
+        val stickers = (0 until 24).map { idx ->
+            PackStickerEntity(
+                stickerId = "ps_scroll_$idx",
+                packId = "pack_scroll",
+                localPath = stickerFile.absolutePath,
+                mimeType = "image/webp",
+                sha256 = "sha_scroll_$idx",
+                sortOrder = idx,
+                createdAt = 100L + idx
+            )
+        }
+
+        composeTestRule.setContent {
+            ChatsoTheme {
+                Box(modifier = Modifier.width(360.dp).height(260.dp)) {
+                    StickersTrayContent(
+                        favoriteStickers = emptyList(),
+                        onSendFavoriteSticker = {},
+                        onRemoveFavoriteSticker = {},
+                        stickerPacks = listOf(pack),
+                        packStickers = stickers
+                    )
+                }
+            }
+        }
+
+        composeTestRule.onNodeWithTag("stickers_tab_pack_pack_scroll").performClick()
+        composeTestRule.onNodeWithTag("sticker_pack_header_bar").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("sticker_pack_rename_button").assertIsDisplayed()
+
+        // Scroll down to the bottom stickers; the pack header should scroll off-screen
+        composeTestRule.onNodeWithTag("stickers_grid")
+            .performScrollToNode(hasTestTag("sticker_grid_item_pack_ps_scroll_23"))
+        composeTestRule.onNodeWithTag("sticker_grid_item_pack_ps_scroll_23").assertIsDisplayed()
+        composeTestRule.onNodeWithTag("sticker_pack_header_bar").assertIsNotDisplayed()
+
+        // Scrolling back to the top brings the header back
+        composeTestRule.onNodeWithTag("stickers_grid")
+            .performScrollToNode(hasTestTag("sticker_pack_header_bar"))
+        composeTestRule.onNodeWithTag("sticker_pack_header_bar").assertIsDisplayed()
+
+        stickerFile.delete()
     }
 }
