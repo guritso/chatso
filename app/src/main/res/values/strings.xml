@@ -340,7 +340,7 @@
     <string name="sticker_pack_import_action">Import stickers</string>
     <string name="sticker_pack_import_confirm">Import (%1$d)</string>
     <string name="sticker_pack_imported_msg">Imported \"%1$s\" (%2$d stickers).</string>
-    <string name="sticker_pack_import_invalid">This file does not contain valid WebP stickers.</string>
+    <string name="sticker_pack_import_invalid">No supported WebP, PNG, or GIF stickers were found in this file.</string>
     <string name="sticker_pack_rename_title">Rename sticker pack</string>
     <string name="sticker_pack_delete_title">Delete pack \"%1$s\"?</string>
     <string name="sticker_pack_deleted_msg">Sticker pack deleted.</string>

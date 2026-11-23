@@ -340,7 +340,7 @@
     <string name="sticker_pack_import_action">スタンプをインポート</string>
     <string name="sticker_pack_import_confirm">インポート (%1$d)</string>
     <string name="sticker_pack_imported_msg">「%1$s」(%2$d 個) をインポートしました。</string>
-    <string name="sticker_pack_import_invalid">有効な WebP スタンプが含まれていません。</string>
+    <string name="sticker_pack_import_invalid">対応する WebP・PNG・GIF スタンプが見つかりません。</string>
     <string name="sticker_pack_rename_title">パック名を変更</string>
     <string name="sticker_pack_delete_title">パック「%1$s」を削除しますか？</string>
     <string name="sticker_pack_deleted_msg">スタンプパックを削除しました。</string>

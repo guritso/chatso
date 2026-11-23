@@ -1,14 +1,14 @@
 package com.example.data
 
 import android.util.LruCache
-import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.security.MessageDigest
 import java.util.UUID
-import java.util.zip.ZipInputStream
+import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -229,67 +229,76 @@ object StickerPackArchiveHelper {
         val allImages = mutableListOf<ZipImageEntry>()
         var totalBytesRead = 0L
 
-        ZipInputStream(BufferedInputStream(FileInputStream(file))).use { zis ->
-            while (true) {
-                val entry = zis.nextEntry ?: break
-                try {
-                    val rawPath = entry.name ?: continue
-                    if (entry.isDirectory) continue
-                    if (rawPath.contains("..") || rawPath.startsWith("/")) continue
-                    val normalizedPath = rawPath.replace('\\', '/')
-                    if (normalizedPath.startsWith("__MACOSX/") ||
-                        normalizedPath.substringAfterLast('/').startsWith(".")
-                    ) {
-                        continue
-                    }
-
-                    val baseName = normalizedPath.substringAfterLast('/')
-                    val lowerBase = baseName.lowercase()
-
-                    if (lowerBase in METADATA_JSON_NAMES || lowerBase == "title.txt" || lowerBase == "author.txt") {
-                        val metaBytes = readEntryLimited(zis, MAX_METADATA_BYTES)
-                        if (metaBytes != null) {
-                            totalBytesRead += metaBytes.size
-                            if (totalBytesRead > MAX_TOTAL_UNCOMPRESSED_BYTES) break
-                            val text = metaBytes.toString(Charsets.UTF_8).trim()
-                            when (lowerBase) {
-                                "title.txt" -> txtTitle = text.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-                                "author.txt" -> txtAuthor = text.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
-                                else -> parseMetadataJson(
-                                    jsonText = text,
-                                    onTitle = { if (jsonTitle.isNullOrBlank()) jsonTitle = it },
-                                    onAuthor = { if (jsonAuthor.isNullOrBlank()) jsonAuthor = it },
-                                    onTrayFile = { if (jsonTrayName.isNullOrBlank()) jsonTrayName = it },
-                                    stickerOrderOut = jsonStickerOrder
-                                )
-                            }
-                        }
-                        continue
-                    }
-
-                    if (allImages.size >= maxImageEntries + 4) {
-                        // Still continue scanning metadata if needed, or stop once plenty collected
-                        continue
-                    }
-
-                    val bytes = readEntryLimited(zis, MAX_ENTRY_BYTES) ?: continue
-                    totalBytesRead += bytes.size
-                    if (totalBytesRead > MAX_TOTAL_UNCOMPRESSED_BYTES) break
-                    if (bytes.size < 12) continue
-
-                    val detected = detectImageType(lowerBase, bytes) ?: continue
-                    val sha256 = sha256Hex(bytes)
-                    allImages += ZipImageEntry(
-                        entryPath = normalizedPath,
-                        fileName = baseName,
-                        mimeType = detected.first,
-                        extension = detected.second,
-                        bytes = bytes,
-                        sha256 = sha256
-                    )
-                } finally {
-                    runCatching { zis.closeEntry() }
+        // ZipFile reads the central directory and supports archives with stored entries that
+        // use a trailing data descriptor. ZipInputStream rejects those valid ZIPs.
+        ZipFile(file).use { zip ->
+            val entries = zip.entries()
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                val rawPath = entry.name ?: continue
+                if (entry.isDirectory) continue
+                if (rawPath.contains("..") || rawPath.startsWith("/")) continue
+                val normalizedPath = rawPath.replace('\\', '/')
+                if (normalizedPath.startsWith("__MACOSX/") ||
+                    normalizedPath.substringAfterLast('/').startsWith(".")
+                ) {
+                    continue
                 }
+
+                val baseName = normalizedPath.substringAfterLast('/')
+                val lowerBase = baseName.lowercase()
+
+                if (lowerBase in METADATA_JSON_NAMES || lowerBase == "title.txt" || lowerBase == "author.txt") {
+                    val input = zip.getInputStream(entry)
+                    val metaBytes = try {
+                        readEntryLimited(input, MAX_METADATA_BYTES)
+                    } finally {
+                        input.close()
+                    }
+                    if (metaBytes != null) {
+                        totalBytesRead += metaBytes.size
+                        if (totalBytesRead > MAX_TOTAL_UNCOMPRESSED_BYTES) break
+                        val text = metaBytes.toString(Charsets.UTF_8).trim()
+                        when (lowerBase) {
+                            "title.txt" -> txtTitle = text.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                            "author.txt" -> txtAuthor = text.lineSequence().firstOrNull()?.trim()?.takeIf { it.isNotEmpty() }
+                            else -> parseMetadataJson(
+                                jsonText = text,
+                                onTitle = { if (jsonTitle.isNullOrBlank()) jsonTitle = it },
+                                onAuthor = { if (jsonAuthor.isNullOrBlank()) jsonAuthor = it },
+                                onTrayFile = { if (jsonTrayName.isNullOrBlank()) jsonTrayName = it },
+                                stickerOrderOut = jsonStickerOrder
+                            )
+                        }
+                    }
+                    continue
+                }
+
+                if (allImages.size >= maxImageEntries + 4) {
+                    // Still continue scanning metadata if needed, or stop once plenty collected
+                    continue
+                }
+
+                val input = zip.getInputStream(entry)
+                val bytes = try {
+                    readEntryLimited(input, MAX_ENTRY_BYTES)
+                } finally {
+                    input.close()
+                } ?: continue
+                totalBytesRead += bytes.size
+                if (totalBytesRead > MAX_TOTAL_UNCOMPRESSED_BYTES) break
+                if (bytes.size < 12) continue
+
+                val detected = detectImageType(lowerBase, bytes) ?: continue
+                val sha256 = sha256Hex(bytes)
+                allImages += ZipImageEntry(
+                    entryPath = normalizedPath,
+                    fileName = baseName,
+                    mimeType = detected.first,
+                    extension = detected.second,
+                    bytes = bytes,
+                    sha256 = sha256
+                )
             }
         }
 
@@ -420,12 +429,12 @@ object StickerPackArchiveHelper {
         }
     }
 
-    private fun readEntryLimited(zis: ZipInputStream, maxBytes: Int): ByteArray? {
+    private fun readEntryLimited(input: InputStream, maxBytes: Int): ByteArray? {
         val buffer = ByteArray(16 * 1024)
         val out = ByteArrayOutputStream()
         var total = 0
         while (true) {
-            val read = zis.read(buffer)
+            val read = input.read(buffer)
             if (read <= 0) break
             total += read
             if (total > maxBytes) return null

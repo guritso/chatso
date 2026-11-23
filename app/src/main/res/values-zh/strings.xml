@@ -340,7 +340,7 @@
     <string name="sticker_pack_import_action">导入贴纸</string>
     <string name="sticker_pack_import_confirm">导入 (%1$d)</string>
     <string name="sticker_pack_imported_msg">已导入“%1$s”（%2$d 张贴纸）。</string>
-    <string name="sticker_pack_import_invalid">此文件不包含有效的 WebP 贴纸。</string>
+    <string name="sticker_pack_import_invalid">此文件中没有找到受支持的 WebP、PNG 或 GIF 贴纸。</string>
     <string name="sticker_pack_rename_title">重命名贴纸包</string>
     <string name="sticker_pack_delete_title">删除贴纸包“%1$s”？</string>
     <string name="sticker_pack_deleted_msg">已删除贴纸包。</string>

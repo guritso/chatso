@@ -34,7 +34,9 @@ import com.example.ui.components.StickersTrayContent
 import com.example.ui.screens.ShareTargetSheet
 import com.example.ui.theme.ChatsoTheme
 import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.io.File
+import java.util.zip.CRC32
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -106,6 +108,103 @@ class StickerPackRobolectricTest {
         file.writeBytes(baos.toByteArray())
         return file
     }
+
+    private fun buildStoredZipWithDataDescriptors(
+        file: File,
+        entries: List<Pair<String, ByteArray>>
+    ): File {
+        fun writeShortLe(out: DataOutputStream, value: Int) {
+            out.writeByte(value and 0xff)
+            out.writeByte((value ushr 8) and 0xff)
+        }
+
+        fun writeIntLe(out: DataOutputStream, value: Number) {
+            val raw = value.toLong()
+            repeat(4) { index -> out.writeByte(((raw ushr (index * 8)) and 0xff).toInt()) }
+        }
+
+        data class CentralEntry(
+            val name: ByteArray,
+            val crc: Long,
+            val size: Long,
+            val localOffset: Long
+        )
+
+        val archiveBytes = ByteArrayOutputStream()
+        val out = DataOutputStream(archiveBytes)
+        val centralEntries = mutableListOf<CentralEntry>()
+
+        entries.forEach { (entryName, bytes) ->
+            val name = entryName.toByteArray(Charsets.UTF_8)
+            val crc = CRC32().apply { update(bytes) }.value
+            val localOffset = archiveBytes.size().toLong()
+
+            // Stored entry with the data-descriptor flag and zeroed local sizes.
+            writeIntLe(out, 0x04034b50)
+            writeShortLe(out, 20)
+            writeShortLe(out, 0x0008)
+            writeShortLe(out, 0)
+            writeShortLe(out, 0)
+            writeShortLe(out, 0)
+            writeIntLe(out, 0)
+            writeIntLe(out, 0)
+            writeIntLe(out, 0)
+            writeShortLe(out, name.size)
+            writeShortLe(out, 0)
+            out.write(name)
+            out.write(bytes)
+            writeIntLe(out, 0x08074b50)
+            writeIntLe(out, crc)
+            writeIntLe(out, bytes.size.toLong())
+            writeIntLe(out, bytes.size.toLong())
+
+            centralEntries += CentralEntry(name, crc, bytes.size.toLong(), localOffset)
+        }
+
+        val centralDirectoryOffset = archiveBytes.size().toLong()
+        centralEntries.forEach { entry ->
+            writeIntLe(out, 0x02014b50)
+            writeShortLe(out, 20)
+            writeShortLe(out, 20)
+            writeShortLe(out, 0x0008)
+            writeShortLe(out, 0)
+            writeShortLe(out, 0)
+            writeShortLe(out, 0)
+            writeIntLe(out, entry.crc)
+            writeIntLe(out, entry.size)
+            writeIntLe(out, entry.size)
+            writeShortLe(out, entry.name.size)
+            writeShortLe(out, 0)
+            writeShortLe(out, 0)
+            writeShortLe(out, 0)
+            writeShortLe(out, 0)
+            writeIntLe(out, 0)
+            writeIntLe(out, entry.localOffset)
+            out.write(entry.name)
+        }
+        val centralDirectorySize = archiveBytes.size().toLong() - centralDirectoryOffset
+
+        writeIntLe(out, 0x06054b50)
+        writeShortLe(out, 0)
+        writeShortLe(out, 0)
+        writeShortLe(out, centralEntries.size)
+        writeShortLe(out, centralEntries.size)
+        writeIntLe(out, centralDirectorySize)
+        writeIntLe(out, centralDirectoryOffset)
+        writeShortLe(out, 0)
+        out.close()
+
+        file.parentFile?.mkdirs()
+        file.writeBytes(archiveBytes.toByteArray())
+        return file
+    }
+
+    private fun makeGifBytes(tag: Byte): ByteArray = byteArrayOf(
+        'G'.code.toByte(), 'I'.code.toByte(), 'F'.code.toByte(),
+        '8'.code.toByte(), '9'.code.toByte(), 'a'.code.toByte(),
+        0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+        tag, 0x00, 0x3B
+    )
 
     @Test
     fun `helper probes and extracts whatsapp enc zip with metadata animated and static webp`(): Unit = runBlocking {
@@ -188,6 +287,35 @@ class StickerPackRobolectricTest {
 
         noMetaEnc.delete()
         nonStickerZip.delete()
+    }
+
+    @Test
+    fun `helper detects gif and png stickers in stored zip entries with data descriptors`(): Unit = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val archive = File(context.cacheDir, "stored_gif_png_data_descriptor.zip")
+        buildStoredZipWithDataDescriptors(
+            archive,
+            listOf(
+                "stickers/animated.gif" to makeGifBytes(0x21),
+                "stickers/static.png" to makePngBytes(0x22)
+            )
+        )
+
+        val probe = StickerPackArchiveHelper.probePackArchive(archive)
+        assertNotNull(probe)
+        assertEquals(2, probe!!.stickerCount)
+
+        val destination = File(context.cacheDir, "stored_gif_png_import_test").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val imported = StickerPackArchiveHelper.importPackToDirectory(archive, destination)
+        assertNotNull(imported)
+        assertEquals(setOf("image/gif", "image/png"), imported!!.stickers.map { it.mimeType }.toSet())
+        assertTrue(imported.stickers.all { File(it.localPath).exists() })
+
+        archive.delete()
+        destination.deleteRecursively()
     }
 
     @Test

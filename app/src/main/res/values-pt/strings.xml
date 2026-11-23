@@ -352,7 +352,7 @@
     <string name="sticker_pack_import_action">Importar figurinhas</string>
     <string name="sticker_pack_import_confirm">Importar (%1$d)</string>
     <string name="sticker_pack_imported_msg">Pacote \"%1$s\" importado (%2$d figurinhas).</string>
-    <string name="sticker_pack_import_invalid">Este arquivo não contém figurinhas WebP válidas.</string>
+    <string name="sticker_pack_import_invalid">Este arquivo não contém figurinhas compatíveis em WebP, PNG ou GIF.</string>
     <string name="sticker_pack_rename_title">Renomear pacote</string>
     <string name="sticker_pack_delete_title">Excluir pacote \"%1$s\"?</string>
     <string name="sticker_pack_deleted_msg">Pacote de figurinhas excluído.</string>
